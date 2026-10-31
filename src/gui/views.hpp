@@ -12,10 +12,15 @@ public:
 signals:
     void pathsDropped(const QStringList& paths);
 protected:
+    void resizeEvent(QResizeEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void dragEnterEvent(QDragEnterEvent*) override;
     void dragMoveEvent(QDragMoveEvent*) override;
     void dropEvent(QDropEvent*) override;
+private:
+    void updateCellSize();
+    bool grid_ = true;
+    int minimumCell_ = 100;
 };
 class FileTableView : public QTableView {
     Q_OBJECT

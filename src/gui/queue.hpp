@@ -9,8 +9,7 @@
 namespace jxrc::gui {
 struct Job { QString input, output; Options options; };
 int coreCount();
-int recommendedWorkers(int cores, quint64 availableBytes);
-quint64 availableMemory();
+int recommendedWorkers(int cores);
 QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options);
 class ConversionQueue : public QObject {
     Q_OBJECT

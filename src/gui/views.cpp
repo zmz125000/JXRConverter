@@ -4,6 +4,7 @@
 #include <QDragEnterEvent>
 #include <QMimeData>
 #include <QPainter>
+#include <QResizeEvent>
 #include <QUrl>
 #include <algorithm>
 
@@ -15,6 +16,9 @@ FileListView::FileListView(QWidget* parent):QListView(parent) {
     setObjectName("fileList");setSelectionMode(ExtendedSelection);setSelectionBehavior(SelectRows);setSelectionRectVisible(true);setDragEnabled(false);
     setAcceptDrops(true);setDropIndicatorShown(false);setEditTriggers(NoEditTriggers);setUniformItemSizes(true);
     setResizeMode(Adjust);setLayoutMode(Batched);setBatchSize(128);setSpacing(5);
+    // Stable viewport width keeps adaptive columns from oscillating as the
+    // scrollbar appears or disappears near a column/row boundary.
+    setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
 }
 void FileListView::paintEvent(QPaintEvent* event) {
     QListView::paintEvent(event);
@@ -25,9 +29,25 @@ void FileListView::paintEvent(QPaintEvent* event) {
     }
 }
 void FileListView::setPresentation(bool grid,int size) {
+    grid_=grid;minimumCell_=size;
     setViewMode(grid?IconMode:ListMode);setMovement(Static);setWrapping(grid);setFlow(grid?LeftToRight:TopToBottom);
-    setSelectionRectVisible(true);setGridSize(grid?QSize(size+24,size+94):QSize{});
-    setIconSize(QSize(size,size));doItemsLayout();viewport()->update();
+    setSelectionRectVisible(true);setSpacing(grid?0:5);updateCellSize();
+}
+void FileListView::resizeEvent(QResizeEvent* event) {
+    QListView::resizeEvent(event);updateCellSize();
+}
+void FileListView::updateCellSize() {
+    // Match LocalViewer's adaptive columns: minimum cell width, fixed gutters,
+    // and leftover width shared by all cells. Qt geometry uses logical pixels.
+    constexpr int gutter=10;
+    constexpr int margin=5;
+    const int available=std::max(1,viewport()->width()-2*margin);
+    const int columns=std::max(1,(available+gutter)/(minimumCell_+gutter));
+    const int slot=std::max(1,(available+gutter)/columns);
+    const int edge=grid_?std::max(1,slot-30):minimumCell_;
+    if(auto* delegate=dynamic_cast<ThumbnailDelegate*>(itemDelegate())){delegate->grid=grid_;delegate->edge=edge;}
+    setGridSize(grid_?QSize(slot,edge+94):QSize{});
+    setIconSize(QSize(edge,edge));doItemsLayout();viewport()->update();
 }
 void FileListView::dragEnterEvent(QDragEnterEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
 void FileListView::dragMoveEvent(QDragMoveEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
@@ -43,7 +63,7 @@ QSize ThumbnailDelegate::sizeHint(const QStyleOptionViewItem&,const QModelIndex&
 void ThumbnailDelegate::paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const {
     painter->save();painter->setRenderHint(QPainter::Antialiasing);
     const bool selected=option.state&QStyle::State_Selected;
-    const QRect tile=option.rect.adjusted(2,2,-2,-2);
+    const QRect tile=option.rect.adjusted(grid?5:2,grid?5:2,grid?-5:-2,grid?-5:-2);
     painter->setPen(selected?QPen(QColor("#2e8069"),2):QPen(option.palette.mid().color(),1));
     painter->setBrush(selected?QColor("#dbeee7"):option.palette.base().color());painter->drawRoundedRect(tile,7,7);
     const int thumbEdge=grid?edge:std::min(tile.height()-12,edge);

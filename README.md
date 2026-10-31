@@ -66,27 +66,45 @@ The desktop supports:
 - Drag-and-drop files or folders, folder opening, optional recursive import, and
   canonical-path deduplication. Import and metadata discovery run in the background.
 - Grid, list, and sortable detail views with a shared selection and size slider.
+  Like LocalViewer, the grid slider sets minimum cell width (50–200 dp, in 10 dp
+  steps), and cells expand to fill each row as the window resizes.
   Drag from blank space to box-select; Ctrl/Cmd-click and Shift-click extend selection.
 - Lazy asynchronous thumbnails with a bounded 64 MiB cache. JPEG thumbnails show
   the SDR base; native JXL/AVIF/JXR/RAW decoders provide fallback previews. Preview
   display rendering is separate from conversion and does not change exported pixels.
-- Filtering by filename, any EXIF tag/value, format, SDR/HDR/RAW, minimum dimensions,
-  megapixels, ISO range, and capture date. Detail columns sort numerically for size,
+- Instant case-insensitive text filtering, with a toggle for the full metadata
+  controls: EXIF tags/values, format, SDR/HDR/RAW, minimum longest edge and
+  megapixels (both must match), ISO range, and capture date. Hidden metadata
+  controls do not restrict simple search. Today filters by capture date, falling
+  back to modification date when capture date is absent, and overrides the custom
+  date range. Detail columns sort numerically for size,
   ISO, aperture, shutter, focal length, bit depth, and pixel count. Missing capture
   dates are excluded when a date filter is active.
 - Quality presets/custom controls and pixel/RAW controls mapped to the library's
   `Options`. Unsupported transfer targets are disabled in preservation mode.
+- A toolbar toggle enables wheel changes to dropdowns and numeric inputs; it is
+  off by default to avoid changing settings while scrolling. Open output folder
+  opens the destination in the system file manager, creating it if needed.
 - Separate **Convert selected** and **Convert visible files** actions. Each batch
   captures its options; changing controls during a run affects the next batch.
-- Parallel jobs scaled to CPU count, with a memory-based initial job limit and a
+- Parallel jobs default to CPU count / 4, rounded down with a minimum of one, and a
   per-job codec thread budget. Ultra HDR's pinned source gets a build-tree-only CPU
-  budget adaptation; downloaded source files are not modified. The memory estimate
-  is a default, not an enforcement limit: reduce jobs for very large images.
+  budget adaptation; downloaded source files are not modified. Reduce jobs for
+  very large images.
 - Per-file queue/error states, collision-safe output names within a batch, existing
   output protection, and stopping pending work while active conversions finish.
 
 GUI input formats follow the converter's current codec support; the GUI does not
 add the Android-only formats listed in [port status](docs/port-status.md).
+
+Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV**
+multiplies linear RGB by 1/8; **+3 EV** multiplies it by 8. Processing still decodes
+and re-encodes the image at 0 EV; use preservation mode to preserve source values.
+For RAW gain-map exports, adjust the separate Custom RAW exposure instead.
+**Extended BT.2020 · JXL decoding** converts floating-point linear-sRGB JXL's
+extended colors into BT.2020 before clipping negative channels, preserving more
+wide-gamut color. This switch affects JXL decoding, not the output transfer
+function or other input formats.
 
 ## Convert
 

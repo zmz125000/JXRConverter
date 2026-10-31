@@ -33,6 +33,7 @@ public:
     CatalogFilter* filterModel() const { return proxy_; }
     ConversionQueue* queue() const { return queue_; }
 protected:
+    bool eventFilter(QObject*, QEvent*) override;
     void closeEvent(QCloseEvent*) override;
     void dragEnterEvent(QDragEnterEvent*) override;
     void dropEvent(QDropEvent*) override;
@@ -56,10 +57,10 @@ private:
     QComboBox *viewMode_, *sort_, *format_, *range_, *mode_, *target_, *preset_, *avifDepth_, *rawMode_, *wb_;
     QLineEdit *search_, *output_;
     QSlider* size_;
-    QSpinBox *minWidth_, *minHeight_, *minIso_, *maxIso_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_;
+    QSpinBox *minImageEdge_, *minIso_, *maxIso_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_;
     QDoubleSpinBox *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
-    QCheckBox *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *overwrite_, *bt2020_, *cameraLook_, *linearHdr_;
+    QCheckBox *metadataFilters_, *today_, *wheelChanges_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *overwrite_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *queuePanel_;
     QPushButton *selected_, *visible_, *cancel_, *remove_, *clear_;

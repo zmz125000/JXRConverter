@@ -1,19 +1,10 @@
 #include "queue.hpp"
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QSet>
 #include <QThread>
 #include <algorithm>
 #include <stdexcept>
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <unistd.h>
-#endif
-#ifdef __APPLE__
-#include <mach/mach.h>
-#endif
 namespace jxrc::gui {
 namespace {
 std::filesystem::path nativePath(const QString& value) {
@@ -25,26 +16,8 @@ std::filesystem::path nativePath(const QString& value) {
 }
 }
 int coreCount() { return std::max(1,QThread::idealThreadCount()); }
-int recommendedWorkers(int cores, quint64 bytes) {
-    constexpr quint64 perJob = 768ull*1024*1024;
-    return std::max(1,std::min(std::max(1,cores),int(std::max<quint64>(1,bytes/perJob))));
-}
-quint64 availableMemory() {
-    quint64 result=2ull*1024*1024*1024;
-#ifdef _WIN32
-    MEMORYSTATUSEX status{};status.dwLength=sizeof(status);if(GlobalMemoryStatusEx(&status))result=status.ullAvailPhys;
-#elif defined(__APPLE__)
-    vm_statistics64_data_t stats{};mach_msg_type_number_t count=HOST_VM_INFO64_COUNT;vm_size_t page=0;
-    if(host_page_size(mach_host_self(),&page)==KERN_SUCCESS&&host_statistics64(mach_host_self(),HOST_VM_INFO64,reinterpret_cast<host_info64_t>(&stats),&count)==KERN_SUCCESS)result=quint64(stats.free_count+stats.inactive_count)*page;
-#else
-    const long pages=sysconf(_SC_AVPHYS_PAGES),page=sysconf(_SC_PAGESIZE);if(pages>0&&page>0)result=quint64(pages)*page;
-    QFile maximum("/sys/fs/cgroup/memory.max"),current("/sys/fs/cgroup/memory.current");
-    if(maximum.open(QIODevice::ReadOnly)&&current.open(QIODevice::ReadOnly)) {
-        bool ok=false;const quint64 cap=maximum.readAll().trimmed().toULongLong(&ok),used=current.readAll().trimmed().toULongLong();
-        if(ok)result=std::min(result,cap>used?cap-used:quint64(0));
-    }
-#endif
-    return result;
+int recommendedWorkers(int cores) {
+    return std::max(1,cores/4);
 }
 QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const Options& options) {
     validate(options);QVector<Job> result;QSet<QString> outputs;

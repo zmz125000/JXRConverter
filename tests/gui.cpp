@@ -78,6 +78,17 @@ private slots:
         f={};f.format="AVIF";proxy.setFilter(f);QCOMPARE(proxy.rowCount(),0);
         f={};f.range="SDR";proxy.setFilter(f);QCOMPARE(proxy.rowCount(),3);
         f={};f.minMegapixels=0.02;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),1);
+        f={};f.minMaxEdge=160;f.minMegapixels=0.02;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),1);
+        f.minMaxEdge=250;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),0);
+        f={};f.literalText=true;f.text="Prime 50";proxy.setFilter(f);QCOMPARE(proxy.rowCount(),3);
+        f.text="50 Prime";proxy.setFilter(f);QCOMPARE(proxy.rowCount(),0);
+        f.literalText=false;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),3);
+        // Today must prefer capture date over the newly created file's mtime.
+        const auto todayFile=makeImage(directory,"today.jpg",80,160,100,QDate::currentDate().toString("yyyy:MM:dd")+" 12:00:00");
+        model.addPaths({todayFile});QTRY_COMPARE(model.rowCount(),4);QTRY_VERIFY(!model.scanning()&&inspected(model));
+        f={};f.today=true;f.minMaxEdge=150;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),1);
+        QCOMPARE(proxy.index(0,0).data(Catalog::PathRole).toString(),todayFile);
+        model.removePaths({todayFile});
         f={};proxy.setFilter(f);auto decoration=model.data(model.index(0,0),Qt::DecorationRole);Q_UNUSED(decoration);
         QTRY_VERIFY(!qvariant_cast<QIcon>(model.data(model.index(0,0),Qt::DecorationRole)).isNull());
         model.removePaths({b});QCOMPARE(model.rowCount(),2);QCOMPARE(proxy.rowCount(),2);
@@ -100,7 +111,7 @@ private slots:
         QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::ControlModifier,list->visualRect(window.filterModel()->index(2,0)).center());
         QCOMPARE(list->selectionModel()->selectedRows(0).size(),2);
         modes->setCurrentIndex(2);auto* table=window.findChild<FileTableView*>("fileDetails");QCOMPARE(table->selectionModel()->selectedRows(0).size(),2);
-        slider->setValue(220);QCOMPARE(table->verticalHeader()->defaultSectionSize(),118);
+        slider->setValue(200);QCOMPARE(table->verticalHeader()->defaultSectionSize(),108);
         modes->setCurrentIndex(1);QCOMPARE(list->viewMode(),QListView::ListMode);QCOMPARE(list->selectionModel()->selectedRows(0).size(),2);
         modes->setCurrentIndex(0);slider->setValue(100);list->selectionModel()->clearSelection();QTest::qWait(30);
         const QPoint start(list->viewport()->width()-15,list->viewport()->height()-15),end(3,3);
@@ -140,7 +151,7 @@ private slots:
         queue.cancelPending();QCOMPARE(done.count(),1);
         peak=0;invalidBudget=0;jobs.removeAt(3);queue.start(jobs,2,8);queue.cancelPending();QTRY_COMPARE(done.count(),2);
         QCOMPARE(done[1][0].toInt(),2);QCOMPARE(done[1][2].toInt(),4);QVERIFY(peak.load()<=2);QCOMPARE(invalidBudget.load(),0);
-        QCOMPARE(recommendedWorkers(16,3ull*768*1024*1024),3);QCOMPARE(recommendedWorkers(2,16ull*1024*1024*1024),2);QCOMPARE(recommendedWorkers(0,0),1);
+        QCOMPARE(recommendedWorkers(16),4);QCOMPARE(recommendedWorkers(7),1);QCOMPARE(recommendedWorkers(2),1);QCOMPARE(recommendedWorkers(0),1);
     }
     void outputCollisionAndActualQueue() {
         const QString a=makeImage(root("jobs/a"),"same.jpg",64,48,200),b=makeImage(root("jobs/b"),"same.jpg",64,48,400);
