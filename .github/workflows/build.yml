@@ -8,8 +8,8 @@ jobs:
         os: [ubuntu-24.04, macos-14, windows-2022]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
+      - uses: actions/checkout@v7.0.1
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
         if: runner.os == 'Windows'
       - name: Linux dependencies
         if: runner.os == 'Linux'
@@ -19,7 +19,18 @@ jobs:
         run: brew install ninja nasm
       - name: Windows dependencies
         if: runner.os == 'Windows'
-        run: choco install nasm ninja -y --no-progress
+        shell: pwsh
+        run: |
+          choco install nasm ninja -y --no-progress
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nasm = Join-Path $env:ProgramFiles 'NASM'
+          if (!(Test-Path (Join-Path $nasm 'nasm.exe'))) { throw "NASM installation not found" }
+          $nasm | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Verify Windows build tools
+        if: runner.os == 'Windows'
+        run: |
+          nasm -v
+          ninja --version
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
       - name: Build
@@ -29,12 +40,27 @@ jobs:
 
   desktop-linux:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        dependencies: [latest, distro]
     steps:
-      - uses: actions/checkout@v4
-      - name: Desktop dependencies
-        run: sudo apt-get update && sudo apt-get install -y qt6-base-dev libexiv2-dev ninja-build nasm
+      - uses: actions/checkout@v7.0.1
+      - name: Desktop build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nasm
+      - name: Current Qt release
+        if: matrix.dependencies == 'latest'
+        uses: jurplel/install-qt-action@v4.5.0
+        with:
+          version: '6.12.0'
+          archives: 'qtbase icu'
+      - name: Distro compatibility dependencies
+        if: matrix.dependencies == 'distro'
+        run: sudo apt-get install -y qt6-base-dev libexiv2-dev
       - name: Configure desktop
-        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJXRC_BUILD_GUI=ON
+        run: >-
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJXRC_BUILD_GUI=ON
+          -DJXRC_USE_SYSTEM_EXIV2=${{ matrix.dependencies == 'distro' && 'ON' || 'OFF' }}
       - name: Build desktop and tests
         run: cmake --build build --target jxrconverter jxrc_gui_tests jxrconvert jxrc_tests -j 3
       - name: Test offscreen

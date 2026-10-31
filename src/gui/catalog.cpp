@@ -53,7 +53,7 @@ Record readMetadata(const QString& path) {
     r.format = file.suffix().toUpper();
     try {
         auto image = Exiv2::ImageFactory::open(nativePath(path).u8string());
-        if (image) {
+        if (image.get() != nullptr) {
             image->readMetadata(); r.width = image->pixelWidth(); r.height = image->pixelHeight();
             const auto& exif = image->exifData();
             for (const auto& tag : exif) r.exif.insert(QString::fromStdString(tag.key()), QString::fromStdString(tag.toString()));

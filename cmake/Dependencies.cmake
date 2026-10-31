@@ -1,13 +1,26 @@
 include(FetchContent)
 include(ExternalProject)
+find_package(Git REQUIRED)
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
 # Reuse already downloaded LocalViewer _deps sources without requiring Android.
 set(JXRC_DEPS_DIR "" CACHE PATH "Optional populated LocalViewer native _deps directory")
 function(jxrc_source name repository tag)
+    string(TOUPPER "${name}" upper)
     if(JXRC_DEPS_DIR AND EXISTS "${JXRC_DEPS_DIR}/${name}-src")
-        set(FETCHCONTENT_SOURCE_DIR_${name} "${JXRC_DEPS_DIR}/${name}-src")
-        string(TOUPPER "${name}" upper)
-        set(FETCHCONTENT_SOURCE_DIR_${upper} "${JXRC_DEPS_DIR}/${name}-src")
+        set(candidate "${JXRC_DEPS_DIR}/${name}-src")
+        execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${candidate}" rev-parse --verify HEAD
+            OUTPUT_VARIABLE cached_head OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${candidate}" rev-parse --verify "refs/tags/${tag}^{commit}"
+            OUTPUT_VARIABLE release_head RESULT_VARIABLE release_found OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(release_found EQUAL 0 AND cached_head STREQUAL release_head)
+            set(FETCHCONTENT_SOURCE_DIR_${upper} "${candidate}")
+        else()
+            message(STATUS "Ignoring ${name} cache: it does not match release ${tag}")
+            if("${FETCHCONTENT_SOURCE_DIR_${upper}}" STREQUAL "${candidate}")
+                set(FETCHCONTENT_SOURCE_DIR_${upper} "" CACHE PATH "Source override" FORCE)
+                set(FETCHCONTENT_SOURCE_DIR_${upper} "")
+            endif()
+        endif()
     endif()
     # A source-only population lets us configure upstream options before add_subdirectory.
     if(POLICY CMP0169)
@@ -33,11 +46,7 @@ jxrc_source(libultrahdr https://github.com/google/libultrahdr.git v2.0.2)
 set(ENABLE_SHARED OFF CACHE BOOL "" FORCE)
 set(ENABLE_STATIC ON CACHE BOOL "" FORCE)
 set(WITH_TURBOJPEG OFF CACHE BOOL "" FORCE)
-if(EXISTS "${libultrahdr_SOURCE_DIR}/third_party/turbojpeg/CMakeLists.txt")
-    set(jpeg_SOURCE_DIR "${libultrahdr_SOURCE_DIR}/third_party/turbojpeg")
-else()
-    jxrc_source(jpeg https://github.com/libjpeg-turbo/libjpeg-turbo.git 3.1.0)
-endif()
+jxrc_source(jpeg https://github.com/libjpeg-turbo/libjpeg-turbo.git 3.2.1)
 set(jpeg_BINARY_DIR "${CMAKE_CURRENT_BINARY_DIR}/jpeg")
 set(jxrc_jpeg_name "${CMAKE_STATIC_LIBRARY_PREFIX}jpeg${CMAKE_STATIC_LIBRARY_SUFFIX}")
 if(MSVC)
@@ -50,7 +59,7 @@ endif()
 ExternalProject_Add(jxrc_jpeg_build SOURCE_DIR "${jpeg_SOURCE_DIR}" BINARY_DIR "${jpeg_BINARY_DIR}"
     DOWNLOAD_COMMAND "" UPDATE_COMMAND "" INSTALL_COMMAND ""
     CMAKE_ARGS -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DENABLE_SHARED=OFF -DENABLE_STATIC=ON
-        -DWITH_TURBOJPEG=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+        -DWITH_TURBOJPEG=OFF -DWITH_CRT_DLL=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
         -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/unused
     BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG> --target jpeg-static
     BUILD_BYPRODUCTS "${jxrc_jpeg_file}")
@@ -75,7 +84,14 @@ set(UHDR_ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 set(UHDR_WRITE_XMP ON CACHE BOOL "" FORCE)
 set(UHDR_WRITE_ISO ON CACHE BOOL "" FORCE)
 add_subdirectory("${libultrahdr_SOURCE_DIR}" "${libultrahdr_BINARY_DIR}" EXCLUDE_FROM_ALL)
-target_include_directories(uhdr PRIVATE "${jpeg_BINARY_DIR}")
+# Link the ordinary core archive and its CMake dependencies, not the repacked
+# uhdr/uhdr-static archive. Repacking imported JPEG archives nests .a files on
+# macOS, and the wrapper target also has a different name on MSVC.
+add_library(jxrc_uhdr INTERFACE)
+target_link_libraries(jxrc_uhdr INTERFACE core)
+if(MSVC)
+    set_property(TARGET core image_io PROPERTY MSVC_RUNTIME_LIBRARY "${CMAKE_MSVC_RUNTIME_LIBRARY}")
+endif()
 target_include_directories(core PRIVATE "${jpeg_BINARY_DIR}")
 add_dependencies(core jxrc_jpeg_build)
 # Ultra HDR 2.0.2 has no public CPU-budget setting. Adapt its CPU-count helper
@@ -100,7 +116,7 @@ endforeach()
 set(JPEGXL_BUNDLE_LIBPNG OFF CACHE BOOL "" FORCE)
 add_subdirectory("${libjxl_SOURCE_DIR}" "${libjxl_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
-jxrc_source(libaom https://aomedia.googlesource.com/aom v3.13.1)
+jxrc_source(libaom https://aomedia.googlesource.com/aom v3.15.3)
 set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
 set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
@@ -121,12 +137,12 @@ set(AOM_INCLUDE_DIR "${libaom_SOURCE_DIR}" CACHE PATH "" FORCE)
 set(AOM_LIBRARY aom CACHE STRING "" FORCE)
 add_subdirectory("${libavif_SOURCE_DIR}" "${libavif_BINARY_DIR}" EXCLUDE_FROM_ALL)
 
-jxrc_source(libraw https://github.com/LibRaw/LibRaw.git 0.22.2)
+jxrc_source(libraw https://github.com/LibRaw/LibRaw.git 0.22.3)
 file(GLOB_RECURSE raw_sources CONFIGURE_DEPENDS "${libraw_SOURCE_DIR}/src/*.cpp")
 list(FILTER raw_sources EXCLUDE REGEX "/[^/]*_ph\\.cpp$")
 add_library(jxrc_raw STATIC ${raw_sources})
 target_include_directories(jxrc_raw PUBLIC "${libraw_SOURCE_DIR}" PRIVATE "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}")
-target_compile_definitions(jxrc_raw PRIVATE USE_JPEG LIBRAW_CALLOC_RAWSTORE)
+target_compile_definitions(jxrc_raw PUBLIC LIBRAW_NODLL PRIVATE USE_JPEG LIBRAW_CALLOC_RAWSTORE)
 target_link_libraries(jxrc_raw PRIVATE jpeg-static)
 
 jxrc_source(jpegxr_src https://github.com/bvibber/jpegxr.git 0.3.1)

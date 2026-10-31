@@ -11,8 +11,8 @@ supported scope and remaining work.
 ## Build
 
 Requires CMake 3.22+, a C/C++17 compiler, Git, and NASM on x86. Ninja is recommended.
-Dependencies are pinned to the codec versions used by LocalViewer and built from
-source. An initial build needs network access:
+Dependencies are pinned to current stable releases and built from source; see
+[dependency versions](docs/dependencies.md). An initial build needs network access:
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
@@ -34,7 +34,9 @@ avoid unrelated upstream developer tools.
 
 ## Desktop GUI
 
-The optional desktop application uses Qt 6 Widgets and Exiv2. On Ubuntu:
+The optional desktop application uses Qt 6 Widgets and Exiv2. Exiv2 0.28.9 is
+built from source by default. Qt 6.12.0 is covered by CI; installed Qt 6.4+
+remains supported. On Ubuntu:
 
 ```sh
 sudo apt-get update
@@ -50,10 +52,13 @@ You can also pass files or folders on the command line:
 ./build/jxrconverter /path/to/photos picture.avif
 ```
 
-On macOS, install `qt`, `exiv2`, `cmake`, `ninja`, and `nasm` with Homebrew,
+To use your distribution's Exiv2 instead, configure with
+`-DJXRC_USE_SYSTEM_EXIV2=ON` (including Exiv2 0.27 compatibility).
+
+On macOS, install `qt`, `cmake`, `ninja`, and `nasm` with Homebrew,
 and provide `-DCMAKE_PREFIX_PATH="$(brew --prefix qt)"` if Qt is not discovered.
-On Windows, provide Qt 6 Widgets and an Exiv2 CMake package (for example through
-vcpkg); use a matching compiler and architecture for both. Platform packaging
+On Windows, provide Qt 6 Widgets with a matching compiler and architecture.
+Exiv2 is built automatically unless the system-library option is selected. Platform packaging
 and macOS/Windows GUI execution still need validation.
 
 The desktop supports:
