@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(JXRConverter VERSION 0.1.0 LANGUAGES C CXX)
+project(JXRConverter VERSION 0.1.1 LANGUAGES C CXX)
 include(GNUInstallDirs)
 configure_file(cmake/version.hpp.in generated/jxrc/version.hpp @ONLY)
 set(CMAKE_CXX_STANDARD 17)

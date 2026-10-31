@@ -27,6 +27,34 @@ for distribution packages, including Ubuntu 24.04's Exiv2 0.27.6. Qt's supported
 minimum remains 6.4; the current-release CI job installs Qt 6.12.0 and its ICU
 runtime, while a separate job exercises Ubuntu's older Qt and Exiv2 packages.
 
+## Runner images and Qt installation
+
+Desktop packages use `macos-26` (Apple Silicon), `windows-2025` (x64), and
+`ubuntu-24.04` (x64). macOS 14 runners are deprecated; the macOS package still
+sets `CMAKE_OSX_DEPLOYMENT_TARGET=14.0`. Windows uses the installed MSVC 14.44
+toolset to match Qt's MSVC 2022 binaries. GitHub's standard Windows 11 runners
+are ARM64, so they would require a separate ARM64 build rather than replacing
+the x64 runner. See [GitHub's image catalog](https://github.com/actions/runner-images#available-images).
+
+Linux release packages remain built on Ubuntu 24.04 to retain that libc
+baseline. Distribution Qt/Exiv2 tests run on both Ubuntu 24.04 and 26.04.
+The Linux runner is Ubuntu, not a Debian runner or a `.deb` package build.
+
+For Qt 6.12, the Linux installer architecture is **`linux_gcc_64`**; `gcc_64`
+is the installation directory name and an obsolete installer architecture for
+this Qt version. The latter causes the misleading `qt_base` package-not-found
+error. The Qt action's [architecture documentation](https://github.com/jurplel/install-qt-action#arch)
+describes this distinction.
+
+PyPI's latest aqtinstall release, 3.3.0, also lacks the
+[Qt 6.11+ Windows repository-layout fix](https://github.com/miurahr/aqtinstall/pull/1000).
+CI uses upstream commit `076e1659807d0b362a3ed684d54c2e9c775eb9c7`
+(`3.3.1.dev166`) until a stable release includes it. This avoids the invalid
+duplicated `qt6_6120/qt6_6120` Windows metadata URL. py7zr is pinned to 1.1.4,
+compatible with that revision's requirement of at least 1.1.3; the Qt action's
+default 1.1.0 predates it. Failed Qt setup uploads `aqtinstall.log` as a diagnostic
+artifact. These errors do not require downgrading Python 3.15.
+
 GitHub Actions use checkout 7.0.1, msvc-dev-cmd 1.13.0, install-qt-action
 4.5.0, upload-artifact 7.0.2 and download-artifact 8.0.2. Build tools installed
 from the runners' package repositories use the versions supplied by those

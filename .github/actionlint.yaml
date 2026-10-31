@@ -1,0 +1,5 @@
+# Ubuntu 26.04 is an official hosted image newer than actionlint's label table.
+# This extends validation only; the workflow still uses GitHub-hosted runners.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04

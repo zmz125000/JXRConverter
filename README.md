@@ -185,6 +185,11 @@ running `bin/jxrconverter` (`bin/jxrconverter.exe` on Windows) or the macOS
 24.04 or a compatible newer system and still require the system display/graphics
 libraries. macOS/Windows packages are unsigned.
 
+Package runners are macOS 26 and Windows Server 2025; macOS binaries retain a
+14.0 deployment target. Linux packages retain Ubuntu 24.04 as their build
+baseline, with distribution compatibility tests on both 24.04 and 26.04.
+See [runner and installer details](docs/dependencies.md#runner-images-and-qt-installation).
+
 To build a desktop archive locally (Qt 6.10+ required for runtime deployment):
 
 ```sh

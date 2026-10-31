@@ -6,6 +6,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFile>
+#include <QFileInfo>
 #include <QImage>
 #include <QHeaderView>
 #include <QIcon>
@@ -37,7 +38,10 @@ class GuiTests : public QObject {
         exif["Exif.Image.Make"]="Test";exif["Exif.Image.Model"]="Camera Body";exif["Exif.Photo.LensModel"]="Prime 50";
         exif["Exif.Photo.ISOSpeedRatings"]=uint16_t(iso);exif["Exif.Photo.FNumber"]=Exiv2::URational(28,10);
         exif["Exif.Photo.ExposureTime"]=Exiv2::URational(1,125);exif["Exif.Photo.FocalLength"]=Exiv2::URational(50,1);
-        exif["Exif.Photo.DateTimeOriginal"]=captured.toStdString();file->writeMetadata();return path;
+        exif["Exif.Photo.DateTimeOriginal"]=captured.toStdString();file->writeMetadata();
+        // Catalog paths are canonical; macOS temporary paths often pass through
+        // the /var -> /private/var symlink.
+        return QFileInfo(path).canonicalFilePath();
     }
     QString root(const char* name) {return temp_.path()+"/"+QString::fromUtf8(name);}
     bool inspected(Catalog& model) {for(int row=0;row<model.rowCount();++row)if(!model.record(row).inspected)return false;return true;}
