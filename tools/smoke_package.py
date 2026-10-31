@@ -18,9 +18,9 @@ for archive in archives:
         suffix = '.exe' if os.name == 'nt' else ''
         # Locate installed executables, not similarly named data directories
         # (share/jxrconverter can precede the app bundle on macOS).
-        cli_matches = [p for p in root.glob('*/bin/jxrconvert' + suffix) if p.is_file()]
+        cli_matches = [p for p in root.glob('*/jxrconvert' + suffix) if p.is_file()]
         gui_pattern = ('*/jxrconverter.app/Contents/MacOS/jxrconverter'
-                       if sys.platform == 'darwin' else '*/bin/jxrconverter' + suffix)
+                       if sys.platform == 'darwin' else '*/jxrconverter' + suffix)
         gui_matches = [p for p in root.glob(gui_pattern) if p.is_file()]
         if len(cli_matches) != 1 or len(gui_matches) != 1:
             sys.exit(f'Expected one installed CLI and GUI in {archive.name}; '

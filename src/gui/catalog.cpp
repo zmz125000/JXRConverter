@@ -201,14 +201,22 @@ void CatalogFilter::setFilter(const Filter& filter) {
 }
 bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     const auto& r=static_cast<Catalog*>(sourceModel())->record(row);const auto& f=filter_;
-    if(!f.format.isEmpty()&&r.format.compare(f.format,Qt::CaseInsensitive)!=0)return false;
+    if(!f.format.isEmpty()) {
+        bool matched=false;
+        const auto formats=f.format.toLower().split(QRegularExpression("[,;\\s]+"),Qt::SkipEmptyParts);
+        for(auto format:formats) {
+            if(format.startsWith('.'))format.remove(0,1);
+            if(format=="jpg"||format=="jpe")format="jpeg";
+            if(format=="wdp"||format=="hdp")format="jxr";
+            if((format=="raw"&&r.raw)||r.format.compare(format,Qt::CaseInsensitive)==0||QFileInfo(r.path).suffix().compare(format,Qt::CaseInsensitive)==0){matched=true;break;}
+        }
+        if(!matched)return false;
+    }
     if(f.range=="RAW"&&!r.raw)return false;
     const bool hdr=r.hdr;
     if(f.range=="HDR"&&(!hdr||r.raw))return false;
     if(f.range=="SDR"&&(hdr||r.raw||r.transfer.isEmpty()))return false;
     if(r.width<f.minWidth||r.height<f.minHeight||std::max(r.width,r.height)<f.minMaxEdge||double(r.width)*r.height/1e6<f.minMegapixels)return false;
-    if(f.minIso&&r.iso<f.minIso)return false;
-    if(f.maxIso&&(!r.iso||r.iso>f.maxIso))return false;
     if(f.from.isValid()&&(!r.captured.isValid()||r.captured.date()<f.from))return false;
     if(f.to.isValid()&&(!r.captured.isValid()||r.captured.date()>f.to))return false;
     if(f.today) {

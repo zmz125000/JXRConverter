@@ -1,6 +1,7 @@
 #pragma once
 #include "jxrc/converter.hpp"
 #include <QObject>
+#include <QHash>
 #include <QThreadPool>
 #include <QString>
 #include <QVector>
@@ -27,9 +28,12 @@ signals:
     void batchFinished(int succeeded, int failed, int cancelled);
 private:
     void pump();
+    void finishFile(const Job& job, const QString& error, bool cancelled);
     QVector<Job> jobs_;
     int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, limit_ = 1;
     QThreadPool pool_;
     Convert converter_;
+    QHash<QString, int> remaining_, fileCancelled_;
+    QHash<QString, QString> fileErrors_;
 };
 }

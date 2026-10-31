@@ -72,7 +72,8 @@ files, build logs or test executables. Linux's largest runtime dependency is
 ICU data (about 31 MiB); Windows includes the Visual C++ redistributable
 installer (about 18 MiB) and Qt's graphics support DLLs. These are retained for
 runtime compatibility. If the Visual C++ runtime is missing on Windows, run
-`bin/vc_redist.x64.exe` before launching either application.
+`vc_redist.x64.exe` before launching either application (older 0.1.1 samples place
+it under `bin/`; new portable packages place executables at the extracted root).
 
 Deployment now excludes optional networking/TLS, generic embedded input and
 EGL framebuffer plugins, plus embedded platform plugins, using Qt's

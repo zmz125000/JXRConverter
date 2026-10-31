@@ -34,16 +34,29 @@ set_target_properties(jxrc_desktop PROPERTIES AUTOMOC ON)
 target_include_directories(jxrc_desktop PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(jxrc_desktop PUBLIC jxrc Qt6::Widgets ${JXRC_EXIV2_TARGET})
 add_executable(jxrconverter WIN32 MACOSX_BUNDLE main.cpp)
+qt_add_resources(jxrconverter app_icons PREFIX "/icons"
+    BASE "${PROJECT_SOURCE_DIR}/assets/icons"
+    FILES "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.png")
 target_link_libraries(jxrconverter PRIVATE jxrc_desktop)
 set_target_properties(jxrconverter PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     MACOSX_BUNDLE_BUNDLE_NAME JXRConverter MACOSX_BUNDLE_GUI_IDENTIFIER org.jxrconverter.desktop
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}" MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}")
 if(UNIX AND NOT APPLE)
-    set_target_properties(jxrconverter PROPERTIES INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+    file(RELATIVE_PATH jxrc_runtime_libdir "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}"
+        "${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_LIBDIR}")
+    set_target_properties(jxrconverter PROPERTIES INSTALL_RPATH "$ORIGIN/${jxrc_runtime_libdir}")
 endif()
 if(WIN32)
     target_sources(jxrconverter PRIVATE "${PROJECT_BINARY_DIR}/generated/version.rc")
 endif()
+if(APPLE)
+    set(jxrc_bundle_icon "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.icns")
+    target_sources(jxrconverter PRIVATE "${jxrc_bundle_icon}")
+    set_source_files_properties("${jxrc_bundle_icon}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+    set_target_properties(jxrconverter PROPERTIES MACOSX_BUNDLE_ICON_FILE jxrconverter.icns)
+endif()
+install(FILES "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.svg"
+    DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps" COMPONENT Runtime)
 install(TARGETS jxrconverter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime BUNDLE DESTINATION . COMPONENT Runtime)
 option(JXRC_DEPLOY_QT "Bundle Qt runtime dependencies when installing the GUI" OFF)
 if(JXRC_DEPLOY_QT)

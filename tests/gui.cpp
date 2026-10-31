@@ -13,6 +13,7 @@
 #include <cmath>
 #include <QItemSelectionModel>
 #include <QLineEdit>
+#include <QListWidget>
 #include <QMimeData>
 #include <QSettings>
 #include <QSignalSpy>
@@ -71,7 +72,7 @@ private slots:
         QTRY_COMPARE(model.rowCount(),2);QTRY_VERIFY(inspected(model));model.addPaths({directory,a},true);QTRY_COMPARE(model.rowCount(),3);QTRY_VERIFY(!model.scanning()&&inspected(model));
         CatalogFilter proxy;proxy.setSourceModel(&model);proxy.sort(Catalog::Iso,Qt::AscendingOrder);QCOMPARE(proxy.index(0,Catalog::Iso).data().toString(),QString("80"));
         proxy.sort(Catalog::Iso,Qt::DescendingOrder);QCOMPARE(proxy.index(0,Catalog::Iso).data().toString(),QString("800"));
-        Filter f;f.minIso=300;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),1);QCOMPARE(proxy.index(0,0).data(Catalog::PathRole).toString(),b);
+        Filter f;f.minMaxEdge=200;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),1);QCOMPARE(proxy.index(0,0).data(Catalog::PathRole).toString(),b);
         f={};f.minWidth=150;f.minHeight=70;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),2);
         f={};f.from=QDate(2026,1,1);f.to=QDate(2026,12,31);proxy.setFilter(f);QCOMPARE(proxy.rowCount(),1);
         f={};f.text="Exif.Photo.LensModel Prime 50";proxy.setFilter(f);QCOMPARE(proxy.rowCount(),3);
@@ -126,7 +127,9 @@ private slots:
     void controlsSnapshot() {
         MainWindow window;
         auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);
-        window.findChild<QComboBox*>("conversionTarget")->setCurrentIndex(6);window.findChild<QComboBox*>("qualityPreset")->setCurrentIndex(4);
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");QVERIFY(targets);
+        for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(i==6?Qt::Checked:Qt::Unchecked);
+        window.findChild<QComboBox*>("qualityPreset")->setCurrentIndex(4);
         window.findChild<QSpinBox*>("codecQuality")->setValue(93);window.findChild<QDoubleSpinBox*>("jxlDistance")->setValue(1.25);
         window.findChild<QComboBox*>("avifDepth")->setCurrentIndex(1);window.findChild<QCheckBox*>("downsizeGainmap")->setChecked(true);
         window.findChild<QComboBox*>("rawMode")->setCurrentIndex(2);window.findChild<QDoubleSpinBox*>("rawExposure")->setValue(0.7);

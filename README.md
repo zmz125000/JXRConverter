@@ -74,7 +74,9 @@ The desktop supports:
   display rendering is separate from conversion and does not change exported pixels.
 - Instant case-insensitive text filtering, with a toggle for the full metadata
   controls: EXIF tags/values, format, SDR/HDR/RAW, minimum longest edge and
-  megapixels (both must match), ISO range, and capture date. Hidden metadata
+  megapixels (both must match), and capture date. The format input accepts comma-
+  or space-separated formats/extensions, for example `jpg, avif, raw`. Capture
+  date defaults to yesterday through today. Hidden metadata
   controls do not restrict simple search. Today filters by capture date, falling
   back to modification date when capture date is absent, and overrides the custom
   date range. Detail columns sort numerically for size,
@@ -82,6 +84,11 @@ The desktop supports:
   dates are excluded when a date filter is active.
 - Quality presets/custom controls and pixel/RAW controls mapped to the library's
   `Options`. Unsupported transfer targets are disabled in preservation mode.
+- Check multiple output formats to convert every input to each selected target.
+  All outputs share the configured parallel job limit. Per-file completion waits
+  for every output, retaining failures even if another output succeeds. A draggable
+  divider separates conversion settings from the independently scrollable output
+  and queue controls.
 - A toolbar toggle enables wheel changes to dropdowns and numeric inputs; it is
   off by default to avoid changing settings while scrolling. Open output folder
   opens the destination in the system file manager, creating it if needed.
@@ -198,10 +205,18 @@ The **Native library, CLI and GUI** Actions run uploads three downloadable
 `JXRConverter-*` artifacts (14-day retention). Each contains a versioned archive
 with both applications and Qt runtime dependencies: Windows x64 ZIP, macOS
 Apple Silicon tar.gz, and Linux x64 tar.gz. Extract the complete archive before
-running `bin/jxrconverter` (`bin/jxrconverter.exe` on Windows) or the macOS
-`jxrconverter.app`; the CLI is `bin/jxrconvert`. Linux packages target Ubuntu
+running `./jxrconverter` (`jxrconverter.exe` on Windows) or the macOS
+`jxrconverter.app`; the CLI is `./jxrconvert`. Portable packages place applications
+at the extracted root, alongside runtime folders, with no `bin/` directory.
+Linux packages target Ubuntu
 24.04 or a compatible newer system and still require the system display/graphics
 libraries. macOS/Windows packages are unsigned.
+
+The application icon comes from the supplied SVG, stored in
+`assets/icons/jxrconverter.svg`. PNG, Windows ICO and macOS ICNS derivatives are
+checked in, so normal builds need no icon-generation tools. To regenerate them,
+install CairoSVG and Pillow in a Python environment and run
+`python3 tools/generate_icons.py`.
 
 Package runners are macOS 26 and Windows Server 2025; macOS binaries retain a
 14.0 deployment target. Linux packages retain Ubuntu 24.04 as their build

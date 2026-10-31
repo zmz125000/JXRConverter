@@ -55,7 +55,7 @@ private:
 };
 struct Filter {
     QString text, format, range;
-    int minWidth = 0, minHeight = 0, minMaxEdge = 0, minIso = 0, maxIso = 0;
+    int minWidth = 0, minHeight = 0, minMaxEdge = 0;
     double minMegapixels = 0;
     bool literalText = false, today = false;
     QDate from, to;

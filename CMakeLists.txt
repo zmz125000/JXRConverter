@@ -1,5 +1,10 @@
 cmake_minimum_required(VERSION 3.22)
-project(JXRConverter VERSION 0.1.1 LANGUAGES C CXX)
+project(JXRConverter VERSION 0.1.2 LANGUAGES C CXX)
+option(JXRC_DEPLOY_QT "Bundle Qt runtime dependencies when installing the GUI" OFF)
+if(JXRC_DEPLOY_QT)
+    # Portable desktop archives launch directly from the extracted root.
+    set(CMAKE_INSTALL_BINDIR ".")
+endif()
 include(GNUInstallDirs)
 configure_file(cmake/version.hpp.in generated/jxrc/version.hpp @ONLY)
 set(CMAKE_CXX_STANDARD 17)
