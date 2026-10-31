@@ -1,8 +1,8 @@
 # JXRConverter
 
 A C++17 image conversion library and CLI extracted from LocalViewer. The library
-owns conversion policy and controls; the CLI is its first client. A GUI can use
-the same API later. No Android SDK, JVM, or display is required.
+owns conversion policy and controls; both the CLI and Qt desktop GUI use it.
+No Android SDK or JVM is required. The library and CLI work without a display.
 
 This is the first native port, with Linux integration coverage. Windows and macOS
 builds still need validation. See [port status](docs/port-status.md) for the
@@ -31,6 +31,57 @@ The source snapshot in `LocalViewer/` is a reference, not a build dependency.
 `src/native/` contains the extracted implementation. The build never invokes
 Gradle or compiles Android entry points. Build only the named targets above to
 avoid unrelated upstream developer tools.
+
+## Desktop GUI
+
+The optional desktop application uses Qt 6 Widgets and Exiv2. On Ubuntu:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y qt6-base-dev libexiv2-dev ninja-build nasm
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJXRC_BUILD_GUI=ON
+cmake --build build --target jxrconverter -j 6
+./build/jxrconverter
+```
+
+You can also pass files or folders on the command line:
+
+```sh
+./build/jxrconverter /path/to/photos picture.avif
+```
+
+On macOS, install `qt`, `exiv2`, `cmake`, `ninja`, and `nasm` with Homebrew,
+and provide `-DCMAKE_PREFIX_PATH="$(brew --prefix qt)"` if Qt is not discovered.
+On Windows, provide Qt 6 Widgets and an Exiv2 CMake package (for example through
+vcpkg); use a matching compiler and architecture for both. Platform packaging
+and macOS/Windows GUI execution still need validation.
+
+The desktop supports:
+
+- Drag-and-drop files or folders, folder opening, optional recursive import, and
+  canonical-path deduplication. Import and metadata discovery run in the background.
+- Grid, list, and sortable detail views with a shared selection and size slider.
+  Drag from blank space to box-select; Ctrl/Cmd-click and Shift-click extend selection.
+- Lazy asynchronous thumbnails with a bounded 64 MiB cache. JPEG thumbnails show
+  the SDR base; native JXL/AVIF/JXR/RAW decoders provide fallback previews. Preview
+  display rendering is separate from conversion and does not change exported pixels.
+- Filtering by filename, any EXIF tag/value, format, SDR/HDR/RAW, minimum dimensions,
+  megapixels, ISO range, and capture date. Detail columns sort numerically for size,
+  ISO, aperture, shutter, focal length, bit depth, and pixel count. Missing capture
+  dates are excluded when a date filter is active.
+- Quality presets/custom controls and pixel/RAW controls mapped to the library's
+  `Options`. Unsupported transfer targets are disabled in preservation mode.
+- Separate **Convert selected** and **Convert visible files** actions. Each batch
+  captures its options; changing controls during a run affects the next batch.
+- Parallel jobs scaled to CPU count, with a memory-based initial job limit and a
+  per-job codec thread budget. Ultra HDR's pinned source gets a build-tree-only CPU
+  budget adaptation; downloaded source files are not modified. The memory estimate
+  is a default, not an enforcement limit: reduce jobs for very large images.
+- Per-file queue/error states, collision-safe output names within a batch, existing
+  output protection, and stopping pending work while active conversions finish.
+
+GUI input formats follow the converter's current codec support; the GUI does not
+add the Android-only formats listed in [port status](docs/port-status.md).
 
 ## Convert
 
@@ -68,6 +119,8 @@ transfer, so `--target avif` can produce a PQ AVIF from a PQ source.
 Processing SDR targets clip to SDR; there is currently no selectable general
 HDR-to-SDR tone mapper. Processing gain-map outputs use the ported LocalViewer
 encoder; an SDR source does not gain new highlight detail.
+
+`--threads N` sets a per-conversion codec CPU budget (`0` keeps automatic defaults).
 
 RAW source mode follows sensor headroom up to 10,000 nits. `--raw-mode boost`
 opens highlights toward the default 1,500-nit target. RAW adjustment flags select

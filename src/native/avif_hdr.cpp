@@ -156,7 +156,7 @@ int avif_decode_threads() {
     if (per < 2) per = hw;
     if (per < 1) per = 1;
     if (per > 8) per = 8;
-    return static_cast<int>(per);
+    return static_cast<int>(jxrc_limit_threads(per));
 }
 
 /**

@@ -203,7 +203,7 @@ int encode_jxl_source(unsigned w, unsigned h, const void* rgba, bool sixteen,
 
 int transcode_jpeg(const uint8_t* data, size_t size, const char* path, bool keep_exif) {
     auto encoder = JxlEncoderMake(nullptr);
-    auto runner = JxlThreadParallelRunnerMake(nullptr, std::min(4u,std::max(1u,std::thread::hardware_concurrency())));
+    auto runner = JxlThreadParallelRunnerMake(nullptr, jxrc_limit_threads(std::min(4u,std::max(1u,std::thread::hardware_concurrency()))));
     if (!encoder || !runner || JxlEncoderSetParallelRunner(encoder.get(),JxlThreadParallelRunner,runner.get())!=JXL_ENC_SUCCESS ||
         JxlEncoderStoreJPEGMetadata(encoder.get(),keep_exif?JXL_TRUE:JXL_FALSE)!=JXL_ENC_SUCCESS) return -61;
     auto* frame=JxlEncoderFrameSettingsCreate(encoder.get(),nullptr);

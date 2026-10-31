@@ -8,7 +8,7 @@ include(cmake/Dependencies.cmake)
 find_package(Threads REQUIRED)
 add_library(skcms STATIC "${libjxl_SOURCE_DIR}/third_party/skcms/skcms.cc" "${libjxl_SOURCE_DIR}/third_party/skcms/src/skcms_TransformBaseline.cc")
 target_compile_definitions(skcms PRIVATE SKCMS_DISABLE_HSW SKCMS_DISABLE_SKX)
-add_library(jxrc STATIC src/converter.cpp src/native/hdr_convert.cpp src/native/jxl_hdr.cpp
+add_library(jxrc STATIC src/converter.cpp src/inspect.cpp src/native/hdr_convert.cpp src/native/jxl_hdr.cpp
     src/native/avif_hdr.cpp src/native/still_jxl.cpp src/native/still_avif.cpp
     src/native/source_export.cpp src/native/raw_still.cpp)
 add_library(jxrc::jxrc ALIAS jxrc)
@@ -35,6 +35,10 @@ if(JXRC_BUILD_TESTS)
         "${CMAKE_CURRENT_BINARY_DIR}/cli-input.jpg" "${CMAKE_CURRENT_BINARY_DIR}/cli-output.avif"
         --target avif --preset lossless --overwrite)
     set_tests_properties(cli_convert PROPERTIES FIXTURES_REQUIRED cli_input)
+endif()
+option(JXRC_BUILD_GUI "Build the Qt desktop image converter" OFF)
+if(JXRC_BUILD_GUI)
+    add_subdirectory(src/gui)
 endif()
 include(GNUInstallDirs)
 install(TARGETS jxrconvert RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

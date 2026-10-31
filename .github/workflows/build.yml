@@ -26,3 +26,18 @@ jobs:
         run: cmake --build build --target jxrconvert jxrc_tests -j 3
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  desktop-linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Desktop dependencies
+        run: sudo apt-get update && sudo apt-get install -y qt6-base-dev libexiv2-dev ninja-build nasm
+      - name: Configure desktop
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJXRC_BUILD_GUI=ON
+      - name: Build desktop and tests
+        run: cmake --build build --target jxrconverter jxrc_gui_tests jxrconvert jxrc_tests -j 3
+      - name: Test offscreen
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure

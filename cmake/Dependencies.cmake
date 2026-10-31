@@ -78,6 +78,20 @@ add_subdirectory("${libultrahdr_SOURCE_DIR}" "${libultrahdr_BINARY_DIR}" EXCLUDE
 target_include_directories(uhdr PRIVATE "${jpeg_BINARY_DIR}")
 target_include_directories(core PRIVATE "${jpeg_BINARY_DIR}")
 add_dependencies(core jxrc_jpeg_build)
+# Ultra HDR 2.0.2 has no public CPU-budget setting. Adapt its CPU-count helper
+# in a build-tree copy, so concurrent GUI jobs share the same per-call budget.
+file(READ "${libultrahdr_SOURCE_DIR}/lib/src/jpegr.cpp" jxrc_uhdr_source)
+set(jxrc_uhdr_cpu "unsigned int GetCPUCoreCount() { return (std::max)(1u, std::thread::hardware_concurrency()); }")
+string(REPLACE "${jxrc_uhdr_cpu}" "unsigned int GetCPUCoreCount() { return jxrc_limit_threads((std::max)(1u, std::thread::hardware_concurrency())); }" jxrc_uhdr_patched "${jxrc_uhdr_source}")
+if(jxrc_uhdr_patched STREQUAL jxrc_uhdr_source)
+    message(FATAL_ERROR "Ultra HDR CPU-budget adaptation no longer matches the pinned source")
+endif()
+set(jxrc_uhdr_patched "#include \"${CMAKE_CURRENT_LIST_DIR}/../src/native/hdr_parallel.h\"\n${jxrc_uhdr_patched}")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/jxrc_uhdr_jpegr.cpp" CONTENT "${jxrc_uhdr_patched}" @ONLY)
+get_target_property(jxrc_uhdr_objects core SOURCES)
+list(REMOVE_ITEM jxrc_uhdr_objects "${libultrahdr_SOURCE_DIR}/lib/src/jpegr.cpp")
+set_property(TARGET core PROPERTY SOURCES "${jxrc_uhdr_objects};${CMAKE_CURRENT_BINARY_DIR}/jxrc_uhdr_jpegr.cpp")
+
 
 jxrc_source(libjxl https://github.com/libjxl/libjxl.git v0.12.0)
 foreach(flag TOOLS DEVTOOLS BENCHMARK EXAMPLES MANPAGES JNI OPENEXR SJPEG TCMALLOC FUZZERS DOXYGEN)

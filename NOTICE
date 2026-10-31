@@ -15,3 +15,8 @@ licenses and notices: libultrahdr (Apache-2.0/MIT), libjpeg-turbo (IJG/BSD/zlib)
 libjxl and skcms (BSD/Apache-2.0 and accompanying dependency notices), libavif
 (BSD), libaom (BSD and patent license), LibRaw (LGPL/CDDL), and jxrlib (BSD).
 Consult each dependency's license files when distributing binaries and source.
+
+The optional Qt desktop links Qt 6 Widgets (LGPL/GPL/commercial licensing) and
+Exiv2 (GPL and accompanying dependency notices). The pinned Ultra HDR CPU-count
+helper is adapted in a generated build-tree copy to honor per-conversion thread
+budgets; its original licenses and notices are retained.

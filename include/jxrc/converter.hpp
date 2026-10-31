@@ -36,6 +36,7 @@ struct Options {
     RawControls raw;
     float exposure = 0; // Process-mode linear-light exposure, in stops.
     unsigned max_edge = 0;
+    unsigned threads = 0; // Per-conversion codec budget; 0 uses automatic defaults.
     bool jpeg_transcoding = false; // JPEG coefficients to JXL; gain-map JPEG is rejected.
     bool keep_exif = false;
     bool overwrite = false;
@@ -50,6 +51,17 @@ struct Result {
 // Throws std::invalid_argument for invalid controls, std::runtime_error for codec/I/O errors.
 // Options are captured per call. Output is staged beside the destination before publication.
 Result convert(const std::filesystem::path& input, const std::filesystem::path& output, const Options& options = {});
+struct ImageInfo {
+    unsigned width = 0, height = 0, bits = 0;
+    bool raw = false, gainmap = false, hdr = false;
+    std::string format, transfer, primaries;
+};
+struct Preview {
+    unsigned width = 0, height = 0;
+    std::vector<uint8_t> rgba; // sRGB display thumbnail, straight alpha; not an export intermediate.
+};
+ImageInfo inspect(const std::filesystem::path& input);
+Preview preview(const std::filesystem::path& input, unsigned max_edge = 384);
 void validate(const Options& options);
 std::string version();
 } // namespace jxrc

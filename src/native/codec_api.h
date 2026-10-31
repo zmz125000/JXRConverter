@@ -15,3 +15,5 @@ int source_orientation(const uint8_t*,size_t,int,std::vector<uint8_t>*);
 void normalize_exif(std::vector<uint8_t>&);
 void scale_rgba_f16_max_edge(std::vector<uint16_t>&,unsigned&,unsigned&,unsigned);
 
+
+jxrc::ImageInfo inspect_jxr(const uint8_t*,size_t);

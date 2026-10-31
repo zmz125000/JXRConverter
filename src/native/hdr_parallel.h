@@ -6,6 +6,17 @@
 #include <thread>
 #include <vector>
 
+// A budget belongs to the calling conversion, not to the process or GUI pool.
+inline thread_local unsigned jxrc_codec_threads = 0;
+struct JxrcThreadBudget {
+    unsigned previous;
+    explicit JxrcThreadBudget(unsigned count) : previous(jxrc_codec_threads) { jxrc_codec_threads = count; }
+    ~JxrcThreadBudget() { jxrc_codec_threads = previous; }
+};
+inline unsigned jxrc_limit_threads(unsigned count) {
+    return std::max(1u, jxrc_codec_threads ? std::min(count, jxrc_codec_threads) : count);
+}
+
 // Reader pages can decode concurrently. Share the cores and avoid starting
 // workers for small buffers; the calling thread is included in the budget.
 inline unsigned hdr_pixel_jobs(size_t pixels, unsigned max_threads = 0) {
@@ -13,6 +24,7 @@ inline unsigned hdr_pixel_jobs(size_t pixels, unsigned max_threads = 0) {
         const unsigned hw = std::thread::hardware_concurrency();
         max_threads = std::max(1u, (hw == 0 ? 4u : hw) / 2);
     }
+    max_threads = jxrc_limit_threads(max_threads);
     return static_cast<unsigned>(std::min<size_t>(
         std::min(max_threads, 8u), std::max<size_t>(1, pixels / 262144)));
 }

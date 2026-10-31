@@ -21,6 +21,8 @@
 #include <vector>
 
 #include "hdr_encode.h"
+#include "jxrc/converter.hpp"
+#include <stdexcept>
 #include "reader_pixels.h"
 #include "hdr_parallel.h"
 #include "ultrahdr_api.h"
@@ -1522,4 +1524,22 @@ void scale_rgba_f16_max_edge(std::vector<uint16_t>& rgba, unsigned& w, unsigned&
     rgba.swap(out);
     w = nw;
     h = nh;
+}
+
+jxrc::ImageInfo inspect_jxr(const uint8_t* data,size_t size) {
+    PKFactory* factory=nullptr;WMPStream* stream=nullptr;PKImageDecode* decoder=nullptr;
+    struct Cleanup {
+        PKFactory*& f;WMPStream*& s;PKImageDecode*& d;
+        ~Cleanup(){if(d)d->Release(&d);if(s)s->Close(&s);if(f)f->Release(&f);}
+    } cleanup{factory,stream,decoder};
+    if(Failed(PKCreateFactory(&factory,PK_SDK_VERSION))||!factory||Failed(factory->CreateStreamFromMemory(&stream,const_cast<uint8_t*>(data),size))||!stream||Failed(PKImageDecode_Create_WMP(&decoder))||!decoder||Failed(decoder->Initialize(decoder,stream)))throw std::runtime_error("Invalid JPEG XR header");
+    decoder->fStreamOwner=1;stream=nullptr;I32 w=0,h=0;PKPixelFormatGUID guid{};
+    if(Failed(decoder->GetSize(decoder,&w,&h))||Failed(decoder->GetPixelFormat(decoder,&guid))||w<=0||h<=0)throw std::runtime_error("Invalid JPEG XR dimensions");
+    jxrc::ImageInfo info;info.width=w;info.height=h;info.format="JXR";info.bits=8;
+    const auto format=classify_guid(guid);
+    switch(format){case JxrPix::RgbaF32:case JxrPix::RgbaF32Prem:info.bits=32;info.hdr=true;break;
+        case JxrPix::RgbaF16:case JxrPix::Fixed16:info.bits=16;info.hdr=true;break;
+        case JxrPix::Rgb16:case JxrPix::Rgba16:case JxrPix::Gray16:info.bits=16;break;
+        case JxrPix::Rgb101010:info.bits=10;break;default:break;}
+    info.transfer=info.hdr?"Linear":"SDR";info.primaries="Source profile";return info;
 }

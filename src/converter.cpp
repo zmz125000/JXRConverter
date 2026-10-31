@@ -1,5 +1,6 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
+#include "hdr_parallel.h"
 #include "linear_color_profile.h"
 #include "skcms.h"
 #include "ultrahdr/jpegdecoderhelper.h"
@@ -109,6 +110,7 @@ void validate(const Options& o) {
     range(static_cast<int>(o.quality.preset),0,4,"preset");
     range(o.quality.jxl_distance,0,3,"JXL distance");range(o.quality.codec_quality,1,100,"codec quality");
     if(o.quality.avif_depth!=10&&o.quality.avif_depth!=12)throw std::invalid_argument("AVIF depth must be 10 or 12");
+    range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
     range(r.highlight_stops,0,3,"highlight stops");range(r.shoulder,0,1,"shoulder");range(r.target_nits,1000,10000,"target nits");
@@ -123,6 +125,7 @@ void validate(const Options& o) {
     }
 }
 Result convert(const std::filesystem::path& input,const std::filesystem::path& output,const Options& o) {
+    JxrcThreadBudget thread_budget(o.threads);
     validate(o);require(!output.empty(),"Empty output path");
     require(std::filesystem::is_regular_file(input),"Input must be a regular file");
     std::error_code ec;
@@ -212,6 +215,42 @@ Result convert(const std::filesystem::path& input,const std::filesystem::path& o
         result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":o.target==Target::jxl_linear?"linear":"sdr";
     }
     require(std::filesystem::file_size(stage.file)>0,"Encoder produced no output");stage.publish(output,o.overwrite);return result;
+}
+Preview preview(const std::filesystem::path& input,unsigned edge) {
+    require(edge>0&&edge<=1024,"Preview edge must be 1..1024");
+    JxrcThreadBudget budget(1);
+    auto bytes=read(input);const int format=kind(bytes);
+    std::vector<uint16_t> linear;std::vector<uint8_t> raw_pixels;
+    unsigned w=0,h=0;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;bool hdr=false;int gain=0,transfer=0,rc=0;
+    if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
+    else if(format==1)rc=decode_avif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,edge,nullptr);
+    else if(format==3)rc=decode_jxl_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,false,edge,false,nullptr,nullptr);
+    else if(format==4)rc=decode_jxr_memory(bytes.data(),bytes.size(),linear,w,h,&gamut);
+    else {
+        int cg=0;rc=decode_raw(bytes.data(),bytes.size(),RawControls{},false,edge,raw_pixels,w,h,cg);
+        gamut=cg==2?UHDR_CG_BT_2100:cg==1?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
+        if(rc==0){linear.resize(size_t(w)*h*4);std::memcpy(linear.data(),raw_pixels.data(),linear.size()*2);}
+    }
+    require(rc==0&&w&&h&&linear.size()==size_t(w)*h*4,"Thumbnail decode failed");
+    scale_rgba_f16_max_edge(linear,w,h,edge);
+    const int orient=source_orientation(bytes.data(),bytes.size(),format,nullptr);
+    require(orient>=1&&orient<=8,"Unsupported thumbnail orientation/crop");
+    Preview output;output.width=orient>=5?h:w;output.height=orient>=5?w:h;output.rgba.resize(size_t(w)*h*4);
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+        unsigned dx=x,dy=y;
+        switch(orient){case 2:dx=w-1-x;break;case 3:dx=w-1-x;dy=h-1-y;break;case 4:dy=h-1-y;break;
+            case 5:dx=y;dy=x;break;case 6:dx=h-1-y;dy=x;break;case 7:dx=h-1-y;dy=w-1-x;break;case 8:dx=y;dy=w-1-x;break;}
+        const size_t i=(size_t(y)*w+x)*4,o=(size_t(dy)*output.width+dx)*4;
+        float r=half_to_float(linear[i]),g=half_to_float(linear[i+1]),b=half_to_float(linear[i+2]);
+        if(gamut==UHDR_CG_DISPLAY_P3)linear_p3_to_bt709(r,g,b);
+        if(gamut==UHDR_CG_BT_2100)linear_bt2020_to_bt709(r,g,b);
+        // A simple display-only shoulder keeps bright thumbnails readable.
+        const float peak=std::max({r,g,b,1.f});
+        const float scale=peak>1.f?1.f/peak:1.f;
+        output.rgba[o]=linear_to_srgb_u8(r*scale);output.rgba[o+1]=linear_to_srgb_u8(g*scale);output.rgba[o+2]=linear_to_srgb_u8(b*scale);
+        output.rgba[o+3]=uint8_t(std::clamp(half_to_float(linear[i+3]),0.f,1.f)*255.f+0.5f);
+    }
+    return output;
 }
 std::string version() {return "0.1.0";}
 } // namespace jxrc

@@ -18,8 +18,11 @@ The reference is LocalViewer commit `e74a70c2811a1e6a80841ea975ba171e219cf306`.
 | RAW exposure, WB presets, Kelvin | Ported |
 | RAW highlight stops, shoulder, HDR ceiling | Ported |
 | RAW shadows, midtones, highlights, linear HDR | Ported |
-| Folder batches and Android save destinations | Not ported; file-to-file API first |
+| Folder batches and Android save destinations | Desktop batch queue added; Android destinations are not used |
 | Android platform format decoders | Need portable replacements |
+| File browser, thumbnails, metadata filtering/sorting | Qt desktop added |
+| Grid/list/details, sizing, multi-selection | Qt desktop added |
+| CPU-scaled parallel batch conversion | Added with per-call codec thread budgets |
 
 Preserve mode supports JPEG, AVIF, and JXL input. Process mode adds JPEG XR and
 LibRaw sensor formats (including DNG and the camera formats enabled by LibRaw).
@@ -39,7 +42,9 @@ Processed RAW/JXR EXIF retention is explicitly rejected. Preservation can retain
 custom source profiles, but processing supports the color transforms in the
 ported native code. File input is capped at 512 MiB and output pixels at 80M;
 these are limits, not a strict peak-memory guarantee. Conversion is synchronous;
-progress, cancellation, streaming I/O, and batch scheduling are future API work.
+the desktop now provides batch scheduling and cancellation of pending work.
+Active codec operations still run to completion; streaming I/O and in-codec
+progress/cancellation remain future API work.
 
 ## Verification
 
@@ -51,7 +56,7 @@ input/options, overwrite protection, destination cleanup, and a real CLI file co
 fixtures and visual comparisons remain necessary before claiming camera parity.
 Linux is validated locally; macOS and Windows are design targets pending builds.
 
-## Library-first next steps
+## Remaining work
 
 1. Add portable decoders for the remaining platform formats, with ICC/EXIF and
    high-bit-depth fixtures rather than relying on 8-bit raster intermediates.
@@ -59,7 +64,9 @@ Linux is validated locally; macOS and Windows are design targets pending builds.
 3. Validate macOS and Windows builds, including Unicode paths and packaging.
 4. Add cancellable jobs and structured codec diagnostics; expose a versioned C
    ABI if needed by GUI frameworks and other languages.
-5. Freeze the conversion API and packaging before choosing a GUI framework.
+5. Refine the Qt desktop API and platform packaging.
 
-A future GUI should consume the same `Options` model and conversion library.
-GUI implementation and framework selection are deferred.
+The Qt 6 desktop consumes the same `Options` model and conversion library.
+Its interaction tests cover import/deduplication, metadata filtering and numeric
+sorting, lazy thumbnails, view switching, box selection, option snapshots,
+parallelism, queue cancellation, errors, output collisions, and real conversions.

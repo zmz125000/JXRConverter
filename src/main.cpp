@@ -16,6 +16,7 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-pq, avif, avif-pq, avif-gainma
   --avif-depth 10|12            Custom AVIF depth (selects custom preset)
   --downsize-gainmap            Halve gain-map size (selects custom preset)
   --jpeg-transcoding           Preserve JPEG coefficients in JXL (preserve mode only)
+  --threads 0..65535            Per-conversion CPU budget; 0 = automatic
   --keep-exif                   Keep source EXIF where supported
   --overwrite                   Replace existing output after successful encoding
 Processing controls:
@@ -64,6 +65,7 @@ int run(int argc,char** argv) {
         else if(arg=="--avif-depth"){o.quality.avif_depth=integer(value());custom=true;}
         else if(arg=="--downsize-gainmap"){o.quality.downsize_gainmap=true;custom=true;}
         else if(arg=="--jpeg-transcoding")o.jpeg_transcoding=true;
+        else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}
         else if(arg=="--keep-exif")o.keep_exif=true;
         else if(arg=="--overwrite")o.overwrite=true;
         else if(arg=="--no-extended-bt2020")o.extended_bt2020=false;

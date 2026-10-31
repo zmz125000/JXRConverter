@@ -40,6 +40,7 @@
 
 #include "raw_camera_look.h"
 #include "reader_pixels.h"
+#include "hdr_parallel.h"
 
 #if defined(EHVIEWER_HDR_CODECS)
 #include <jpeglib.h>
@@ -411,7 +412,7 @@ bool pack_image(const libraw_processed_image_t* img, int max_edge, int present, 
     };
 
     const unsigned hw = std::thread::hardware_concurrency();
-    int bands = static_cast<int>(std::clamp(hw == 0 ? 1u : hw, 1u, kPackMaxThreads));
+    int bands = static_cast<int>(jxrc_limit_threads(std::clamp(hw == 0 ? 1u : hw, 1u, kPackMaxThreads)));
     bands = std::min(bands, std::max(1, dh / kPackMinBandRows));
     std::vector<float> peaks(static_cast<size_t>(bands), 1.f);
     std::vector<std::thread> workers;

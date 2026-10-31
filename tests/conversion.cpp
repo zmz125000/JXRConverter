@@ -1,5 +1,7 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
+#include "hdr_parallel.h"
+namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 #include <jxl/decode.h>
 #include <jxl/decode_cxx.h>
 #include <algorithm>
@@ -69,6 +71,8 @@ int main(int argc,char** argv) try {
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
     jxrc::validate({});
+    { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }
+
     for(int mode=0;mode<8;++mode) {
         const auto source=dir/("fixture"+std::to_string(mode));encode(source,mode,mode!=0&&mode!=2&&mode!=4);
         for(auto target:{jxrc::Target::jpeg,jxrc::Target::jpeg_gainmap,jxrc::Target::jxl,jxrc::Target::jxl_linear,jxrc::Target::jxl_pq,jxrc::Target::avif,jxrc::Target::avif_pq,jxrc::Target::avif_gainmap}) {
@@ -78,6 +82,12 @@ int main(int argc,char** argv) try {
         }
     }
     std::cout<<"64 process combinations passed\n";
+    for(int mode=0;mode<8;++mode) {
+        const auto file=dir/("fixture"+std::to_string(mode));
+        const auto info=jxrc::inspect(file);check(info.width==64&&info.height==48,"Header inspection dimensions");
+        auto preview=jxrc::preview(file,20);check(std::max(preview.width,preview.height)<=20&&preview.rgba.size()==size_t(preview.width)*preview.height*4,"Native preview dimensions");
+    }
+
     const auto jpeg=dir/"fixture0",gain=dir/"fixture1",linear=dir/"fixture3",pq=dir/"fixture7";
     jxrc::Options o;o.target=jxrc::Target::avif_gainmap;o.quality.preset=jxrc::Preset::lossless;
     auto r=jxrc::convert(gain,dir/"preserved.avif",o);check(r.gainmap,"JPEG to AVIF gain map lost");
