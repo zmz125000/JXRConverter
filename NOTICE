@@ -1,0 +1,17 @@
+JXRConverter contains code derived from LocalViewer / EhViewer.
+LocalViewer reference commit: e74a70c2811a1e6a80841ea975ba171e219cf306
+Reference snapshot: LocalViewer/app/src/main/cpp in this workspace.
+EhViewer copyright 2014-2016 Hippo Seven; subsequent contributions belong to
+LocalViewer / EhViewer contributors. See COPYING (GNU GPL version 3).
+
+The src/native files were extracted from LocalViewer's native conversion code.
+Changes include removal of Android/JNI presentation and entry points, portable
+C++ interfaces, source-preservation validation, and host build integration.
+The conversion option contracts follow StillExport.kt, StillExportQuality.kt,
+RawExportControls.kt, and ImageConversionPreferences.kt.
+
+Codec libraries are downloaded or supplied separately and retain their own
+licenses and notices: libultrahdr (Apache-2.0/MIT), libjpeg-turbo (IJG/BSD/zlib),
+libjxl and skcms (BSD/Apache-2.0 and accompanying dependency notices), libavif
+(BSD), libaom (BSD and patent license), LibRaw (LGPL/CDDL), and jxrlib (BSD).
+Consult each dependency's license files when distributing binaries and source.

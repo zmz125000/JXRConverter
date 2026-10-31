@@ -1,2 +1,4 @@
 /libultrahdr
 /LocalViewer
+/build*/
+/CMakeUserPresets.json

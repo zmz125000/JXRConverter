@@ -1,0 +1,28 @@
+name: Native library and CLI
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nasm
+      - name: macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja nasm
+      - name: Windows dependencies
+        if: runner.os == 'Windows'
+        run: choco install nasm ninja -y --no-progress
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --target jxrconvert jxrc_tests -j 3
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

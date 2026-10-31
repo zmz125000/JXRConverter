@@ -1,0 +1,41 @@
+cmake_minimum_required(VERSION 3.22)
+project(JXRConverter VERSION 0.1.0 LANGUAGES C CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+option(JXRC_BUILD_TESTS "Build conversion integration tests" ON)
+include(cmake/Dependencies.cmake)
+find_package(Threads REQUIRED)
+add_library(skcms STATIC "${libjxl_SOURCE_DIR}/third_party/skcms/skcms.cc" "${libjxl_SOURCE_DIR}/third_party/skcms/src/skcms_TransformBaseline.cc")
+target_compile_definitions(skcms PRIVATE SKCMS_DISABLE_HSW SKCMS_DISABLE_SKX)
+add_library(jxrc STATIC src/converter.cpp src/native/hdr_convert.cpp src/native/jxl_hdr.cpp
+    src/native/avif_hdr.cpp src/native/still_jxl.cpp src/native/still_avif.cpp
+    src/native/source_export.cpp src/native/raw_still.cpp)
+add_library(jxrc::jxrc ALIAS jxrc)
+target_include_directories(jxrc PUBLIC include PRIVATE src/native
+    "${libultrahdr_SOURCE_DIR}" "${libultrahdr_SOURCE_DIR}/lib/include"
+    "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}" "${libjxl_SOURCE_DIR}/third_party/skcms")
+add_dependencies(jxrc jxrc_jpeg_build)
+add_dependencies(jxrc_raw jxrc_jpeg_build)
+add_dependencies(uhdr jxrc_jpeg_build)
+target_compile_definitions(jxrc PRIVATE EHVIEWER_HDR_CODECS)
+target_link_libraries(jxrc PRIVATE uhdr jpeg-static jxl jxl_threads jxl_cms skcms avif jxrc_raw jxrc_jxr Threads::Threads)
+add_executable(jxrconvert src/main.cpp)
+target_link_libraries(jxrconvert PRIVATE jxrc)
+if(JXRC_BUILD_TESTS)
+    enable_testing()
+    add_executable(jxrc_tests tests/conversion.cpp)
+    target_link_libraries(jxrc_tests PRIVATE jxrc jxl)
+    target_include_directories(jxrc_tests PRIVATE src/native "${libultrahdr_SOURCE_DIR}")
+    add_test(NAME conversion COMMAND jxrc_tests)
+    add_test(NAME cli_help COMMAND jxrconvert --help)
+    add_test(NAME cli_fixture COMMAND jxrc_tests --fixture "${CMAKE_CURRENT_BINARY_DIR}/cli-input.jpg")
+    set_tests_properties(cli_fixture PROPERTIES FIXTURES_SETUP cli_input)
+    add_test(NAME cli_convert COMMAND jxrconvert
+        "${CMAKE_CURRENT_BINARY_DIR}/cli-input.jpg" "${CMAKE_CURRENT_BINARY_DIR}/cli-output.avif"
+        --target avif --preset lossless --overwrite)
+    set_tests_properties(cli_convert PROPERTIES FIXTURES_REQUIRED cli_input)
+endif()
+include(GNUInstallDirs)
+install(TARGETS jxrconvert RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
