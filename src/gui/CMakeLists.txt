@@ -51,7 +51,12 @@ if(JXRC_DEPLOY_QT)
         message(FATAL_ERROR "Runtime packaging requires Qt 6.10 or newer")
     endif()
     qt6_generate_deploy_app_script(TARGET jxrconverter OUTPUT_SCRIPT deploy_script
-        NO_TRANSLATIONS INCLUDE_PLUGINS qoffscreen)
+        NO_TRANSLATIONS INCLUDE_PLUGINS qoffscreen
+        # Local file conversion needs neither network/TLS plugins nor embedded
+        # framebuffer/input backends. Keep desktop platforms, themes, image
+        # codecs and input methods, including Wayland and X11 on Linux.
+        EXCLUDE_PLUGIN_TYPES networkinformation tls generic egldeviceintegrations
+        EXCLUDE_PLUGINS qeglfs qlinuxfb qvkkhrdisplay qminimalegl)
     install(SCRIPT "${deploy_script}" COMPONENT Runtime)
 endif()
 if(JXRC_BUILD_TESTS)

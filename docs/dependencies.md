@@ -60,6 +60,27 @@ GitHub Actions use checkout 7.0.1, msvc-dev-cmd 1.13.0, install-qt-action
 from the runners' package repositories use the versions supplied by those
 repositories.
 
+## Desktop package contents
+
+The supplied 0.1.1 Linux and Windows Actions downloads in `samples/` each
+contain one versioned release archive. Publish those inner `.tar.gz`/`.zip`
+archives, rather than the outer Actions download ZIPs. The release workflow
+downloads and uploads the inner archives automatically.
+
+Archive inspection found no SDK headers, static/import libraries, PDBs, CMake
+files, build logs or test executables. Linux's largest runtime dependency is
+ICU data (about 31 MiB); Windows includes the Visual C++ redistributable
+installer (about 18 MiB) and Qt's graphics support DLLs. These are retained for
+runtime compatibility. If the Visual C++ runtime is missing on Windows, run
+`bin/vc_redist.x64.exe` before launching either application.
+
+Deployment now excludes optional networking/TLS, generic embedded input and
+EGL framebuffer plugins, plus embedded platform plugins, using Qt's
+[deployment selection options](https://doc.qt.io/qt-6/qt-generate-deploy-app-script.html).
+Desktop display backends, image codecs, input methods, ICU and dependency
+licenses remain included. The samples predate these exclusions; new package
+sizes have not been measured.
+
 ## Integration fixes
 
 Ultra HDR's ordinary `core` target carries its JPEG and image-IO link

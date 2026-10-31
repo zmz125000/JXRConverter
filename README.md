@@ -171,7 +171,7 @@ The port retains LocalViewer's GPLv3 license. See [COPYING](COPYING) and
 
 ## Versions, CI downloads and releases
 
-The current version is **0.1.0**. Change `project(JXRConverter VERSION ...)` in
+The current version is **0.1.1**. Change `project(JXRConverter VERSION ...)` in
 `CMakeLists.txt` to update the library's `jxrc::version()`, CLI help/`--version`,
 GUI title/`--version`, Windows file properties, macOS bundle metadata and package
 filenames together. The generated public header is `jxrc/version.hpp`.
@@ -203,14 +203,17 @@ python3 tools/smoke_package.py build-release
 After committing the version and changes, push a matching release tag:
 
 ```sh
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.1.1
+git push origin v0.1.1
 ```
 
 The **Release** workflow checks the tag against CMake's version, builds and tests
 all three desktop packages, tests extracted archives, and publishes a GitHub
 Release with generated notes and `SHA256SUMS.txt`. A mismatched tag fails without
-publishing. The reusable `packages.yml` workflow supplies the same package checks
+publishing. Like LocalViewer, publishing uses `softprops/action-gh-release` to
+upload the versioned archives directly to the release's **Assets** section;
+rerunning publication can update an existing release's assets. The reusable
+`packages.yml` workflow supplies the same package checks
 to CI and releases. Source distributions and dependency pins are available through
 the tagged repository; bundled third-party license files accompany the binaries.
 

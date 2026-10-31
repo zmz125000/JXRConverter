@@ -16,8 +16,16 @@ for archive in archives:
         shutil.unpack_archive(archive, directory)
         root = Path(directory)
         suffix = '.exe' if os.name == 'nt' else ''
-        cli = next(root.rglob('jxrconvert' + suffix))
-        gui = next(root.rglob('jxrconverter' + suffix))
+        # Locate installed executables, not similarly named data directories
+        # (share/jxrconverter can precede the app bundle on macOS).
+        cli_matches = [p for p in root.glob('*/bin/jxrconvert' + suffix) if p.is_file()]
+        gui_pattern = ('*/jxrconverter.app/Contents/MacOS/jxrconverter'
+                       if sys.platform == 'darwin' else '*/bin/jxrconverter' + suffix)
+        gui_matches = [p for p in root.glob(gui_pattern) if p.is_file()]
+        if len(cli_matches) != 1 or len(gui_matches) != 1:
+            sys.exit(f'Expected one installed CLI and GUI in {archive.name}; '
+                     f'found CLI={cli_matches}, GUI={gui_matches}')
+        cli, gui = cli_matches[0], gui_matches[0]
         env = os.environ.copy()
         qt_root = env.pop('QT_ROOT_DIR', '') or env.get('QTDIR', '')
         for name in ('QT_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QTDIR', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH'):
