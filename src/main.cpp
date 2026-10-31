@@ -6,7 +6,7 @@
 #include <string>
 namespace {
 void help() {
-    std::cout << R"(jxrconvert 0.1.0 - LocalViewer image conversion library/CLI
+    std::cout << "jxrconvert " << jxrc::version() << R"( - LocalViewer image conversion library/CLI
 Usage: jxrconvert INPUT OUTPUT --target TARGET [OPTIONS]
 Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-pq, avif, avif-pq, avif-gainmap
   --mode preserve|process       Default: preserve; no automatic processing fallback

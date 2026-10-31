@@ -22,7 +22,8 @@ ImageInfo inspect(const std::filesystem::path& input) {
         if(jpeg.parseImage(bytes.data(),bytes.size()).error_code!=UHDR_CODEC_OK)throw std::runtime_error("Invalid JPEG");
         out.width=jpeg.getDecompressedImageWidth();out.height=jpeg.getDecompressedImageHeight();out.bits=8;out.format="JPEG";
         out.gainmap=is_uhdr_image(bytes.data(),static_cast<int>(bytes.size()))==1;out.transfer="sRGB";
-        if(out.gainmap)out.transfer="Gain map";out.hdr=out.gainmap;
+        if(out.gainmap)out.transfer="Gain map";
+        out.hdr=out.gainmap;
         auto icc=source_jpeg_icc(bytes.data(),bytes.size());out.primaries=icc.empty()?"sRGB":"ICC";
         int orientation=source_orientation(bytes.data(),bytes.size(),0,nullptr);if(orientation>=5)std::swap(out.width,out.height);
     } else if(bytes.size()>=12&&!std::memcmp(bytes.data()+4,"ftyp",4)) {
@@ -49,7 +50,9 @@ ImageInfo inspect(const std::filesystem::path& input) {
     } else if(bytes.size()>=4&&bytes[0]=='I'&&bytes[1]=='I'&&bytes[2]==0xbc&&bytes[3]==1) {
         out=inspect_jxr(bytes.data(),bytes.size());
     } else {
-        LibRaw raw;if(raw.open_buffer(bytes.data(),bytes.size())!=LIBRAW_SUCCESS)throw std::runtime_error("Image header inspection unavailable");
+        auto storage=std::make_unique<LibRaw>();
+        auto& raw=*storage;
+        if(raw.open_buffer(bytes.data(),bytes.size())!=LIBRAW_SUCCESS)throw std::runtime_error("Image header inspection unavailable");
         out.width=raw.imgdata.sizes.width;out.height=raw.imgdata.sizes.height;out.raw=true;out.format="RAW";out.transfer="Sensor";out.primaries="Camera";
         if(raw.imgdata.sizes.flip==5||raw.imgdata.sizes.flip==6)std::swap(out.width,out.height);
         out.bits=raw.get_internal_data_pointer()->unpacker_data.tiff_bps;

@@ -168,3 +168,52 @@ C ABI, and language bindings remain future packaging work. CLI exit codes are
 
 The port retains LocalViewer's GPLv3 license. See [COPYING](COPYING) and
 [NOTICE](NOTICE). Codec dependencies retain their own licenses.
+
+## Versions, CI downloads and releases
+
+The current version is **0.1.0**. Change `project(JXRConverter VERSION ...)` in
+`CMakeLists.txt` to update the library's `jxrc::version()`, CLI help/`--version`,
+GUI title/`--version`, Windows file properties, macOS bundle metadata and package
+filenames together. The generated public header is `jxrc/version.hpp`.
+
+The **Native library, CLI and GUI** Actions run uploads three downloadable
+`JXRConverter-*` artifacts (14-day retention). Each contains a versioned archive
+with both applications and Qt runtime dependencies: Windows x64 ZIP, macOS
+Apple Silicon tar.gz, and Linux x64 tar.gz. Extract the complete archive before
+running `bin/jxrconverter` (`bin/jxrconverter.exe` on Windows) or the macOS
+`jxrconverter.app`; the CLI is `bin/jxrconvert`. Linux packages target Ubuntu
+24.04 or a compatible newer system and still require the system display/graphics
+libraries. macOS/Windows packages are unsigned.
+
+To build a desktop archive locally (Qt 6.10+ required for runtime deployment):
+
+```sh
+cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DJXRC_BUILD_GUI=ON -DJXRC_DEPLOY_QT=ON -DCMAKE_INSTALL_LIBDIR=lib
+cmake --build build-release --target jxrconverter jxrconvert -j 4
+(cd build-release && cpack -C Release)
+python3 tools/smoke_package.py build-release
+```
+
+After committing the version and changes, push a matching release tag:
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The **Release** workflow checks the tag against CMake's version, builds and tests
+all three desktop packages, tests extracted archives, and publishes a GitHub
+Release with generated notes and `SHA256SUMS.txt`. A mismatched tag fails without
+publishing. The reusable `packages.yml` workflow supplies the same package checks
+to CI and releases. Source distributions and dependency pins are available through
+the tagged repository; bundled third-party license files accompany the binaries.
+
+For noisy downloaded Actions logs, run the streaming deduplicator before reading:
+
+```sh
+python3 tools/summarize_build_logs.py .git/logs_RUN_ID
+python3 tools/summarize_build_logs.py .git/logs_RUN_ID --details > warnings.txt
+```
+
+See [the warning audit](docs/build-warnings.md) for the inspected successful build.

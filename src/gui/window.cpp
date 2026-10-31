@@ -47,7 +47,7 @@ QCheckBox* check(const QString& text,const char* name,bool initial=false) {auto*
 QStringList urlPaths(const QMimeData* mime) {QStringList out;for(const auto& url:mime->urls())if(url.isLocalFile())out<<url.toLocalFile();return out;}
 }
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog(this)),proxy_(new CatalogFilter(this)),queue_(new ConversionQueue(this)) {
-    setWindowTitle("JXRConverter");setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
+    setWindowTitle("JXRConverter " + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
     proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);selection_=new QItemSelectionModel(proxy_,this);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
     auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.jpg *.jpeg *.avif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
@@ -158,11 +158,11 @@ void MainWindow::updateMode() {
 }
 Options MainWindow::options() const {
     Options o;o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=Target(target_->currentIndex());o.quality.preset=Preset(preset_->currentIndex());
-    o.quality.codec_quality=quality_->value();o.quality.jxl_distance=distance_->value();o.quality.avif_depth=avifDepth_->currentIndex()?12:10;o.quality.downsize_gainmap=downsize_->isChecked();
+    o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()?12:10;o.quality.downsize_gainmap=downsize_->isChecked();
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isChecked();o.jpeg_transcoding=transcode_->isEnabled()&&transcode_->isChecked();
     if(o.mode==Mode::process) {
-        o.exposure=exposure_->value();o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());
-        if(o.raw.hdr_mode==RawHdrMode::custom){o.raw.exposure=rawExposure_->value();o.raw.white_balance=wb_->currentIndex();o.raw.kelvin=kelvin_->value();o.raw.highlight_stops=highlight_->value();o.raw.shoulder=shoulder_->value();o.raw.target_nits=nits_->value();o.raw.shadows=shadows_->value();o.raw.midtones=midtones_->value();o.raw.highlights=highlights_->value();o.raw.camera_look=cameraLook_->isChecked();o.raw.linear_hdr=linearHdr_->isChecked();}
+        o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());
+        if(o.raw.hdr_mode==RawHdrMode::custom){o.raw.exposure=static_cast<float>(rawExposure_->value());o.raw.white_balance=wb_->currentIndex();o.raw.kelvin=kelvin_->value();o.raw.highlight_stops=static_cast<float>(highlight_->value());o.raw.shoulder=static_cast<float>(shoulder_->value());o.raw.target_nits=static_cast<float>(nits_->value());o.raw.shadows=static_cast<float>(shadows_->value());o.raw.midtones=static_cast<float>(midtones_->value());o.raw.highlights=static_cast<float>(highlights_->value());o.raw.camera_look=cameraLook_->isChecked();o.raw.linear_hdr=linearHdr_->isChecked();}
     }
     validate(o);return o;
 }

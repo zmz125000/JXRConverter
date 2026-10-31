@@ -27,9 +27,10 @@ for distribution packages, including Ubuntu 24.04's Exiv2 0.27.6. Qt's supported
 minimum remains 6.4; the current-release CI job installs Qt 6.12.0 and its ICU
 runtime, while a separate job exercises Ubuntu's older Qt and Exiv2 packages.
 
-GitHub Actions use checkout 7.0.1, msvc-dev-cmd 1.13.0 and install-qt-action
-4.5.0. Build tools installed from the runners' package repositories use the
-versions supplied by those repositories.
+GitHub Actions use checkout 7.0.1, msvc-dev-cmd 1.13.0, install-qt-action
+4.5.0, upload-artifact 7.0.2 and download-artifact 8.0.2. Build tools installed
+from the runners' package repositories use the versions supplied by those
+repositories.
 
 ## Integration fixes
 

@@ -1,3 +1,4 @@
+#include <memory>
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
  * Camera RAW (DNG / CR2 / NEF / …).
@@ -769,7 +770,8 @@ bool process_open_raw(HeadroomRaw& raw, const uint8_t* tiff, size_t tiff_len, in
 int decode_raw(const uint8_t* data, size_t size, const jxrc::RawControls& controls,
                bool hdr, unsigned max_edge, std::vector<uint8_t>& pixels,
                unsigned& w, unsigned& h, int& gamut) {
-    HeadroomRaw raw;
+    auto storage = std::make_unique<HeadroomRaw>();
+    auto& raw = *storage;
     request_embedded_matrix(raw, controls.white_balance);
     if (raw.open_buffer(data,size)!=LIBRAW_SUCCESS) return -1;
     if (uint64_t(raw.imgdata.sizes.width)*raw.imgdata.sizes.height>80000000) return -2;

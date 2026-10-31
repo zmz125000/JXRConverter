@@ -219,7 +219,8 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
             JxlDecoderSkipFrames(decoder.get(),0x7fffffffu);
         } else if(status==JXL_DEC_SUCCESS)break;
         else if(status==JXL_DEC_ERROR || status==JXL_DEC_NEED_MORE_INPUT) {
-            if(complete)break;return Image(nullptr,avifImageDestroy);
+            if(complete)break;
+            return Image(nullptr,avifImageDestroy);
         }
     }
     if(!complete)return Image(nullptr,avifImageDestroy);
@@ -280,13 +281,13 @@ bool to_uhdr_metadata(const avifImage* base,uhdr_gainmap_metadata_t& dst) {
     // Ultra HDR JPEG cannot represent an HDR base or arbitrary alternate ICC/primaries.
     if (!src || fraction(src->baseHdrHeadroom)>fraction(src->alternateHdrHeadroom)) return false;
     for(unsigned c=0;c<3;++c) {
-        dst.min_content_boost[c]=std::exp2(fraction(src->gainMapMin[c]));
-        dst.max_content_boost[c]=std::exp2(fraction(src->gainMapMax[c]));
-        dst.gamma[c]=fraction(src->gainMapGamma[c]);
-        dst.offset_sdr[c]=fraction(src->baseOffset[c]);dst.offset_hdr[c]=fraction(src->alternateOffset[c]);
+        dst.min_content_boost[c]=static_cast<float>(std::exp2(fraction(src->gainMapMin[c])));
+        dst.max_content_boost[c]=static_cast<float>(std::exp2(fraction(src->gainMapMax[c])));
+        dst.gamma[c]=static_cast<float>(fraction(src->gainMapGamma[c]));
+        dst.offset_sdr[c]=static_cast<float>(fraction(src->baseOffset[c]));dst.offset_hdr[c]=static_cast<float>(fraction(src->alternateOffset[c]));
     }
-    dst.hdr_capacity_min=std::exp2(fraction(src->baseHdrHeadroom));
-    dst.hdr_capacity_max=std::exp2(fraction(src->alternateHdrHeadroom));dst.use_base_cg=src->useBaseColorSpace;
+    dst.hdr_capacity_min=static_cast<float>(std::exp2(fraction(src->baseHdrHeadroom)));
+    dst.hdr_capacity_max=static_cast<float>(std::exp2(fraction(src->alternateHdrHeadroom)));dst.use_base_cg=src->useBaseColorSpace;
     return true;
 }
 bool downsize_map(avifImage* base,unsigned scale) {
@@ -420,9 +421,9 @@ std::vector<uint8_t> with_orientation(const uint8_t* data,size_t size,unsigned v
     const size_t fresh=(size+1)&~size_t(1);
     bytes.resize(fresh+2+(n+1)*12+4,0);
     std::memcpy(bytes.data()+fresh+2,bytes.data()+root+2,n*12);
-    set16(fresh,n+1);const size_t entry=fresh+2+n*12;
+    set16(fresh,static_cast<uint32_t>(n+1));const size_t entry=fresh+2+n*12;
     set16(entry,0x112);set16(entry+2,3);set32(entry+4,1);set16(entry+8,value);
-    set32(fresh+2+(n+1)*12,next_ifd);set32(4,fresh);return bytes;
+    set32(fresh+2+(n+1)*12,next_ifd);set32(4,static_cast<uint32_t>(fresh));return bytes;
 }
 
 bool opaque_alpha(const avifImage* image) {

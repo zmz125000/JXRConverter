@@ -126,7 +126,8 @@ private slots:
     void queueParallelismFailureAndCancel() {
         std::atomic<int> active{0},peak{0},invalidBudget{0};
         ConversionQueue queue(nullptr,[&](const std::filesystem::path& input,const std::filesystem::path&,const jxrc::Options& o) {
-            if(o.threads!=4)++invalidBudget;const int now=++active;int old=peak.load();while(now>old&&!peak.compare_exchange_weak(old,now)){}
+            if(o.threads!=4)++invalidBudget;
+            const int now=++active;int old=peak.load();while(now>old&&!peak.compare_exchange_weak(old,now)){}
             QThread::msleep(35);--active;if(input.string().find("bad")!=std::string::npos)throw std::runtime_error("expected failure");return jxrc::Result{};
         });
         QSignalSpy done(&queue,&ConversionQueue::batchFinished);QSignalSpy states(&queue,&ConversionQueue::statusChanged);

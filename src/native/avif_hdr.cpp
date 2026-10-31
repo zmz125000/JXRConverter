@@ -180,8 +180,8 @@ bool scale_avif_to_max_edge(avifImage* image, unsigned max_edge) {
     if (dw == image->width && dh == image->height) return true;
     avifDiagnostics diag;
     avifDiagnosticsClearError(&diag);
-    const unsigned src_w = image->width;
-    const unsigned src_h = image->height;
+    [[maybe_unused]] const unsigned src_w = image->width;
+    [[maybe_unused]] const unsigned src_h = image->height;
     const avifResult scaled = avifImageScale(image, dw, dh, &diag);
     if (scaled != AVIF_RESULT_OK) {
         ALOGE("avifImageScale %ux%u -> %ux%u failed: %s", src_w, src_h, dw, dh,
@@ -210,8 +210,8 @@ struct ScopedAvifRgb {
 template <typename Work>
 void avif_parallel_rows(unsigned width, unsigned height, int max_threads, Work work) {
     // Avoid thread startup for thumbnails. Include the calling thread in the budget.
-    const unsigned jobs = std::min<unsigned>(std::max(1, max_threads),
-        std::min<size_t>(height, std::max<size_t>(1, static_cast<size_t>(width) * height / 65536)));
+    const unsigned jobs = static_cast<unsigned>(std::min<size_t>(std::max(1, max_threads),
+        std::min<size_t>(height, std::max<size_t>(1, static_cast<size_t>(width) * height / 65536))));
     std::vector<std::thread> workers;
     workers.reserve(jobs - 1);
     for (unsigned job = 1; job < jobs; ++job) {
@@ -287,7 +287,7 @@ bool apply_iso_gain_map_fast(const avifImage* image, std::vector<uint16_t>& out_
 
     out_rgba.resize(static_cast<size_t>(image->width) * image->height * 4);
     avif_parallel_rows(image->width, image->height, threads, [&](unsigned begin, unsigned end) {
-        for (unsigned y = begin; y < end; ++y) {
+        for (size_t y = begin; y < end; ++y) {
             const auto* b = reinterpret_cast<const uint16_t*>(base.rgb.pixels + size_t(y) * base.rgb.rowBytes);
             const auto* g = reinterpret_cast<const uint16_t*>(gain.rgb.pixels + size_t(y) * gain.rgb.rowBytes);
             auto* dst = out_rgba.data() + size_t(y) * image->width * 4;
@@ -544,7 +544,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out
 
     const auto& linear = avif_linear_lut(tc);
     hdr_parallel_pixels(h, hdr_pixel_jobs(pixels, dec->maxThreads), [&](size_t begin, size_t end, unsigned) {
-        for (unsigned y = begin; y < end; y++) {
+        for (size_t y = begin; y < end; y++) {
             const uint16_t* row = reinterpret_cast<const uint16_t*>(row_base + static_cast<size_t>(y) * row_bytes);
             for (unsigned x = 0; x < w; x++) {
                 const uint16_t* p = row + x * 4;

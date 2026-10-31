@@ -115,6 +115,13 @@ foreach(flag TOOLS DEVTOOLS BENCHMARK EXAMPLES MANPAGES JNI OPENEXR SJPEG TCMALL
 endforeach()
 set(JPEGXL_BUNDLE_LIBPNG OFF CACHE BOOL "" FORCE)
 add_subdirectory("${libjxl_SOURCE_DIR}" "${libjxl_BINARY_DIR}" EXCLUDE_FROM_ALL)
+# These upstream SIMD kernels intentionally round double literals to float.
+# Scope the MSVC diagnostic policy to libjxl's own object targets.
+if(MSVC)
+    foreach(target jxl_dec-obj jxl_enc-obj jxl_cms)
+        target_compile_options(${target} PRIVATE /wd4305 /wd4244 /wd4267)
+    endforeach()
+endif()
 
 jxrc_source(libaom https://aomedia.googlesource.com/aom v3.15.3)
 set(ENABLE_TESTS OFF CACHE BOOL "" FORCE)
@@ -122,7 +129,7 @@ set(ENABLE_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(ENABLE_TOOLS OFF CACHE BOOL "" FORCE)
 set(ENABLE_DOCS OFF CACHE BOOL "" FORCE)
 set(CONFIG_AV1_HIGHBITDEPTH 1 CACHE STRING "" FORCE)
-add_subdirectory("${libaom_SOURCE_DIR}" "${libaom_BINARY_DIR}" EXCLUDE_FROM_ALL)
+include("${CMAKE_CURRENT_LIST_DIR}/AddAom.cmake")
 jxrc_source(libavif https://github.com/AOMediaCodec/libavif.git v1.4.2)
 set(AVIF_CODEC_AOM SYSTEM CACHE STRING "" FORCE)
 set(AVIF_CODEC_DAV1D OFF CACHE STRING "" FORCE)

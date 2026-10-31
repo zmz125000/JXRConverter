@@ -189,7 +189,16 @@ void Catalog::setStatus(const QString& path,const QString& status,const QString&
     emit dataChanged(index(row,0),index(row,ColumnCount-1),{Qt::DisplayRole,Qt::ToolTipRole});
 }
 CatalogFilter::CatalogFilter(QObject* parent):QSortFilterProxyModel(parent) {setDynamicSortFilter(true);setSortCaseSensitivity(Qt::CaseInsensitive);}
-void CatalogFilter::setFilter(const Filter& filter) { filter_=filter;invalidateFilter(); }
+void CatalogFilter::setFilter(const Filter& filter) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+    beginFilterChange();
+    filter_=filter;
+    endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+    filter_=filter;
+    invalidateFilter();
+#endif
+}
 bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     const auto& r=static_cast<Catalog*>(sourceModel())->record(row);const auto& f=filter_;
     if(!f.format.isEmpty()&&r.format.compare(f.format,Qt::CaseInsensitive)!=0)return false;
@@ -198,7 +207,8 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     if(f.range=="HDR"&&(!hdr||r.raw))return false;
     if(f.range=="SDR"&&(hdr||r.raw||r.transfer.isEmpty()))return false;
     if(r.width<f.minWidth||r.height<f.minHeight||double(r.width)*r.height/1e6<f.minMegapixels)return false;
-    if(f.minIso&&r.iso<f.minIso)return false;if(f.maxIso&&(!r.iso||r.iso>f.maxIso))return false;
+    if(f.minIso&&r.iso<f.minIso)return false;
+    if(f.maxIso&&(!r.iso||r.iso>f.maxIso))return false;
     if(f.from.isValid()&&(!r.captured.isValid()||r.captured.date()<f.from))return false;
     if(f.to.isValid()&&(!r.captured.isValid()||r.captured.date()>f.to))return false;
     const QString haystack=r.path+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+r.exif.keys().join(' ')+" "+r.exif.values().join(' ');

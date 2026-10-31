@@ -442,7 +442,7 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out_
         const unsigned nh = std::max(1u, static_cast<unsigned>(static_cast<uint64_t>(h) * thumbnail_edge / edge));
         out_rgba.resize(static_cast<size_t>(nw) * nh * 4);
         hdr_parallel_pixels(nh, hdr_pixel_jobs(pixels_n), [&](size_t begin, size_t end, unsigned) {
-            for (unsigned y = begin; y < end; ++y) {
+            for (size_t y = begin; y < end; ++y) {
                 const unsigned sy0 = y * h / nh, sy1 = (y + 1) * h / nh;
                 for (unsigned x = 0; x < nw; ++x) {
                     const unsigned sx0 = x * w / nw, sx1 = (x + 1) * w / nw;

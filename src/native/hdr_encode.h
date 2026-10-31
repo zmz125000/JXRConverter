@@ -230,7 +230,7 @@ inline uint8_t linear_to_srgb_u8(float l) {
 inline const std::vector<float>& half_srgb_table() {
     static const std::vector<float> values = [] {
         std::vector<float> table(65536);
-        for (size_t i = 0; i < table.size(); ++i) table[i] = srgb_oetf(half_to_float(i));
+        for (size_t i = 0; i < table.size(); ++i) table[i] = srgb_oetf(half_to_float(static_cast<uint16_t>(i)));
         return table;
     }();
     return values;

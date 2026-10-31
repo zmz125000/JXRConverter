@@ -1,4 +1,6 @@
 #include "jxrc/converter.hpp"
+#include "jxrc/version.hpp"
+#include "reader_pixels.h"
 #include "codec_api.h"
 #include "hdr_parallel.h"
 #include "linear_color_profile.h"
@@ -26,7 +28,7 @@ bool retain_reader_pixels(std::vector<uint16_t>&) { return false; }
 namespace jxrc {
 namespace {
 void require(bool condition,const std::string& message) { if(!condition) throw std::runtime_error(message); }
-void range(float value,float low,float high,const char* name) {
+void range(double value,double low,double high,const char* name) {
     if(!std::isfinite(value)||value<low||value>high) throw std::invalid_argument(std::string(name)+" out of range");
 }
 bool hdr_target(Target t) {return t==Target::jpeg_gainmap||t==Target::jxl_linear||t==Target::avif_pq||t==Target::avif_gainmap||t==Target::jxl_pq;}
@@ -76,7 +78,7 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<uint16_t>& pixels
         require(status.error_code==UHDR_CODEC_OK,"Ultra HDR output transfer failed");
     if(uhdr_dec_set_image(dec.get(),&compressed).error_code==UHDR_CODEC_OK&&uhdr_dec_probe(dec.get()).error_code==UHDR_CODEC_OK) {
         require(uhdr_dec_get_image_width(dec.get())>0&&uhdr_dec_get_image_height(dec.get())>0&&uint64_t(uhdr_dec_get_image_width(dec.get()))*uhdr_dec_get_image_height(dec.get())<=80000000,"JPEG dimensions exceed limit");
-        auto status=uhdr_decode(dec.get());
+        status=uhdr_decode(dec.get());
         require(status.error_code==UHDR_CODEC_OK,std::string("Ultra HDR decode failed: ")+(status.has_detail?status.detail:"no codec detail"));
         const auto* image=uhdr_get_decoded_image(dec.get());require(image,"Missing Ultra HDR pixels");
         w=image->w;h=image->h;gamut=image->cg;hdr=true;pixels.resize(size_t(w)*h*4);
@@ -99,7 +101,8 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<uint16_t>& pixels
     for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
         const auto* p=static_cast<const uint8_t*>(image.planes[0])+size_t(y)*image.stride[0]*channels+x*channels;
         const size_t i=(size_t(y)*w+x)*4;
-        for(unsigned c=0;c<3;++c)rgba[i+c]=p[channels==1?0:c];rgba[i+3]=255;
+        for(unsigned c=0;c<3;++c)rgba[i+c]=p[channels==1?0:c];
+        rgba[i+3]=255;
     }
     pixels.resize(size_t(w)*h*4);
     require(skcms_Transform(rgba.data(),skcms_PixelFormat_RGBA_8888,skcms_AlphaFormat_Unpremul,&source,pixels.data(),skcms_PixelFormat_RGBA_hhhh,skcms_AlphaFormat_Unpremul,&destination,size_t(w)*h),"JPEG color transform failed");
@@ -252,5 +255,5 @@ Preview preview(const std::filesystem::path& input,unsigned edge) {
     }
     return output;
 }
-std::string version() {return "0.1.0";}
+std::string version() {return JXRC_VERSION;}
 } // namespace jxrc

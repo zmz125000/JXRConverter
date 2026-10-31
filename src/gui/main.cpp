@@ -4,8 +4,13 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QStyleFactory>
+#include <iostream>
 
 int main(int argc,char** argv) {
+    if(argc==2 && std::string(argv[1])=="--version") {
+        std::cout << "JXRConverter " << jxrc::version() << '\n';
+        return 0;
+    }
     QApplication app(argc,argv);app.setOrganizationName("JXRConverter");app.setApplicationName("JXRConverter");app.setApplicationVersion(QString::fromStdString(jxrc::version()));
     jxrc::gui::applyDesktopStyle();
     jxrc::gui::MainWindow window;window.show();
