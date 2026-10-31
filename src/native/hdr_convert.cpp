@@ -1423,9 +1423,9 @@ int encode_still_export(const uint8_t* src, size_t src_len, unsigned w, unsigned
 }
 
 
-int decode_jxr_memory(const uint8_t* data,size_t size,std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut) {
+int decode_jxr_memory(const uint8_t* data,size_t size,std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,unsigned thumbnail_edge) {
     bool untagged=false;
-    if (!decode_jxr_from_memory(data,size,rgba,w,h,false,&untagged,gamut))return -1;
+    if (!decode_jxr_from_memory(data,size,rgba,w,h,false,&untagged,gamut,thumbnail_edge))return -1;
     if(untagged)rebase_untagged_scrgb(rgba,w,h);
     return 0;
 }

@@ -66,7 +66,7 @@ The desktop supports:
 - Drag-and-drop files or folders, folder opening, optional recursive import, and
   canonical-path deduplication. Import and metadata discovery run in the background.
 - Grid, list, and sortable detail views with a shared selection and size slider.
-  Like LocalViewer, the grid slider sets minimum cell width (50–200 dp, in 10 dp
+  Like LocalViewer, the grid slider sets minimum cell width (100–500 dp, in 10 dp
   steps), and cells expand to fill each row as the window resizes.
   Drag from blank space to box-select; Ctrl/Cmd-click and Shift-click extend selection.
 - Lazy asynchronous thumbnails with a bounded 64 MiB cache. JPEG thumbnails show
@@ -85,10 +85,13 @@ The desktop supports:
 - Quality presets/custom controls and pixel/RAW controls mapped to the library's
   `Options`. Unsupported transfer targets are disabled in preservation mode.
 - Check multiple output formats to convert every input to each selected target.
+  Click either a checkbox or its row text to toggle it; Clear targets unchecks all.
+  Accept SDR formats follows LocalViewer's filename grouping: for HDR targets,
+  JPEG/AVIF inputs are skipped when off and use the SDR equivalent when on.
+  JXL, JXR and RAW filenames remain in the HDR group regardless of metadata.
+  Outputs mapping to the same target are deduplicated per input.
   All outputs share the configured parallel job limit. Per-file completion waits
-  for every output, retaining failures even if another output succeeds. A draggable
-  divider separates conversion settings from the independently scrollable output
-  and queue controls.
+  for every output, retaining failures even if another output succeeds. A collapsible output panel is shared beneath the Conversion and Metadata tabs.
 - A toolbar toggle enables wheel changes to dropdowns and numeric inputs; it is
   off by default to avoid changing settings while scrolling. Open output folder
   opens the destination in the system file manager, creating it if needed.
@@ -258,3 +261,5 @@ python3 tools/summarize_build_logs.py .git/logs_RUN_ID --details > warnings.txt
 ```
 
 See [the warning audit](docs/build-warnings.md) for the inspected successful build.
+
+Desktop appearance offers Auto, Light and Dark in the top-right toolbar; Dark uses a mid-grey background. Double-click an image to open it, or right-click for Open image, Open folder and Remove selected. Output controls are shared below the Conversion/Metadata tabs, expand to a fixed height, and collapse with the progress bar still visible. RAW HDR shoulder is available in all rendering modes. JXR previews request decoder thumbnail scaling, bounded to 768 px. macOS package smoke tests use the bundled Cocoa platform plugin.

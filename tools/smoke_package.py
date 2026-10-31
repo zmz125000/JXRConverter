@@ -33,7 +33,7 @@ for archive in archives:
         if qt_root:
             env['PATH'] = os.pathsep.join(p for p in env['PATH'].split(os.pathsep)
                                           if not p.lower().startswith(qt_root.lower()))
-        env['QT_QPA_PLATFORM'] = 'offscreen'
+        env['QT_QPA_PLATFORM'] = 'cocoa' if sys.platform == 'darwin' else 'offscreen'
         subprocess.run([str(cli), '--version'], env=env, check=True)
         subprocess.run([str(cli), '--help'], env=env, check=True, stdout=subprocess.DEVNULL)
         fixture = build / 'cli-input.jpg'

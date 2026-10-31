@@ -1,5 +1,9 @@
 #include "window.hpp"
 #include "views.hpp"
+#include "style.hpp"
+#include <QStyleHints>
+#include <QMenu>
+#include <QMouseEvent>
 #include <QAction>
 #include <QApplication>
 #include <QAbstractSpinBox>
@@ -12,6 +16,7 @@
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFrame>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -87,8 +92,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* viewBar=new QHBoxLayout;viewMode_=combo({"Grid","List","Details"},"viewMode");sort_=new QComboBox;sort_->setObjectName("sortField");
     for(int col=0;col<Catalog::ColumnCount;++col)sort_->addItem(catalog_->headerData(col,Qt::Horizontal,Qt::DisplayRole).toString(),col);
     auto* direction=new QPushButton("Ascending");direction->setObjectName("sortDirection");viewBar->addWidget(viewMode_);viewBar->addWidget(new QLabel("Sort"));viewBar->addWidget(sort_);viewBar->addWidget(direction);viewBar->addStretch();viewBar->addWidget(new QLabel("Minimum size"));
-    size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(50,200);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(100);size_->setFixedWidth(140);
-    size_->setToolTip("Minimum grid cell width in dp (50–200). Columns grow to fill the available width.");viewBar->addWidget(size_);
+    size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(100,500);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(100);size_->setFixedWidth(140);
+    size_->setToolTip("Minimum grid cell width in dp (100–500). Columns grow to fill the available width.");viewBar->addWidget(size_);
     auto* sizeValue=new QLabel("100 dp");sizeValue->setMinimumWidth(48);viewBar->addWidget(sizeValue);
     connect(size_,&QSlider::valueChanged,this,[this,sizeValue](int value){const int snapped=((value+5)/10)*10;if(value!=snapped){size_->setValue(snapped);return;}sizeValue->setText(QString::number(value)+" dp");});layout->addLayout(viewBar);
     views_=new QStackedWidget;list_=new FileListView;table_=new FileTableView;delegate_=new ThumbnailDelegate(list_);list_->setItemDelegate(delegate_);
@@ -98,14 +103,33 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");layout->addWidget(counts_);
     auto* sidebar=new QTabWidget;sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
     auto* scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
-    auto* conversionPage=new QWidget;auto* conversionLayout=new QVBoxLayout(conversionPage);conversionLayout->setContentsMargins(0,0,0,0);conversionLayout->setSpacing(0);
-    auto* sections=new QSplitter(Qt::Vertical);sections->setObjectName("conversionOutputSplitter");sections->setChildrenCollapsible(false);sections->setHandleWidth(7);
-    auto* outputScroll=new QScrollArea;outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setMinimumHeight(180);
-    sections->addWidget(scroll);sections->addWidget(outputScroll);sections->setStretchFactor(0,1);sections->setStretchFactor(1,0);sections->setSizes({500,340});
-    sections->setStyleSheet("QSplitter::handle:vertical { background: #cad6ce; border-top: 1px solid #b3c2b9; border-bottom: 1px solid #b3c2b9; }");
-    conversionLayout->addWidget(sections);sidebar->addTab(conversionPage,"Conversion");
-    inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);inspector_->setPlaceholderText("Select an image to inspect its EXIF and image information.");sidebar->addTab(inspector_,"Metadata");
-    splitter->addWidget(browser);splitter->addWidget(sidebar);splitter->setStretchFactor(0,1);splitter->setStretchFactor(1,0);splitter->setSizes({1050,370});
+    sidebar->addTab(scroll,"Conversion");
+    inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
+    auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
+    auto* outputToggle=new QPushButton("▾ Output & queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
+    auto* outputScroll=new QScrollArea;outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);sideLayout->addWidget(outputScroll);
+    sideLayout->addWidget(progress_);
+    connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output & queue":"▸ Output & queue");});
+    splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
+    auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
+    auto* theme=combo({"Auto","Light","Dark"},"theme");toolbar->addWidget(theme);
+    theme->setCurrentIndex(QSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
+    connect(theme,&QComboBox::currentIndexChanged,this,[theme]{QSettings().setValue("appearance/theme",theme->currentIndex());applyDesktopStyle(theme->currentIndex());});
+#if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
+    connect(qApp->styleHints(),&QStyleHints::colorSchemeChanged,this,[theme]{if(theme->currentIndex()==0)applyDesktopStyle(0);});
+#endif
+    auto openImage=[this](const QModelIndex& index){if(index.isValid())QDesktopServices::openUrl(QUrl::fromLocalFile(index.data(Catalog::PathRole).toString()));};
+    connect(list_,&QListView::doubleClicked,this,openImage);connect(table_,&QTableView::doubleClicked,this,openImage);
+    for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
+        view->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(view,&QWidget::customContextMenuRequested,this,[this,view,openImage](const QPoint& point){
+            auto index=view->indexAt(point);if(!index.isValid())return;index=index.siblingAtColumn(0);
+            if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+            QMenu menu;auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
+            const auto action=menu.exec(view->viewport()->mapToGlobal(point));
+            if(action==open)openImage(index);else if(action==folder)QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(index.data(Catalog::PathRole).toString()).absolutePath()));else if(action==remove)catalog_->removePaths(selectedPaths());
+        });
+    }
     connect(list_,&FileListView::pathsDropped,this,&MainWindow::addPaths);connect(table_,&FileTableView::pathsDropped,this,&MainWindow::addPaths);
     connect(search_,&QLineEdit::textChanged,this,&MainWindow::updateFilter);
     connect(format_,&QLineEdit::textChanged,this,&MainWindow::updateFilter);
@@ -149,8 +173,18 @@ QWidget* MainWindow::buildControls() {
     auto* outputFormats=new QGroupBox("Output formats · select one or more");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new QListWidget;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setMinimumHeight(155);targets_->setMaximumHeight(210);
     const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ"};
-    for(int i=0;i<targetNames.size();++i){auto* item=new QListWidgetItem(targetNames[i],targets_);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(i==4?Qt::Checked:Qt::Unchecked);}
-    outputFormatsLayout->addWidget(targets_);layout->addWidget(outputFormats);
+    for(int i=0;i<targetNames.size();++i){auto* item=new QListWidgetItem(targetNames[i],targets_);item->setData(Qt::UserRole,i);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(i==4?Qt::Checked:Qt::Unchecked);}
+    targets_->insertItem(4,targets_->takeItem(7));
+    targets_->viewport()->installEventFilter(this);
+    outputFormatsLayout->addWidget(targets_);
+    auto* targetActions=new QHBoxLayout;
+    acceptSdr_=check("Accept SDR formats","acceptSdr",QSettings().value("conversion/acceptSdr",false).toBool());
+    acceptSdr_->setToolTip("For HDR targets, include SDR-source filenames using the SDR output equivalent. Like LocalViewer, JXL, JXR and RAW filenames are in the HDR group; JPEG and AVIF are in the SDR group regardless of their contents.");
+    connect(acceptSdr_,&QCheckBox::toggled,this,[](bool on){QSettings().setValue("conversion/acceptSdr",on);});
+    targetActions->addWidget(acceptSdr_);targetActions->addStretch();
+    auto* clearTargets=new QPushButton("Clear targets");clearTargets->setObjectName("clearTargets");targetActions->addWidget(clearTargets);
+    connect(clearTargets,&QPushButton::clicked,this,[this]{const QSignalBlocker blocker(targets_);for(int i=0;i<targets_->count();++i)targets_->item(i)->setCheckState(Qt::Unchecked);updateMode();});
+    outputFormatsLayout->addLayout(targetActions);layout->addWidget(outputFormats);
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
     custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
@@ -167,7 +201,15 @@ QWidget* MainWindow::buildControls() {
     rawExposure_=real(-3,3,0,0.1,"rawExposure");wb_=combo({"Camera","Auto","Daylight","Cloudy","Shade","Tungsten","Fluorescent","Flash","Kelvin"},"rawWhiteBalance");kelvin_=spin(2000,12000,5200,"rawKelvin");kelvin_->setSingleStep(100);
     highlight_=real(0,3,0,0.1,"rawHighlightStops");shoulder_=real(0,1,0.5,0.05,"rawShoulder");nits_=spin(1000,10000,1500,"rawTargetNits");nits_->setSingleStep(100);
     shadows_=real(-1,1,0,0.05,"rawShadows");midtones_=real(-1,1,0,0.05,"rawMidtones");highlights_=real(-1,1,0,0.05,"rawHighlights");cameraLook_=check("Camera look (SDR)","rawCameraLook",true);linearHdr_=check("Linear HDR · bypass camera look","rawLinearHdr");
-    rawForm->addRow(cameraLook_);rawForm->addRow(linearHdr_);rawForm->addRow("Exposure (EV)",rawExposure_);rawForm->addRow("White balance",wb_);rawForm->addRow("Temperature (K)",kelvin_);rawForm->addRow("Highlight stops",highlight_);rawForm->addRow("Shoulder",shoulder_);rawForm->addRow("Target nits",nits_);rawForm->addRow("Shadows",shadows_);rawForm->addRow("Midtones",midtones_);rawForm->addRow("Highlights",highlights_);rawLayout->addRow(rawCustom_);layout->addWidget(raw_);
+    rawForm->addRow(cameraLook_);rawForm->addRow(linearHdr_);rawForm->addRow("Exposure (EV)",rawExposure_);rawForm->addRow("White balance",wb_);rawForm->addRow("Temperature (K)",kelvin_);rawForm->addRow("Highlight stops",highlight_);rawForm->addRow("Shadows",shadows_);rawForm->addRow("Midtones",midtones_);rawForm->addRow("Highlights",highlights_);auto* shoulderRow=new QWidget;auto* shoulderLayout=new QHBoxLayout(shoulderRow);shoulderLayout->setContentsMargins(0,0,0,0);
+    auto* shoulderSlider=new QSlider(Qt::Horizontal);shoulderSlider->setObjectName("rawShoulderSlider");shoulderSlider->setRange(0,100);shoulderSlider->setValue(50);shoulderLayout->addWidget(shoulderSlider,1);shoulderLayout->addWidget(shoulder_);
+    connect(shoulderSlider,&QSlider::valueChanged,this,[this](int value){shoulder_->setValue(value/100.0);});connect(shoulder_,&QDoubleSpinBox::valueChanged,this,[shoulderSlider](double value){shoulderSlider->setValue(qRound(value*100));});
+    shoulderRow->setToolTip("HDR highlight lift: 0 retains the base render; 1 opens highlights toward source headroom or the boost target. No effect on SDR output.");boostTarget_=new QWidget;boostTarget_->setObjectName("rawBoostTarget");auto* targetLayout=new QHBoxLayout(boostTarget_);targetLayout->setContentsMargins(0,0,0,0);
+    auto* targetSlider=new QSlider(Qt::Horizontal);targetSlider->setObjectName("rawTargetNitsSlider");targetSlider->setRange(1000,10000);targetSlider->setSingleStep(100);targetSlider->setPageStep(500);targetSlider->setValue(1500);
+    nits_->setSuffix(" nits");targetLayout->addWidget(targetSlider,1);targetLayout->addWidget(nits_);
+    connect(targetSlider,&QSlider::valueChanged,nits_,&QSpinBox::setValue);connect(nits_,&QSpinBox::valueChanged,targetSlider,&QSlider::setValue);
+    boostTarget_->setToolTip("HDR highlight target for Boost highlights and Custom modes. Shoulder controls how strongly highlights approach this target. Source headroom mode uses the source's headroom instead.");
+    rawLayout->addRow("HDR boost target",boostTarget_);rawLayout->addRow("HDR shoulder",shoulderRow);rawLayout->addRow(rawCustom_);layout->addWidget(raw_);
     queuePanel_=new QWidget;auto* queueLayout=new QVBoxLayout(queuePanel_);queueLayout->setContentsMargins(14,0,14,10);queueLayout->setSpacing(8);
     auto* destination=new QGroupBox("Output & queue");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
     auto* folderButtons=new QHBoxLayout;
@@ -190,20 +232,22 @@ QWidget* MainWindow::buildControls() {
 void MainWindow::updateMode() {
     const bool process=mode_->currentIndex()==1;
     const QSignalBlocker blocker(targets_);bool removed=false;
-    for(int i:{3,5,7}) {
+    for(int i=0;i<targets_->count();++i) {
         auto* item=targets_->item(i);
+        const int target=item->data(Qt::UserRole).toInt();
+        if(target!=3&&target!=5&&target!=7)continue;
         if(!process&&item->checkState()==Qt::Checked){item->setCheckState(Qt::Unchecked);removed=true;}
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
-    if(removed&&selectedTargets().isEmpty())targets_->item(4)->setCheckState(Qt::Checked);
-    processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);kelvin_->setEnabled(wb_->currentIndex()==8);
+    if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
+    processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(!process&&selectedTargets().contains(Target::jxl));
     if(!transcode_->isEnabled())transcode_->setChecked(false);
     updateCounts();
 }
 QVector<Target> MainWindow::selectedTargets() const {
     QVector<Target> result;
-    for(int i=0;i<targets_->count();++i)if(targets_->item(i)->checkState()==Qt::Checked&&(targets_->item(i)->flags()&Qt::ItemIsEnabled))result.append(Target(i));
+    for(int i=0;i<targets_->count();++i)if(targets_->item(i)->checkState()==Qt::Checked&&(targets_->item(i)->flags()&Qt::ItemIsEnabled))result.append(Target(targets_->item(i)->data(Qt::UserRole).toInt()));
     return result;
 }
 Options MainWindow::options() const {
@@ -216,7 +260,8 @@ Options MainWindow::optionsForTarget(Target target) const {
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()?12:10;o.quality.downsize_gainmap=downsize_->isChecked();
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isChecked();o.jpeg_transcoding=transcode_->isEnabled()&&transcode_->isChecked()&&target==Target::jxl;
     if(o.mode==Mode::process) {
-        o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());
+        o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.shoulder=static_cast<float>(shoulder_->value());
+        if(o.raw.hdr_mode!=RawHdrMode::source)o.raw.target_nits=static_cast<float>(nits_->value());
         if(o.raw.hdr_mode==RawHdrMode::custom){o.raw.exposure=static_cast<float>(rawExposure_->value());o.raw.white_balance=wb_->currentIndex();o.raw.kelvin=kelvin_->value();o.raw.highlight_stops=static_cast<float>(highlight_->value());o.raw.shoulder=static_cast<float>(shoulder_->value());o.raw.target_nits=static_cast<float>(nits_->value());o.raw.shadows=static_cast<float>(shadows_->value());o.raw.midtones=static_cast<float>(midtones_->value());o.raw.highlights=static_cast<float>(highlights_->value());o.raw.camera_look=cameraLook_->isChecked();o.raw.linear_hdr=linearHdr_->isChecked();}
     }
     validate(o);return o;
@@ -258,7 +303,23 @@ void MainWindow::convertFiles(bool selected) {
     try {
         const auto targets=selectedTargets();if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty())throw std::invalid_argument("Choose an output folder");
-        QVector<Job> jobs;for(const auto target:targets)jobs+=makeJobs(paths,directory,optionsForTarget(target));
+        QMap<int,QStringList> inputsByTarget;
+        for(const auto& path:paths) {
+            const auto extension=QFileInfo(path).suffix().toLower();
+            const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif";
+            for(auto target:targets) {
+                const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap;
+                if(hdrTarget&&!hdrGroup) {
+                    if(!acceptSdr_->isChecked())continue;
+                    if(target==Target::jpeg_gainmap)target=Target::jpeg;
+                    else if(target==Target::jxl_linear||target==Target::jxl_pq)target=Target::jxl;
+                    else target=Target::avif;
+                }
+                auto& inputs=inputsByTarget[int(target)];if(!inputs.contains(path))inputs.append(path);
+            }
+        }
+        QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())));
+        if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");
         if(!QDir().mkpath(directory))throw std::runtime_error("Cannot create output folder");
         queue_->start(std::move(jobs),workers_->value());updateCounts();
     } catch(const std::exception& e){QMessageBox::warning(this,"Cannot start conversion",QString::fromUtf8(e.what()));}
@@ -267,6 +328,14 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after active conversions finish…");event->ignore();return;}event->accept();
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
+    if(watched==targets_->viewport()&&event->type()==QEvent::MouseButtonRelease) {
+        auto* mouse=static_cast<QMouseEvent*>(event);
+        if(mouse->button()==Qt::LeftButton) {
+            auto* item=targets_->itemAt(mouse->position().toPoint());
+            if(item&&(item->flags()&Qt::ItemIsEnabled))item->setCheckState(item->checkState()==Qt::Checked?Qt::Unchecked:Qt::Checked);
+            return true;
+        }
+    }
     if(event->type()==QEvent::Wheel&&!wheelChanges_->isChecked()&&
        (qobject_cast<QComboBox*>(watched)||qobject_cast<QAbstractSpinBox*>(watched))) {
         event->ignore();return true;
