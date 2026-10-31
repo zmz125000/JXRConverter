@@ -50,6 +50,9 @@ if(WIN32)
     target_sources(jxrconverter PRIVATE "${PROJECT_BINARY_DIR}/generated/version.rc")
 endif()
 if(APPLE)
+    # macdeployqt bundles Qt frameworks but preserves the executable's runpath.
+    # Resolve @rpath/Qt*.framework from inside this app bundle.
+    set_target_properties(jxrconverter PROPERTIES INSTALL_RPATH "@executable_path/../Frameworks")
     set(jxrc_bundle_icon "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.icns")
     target_sources(jxrconverter PRIVATE "${jxrc_bundle_icon}")
     set_source_files_properties("${jxrc_bundle_icon}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
