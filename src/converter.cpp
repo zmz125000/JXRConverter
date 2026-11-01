@@ -146,11 +146,13 @@ struct ConversionSession::Impl {
     Options previous;
 };
 namespace {
+bool scrgb_output(const Options& o) {return o.scrgb_jxl && o.target==Target::jxl_linear;}
+bool convert_gamut(const Options& o) {return o.convert_gamut && !scrgb_output(o);}
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
-    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.extended_bt2020,o.convert_gamut,raw_kind,
-        format==4 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!o.convert_gamut || o.mode==Mode::preserve),
+    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.extended_bt2020,convert_gamut(o),raw_kind,
+        format==4 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr);
 }
@@ -179,7 +181,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
     Result result;
     const bool direct_jxl=format==3 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
-        !o.exposure && !o.max_edge && (!o.convert_gamut || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
+        !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && o.target==Target::jxl_linear)require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||o.target==Target::jxl_linear,"JXR preservation requires linear JXL output");
     if(direct_jxl || (o.mode==Mode::preserve && format!=4)) {
@@ -211,12 +213,12 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
             if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
-            else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?o.convert_gamut:o.extended_bt2020),o.keep_exif?&exif:nullptr);
+            else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):o.extended_bt2020),o.keep_exif?&exif:nullptr);
             else if(format==4) {
-                if((o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!o.convert_gamut || o.mode==Mode::preserve))
+                if((o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve))
                     cache.scrgb=decode_jxr_scrgb(bytes.data(),bytes.size(),linear,w,h,cache.half_jxr);
                 require(o.mode!=Mode::preserve || cache.scrgb,"JXR source is not preservable scRGB; use --mode process");
-                if(!cache.scrgb)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.convert_gamut);
+                if(!cache.scrgb)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,convert_gamut(o));
             }
             else if(format==6) {
                 const auto raster=decode_regular(bytes.data(),bytes.size());
@@ -281,6 +283,20 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 std::transform(linear.begin(),linear.end(),half.begin(),float_to_half);
                 rc=encode_jxl_source(w,h,half.data(),true,color,path.c_str(),q);
             } else rc=encode_jxl_source(w,h,linear.data(),true,color,path.c_str(),q);
+        } else if(scrgb_output(o)) {
+            // Working pixels use 203 nits per unit. scRGB uses 80 nits and
+            // BT.709 primaries; retain signed/extended samples and straight alpha.
+            // Encode a copy so other targets can reuse the prepared render.
+            auto scrgb=linear;
+            for(size_t i=0;i<scrgb.size();i+=4) {
+                float& r=scrgb[i];float& g=scrgb[i+1];float& b=scrgb[i+2];
+                if(gamut==UHDR_CG_BT_2100)linear_bt2020_to_bt709(r,g,b);
+                else if(gamut==UHDR_CG_DISPLAY_P3)linear_p3_to_bt709(r,g,b);
+                r*=kSdrWhiteNits/80.f;g*=kSdrWhiteNits/80.f;b*=kSdrWhiteNits/80.f;
+            }
+            StillSourceColor color;color.bits=32;color.exponent_bits=8;
+            color.transfer=8;color.primaries=1;color.intensity_target=80.f;
+            rc=encode_jxl_source(w,h,scrgb.data(),true,color,path.c_str(),q);
         } else rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,raw_sdr.empty()?nullptr:raw_sdr.data());
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
         result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;

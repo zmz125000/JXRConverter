@@ -24,6 +24,7 @@ Processing controls:
   --exposure -3..3              Linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing
   --no-convert-gamut           Keep scRGB / BT.709 primaries (conversion defaults on)
+  --scrgb-jxl                  Use scRGB for linear HDR JXL (overrides gamut toggle)
   --no-extended-bt2020          Disable extended BT.2020 working conversion for JXL
 RAW controls (process mode):
   --raw-mode source|boost|custom  Source headroom, default boost, or custom controls
@@ -70,6 +71,7 @@ int run(int argc,char** argv) {
         else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}
         else if(arg=="--keep-exif")o.keep_exif=true;
         else if(arg=="--overwrite")o.overwrite=true;
+        else if(arg=="--scrgb-jxl")o.scrgb_jxl=true;
         else if(arg=="--convert-gamut")o.convert_gamut=true;
         else if(arg=="--no-convert-gamut")o.convert_gamut=false;
         else if(arg=="--no-extended-bt2020")o.extended_bt2020=false;

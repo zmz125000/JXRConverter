@@ -131,6 +131,7 @@ private slots:
         MainWindow window;
         auto* keep=window.findChild<QCheckBox*>("convertGamut");QVERIFY(keep);QVERIFY(keep->isChecked());
         auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);
+        auto* scrgb=window.findChild<QCheckBox*>("scrgbJxl");QVERIFY(scrgb);QVERIFY(!scrgb->isChecked());scrgb->setChecked(true);
         auto* targets=window.findChild<QListWidget*>("conversionTargets");QVERIFY(targets);
         for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==6?Qt::Checked:Qt::Unchecked);
         window.findChild<QComboBox*>("qualityPreset")->setCurrentIndex(4);
@@ -139,7 +140,7 @@ private slots:
         window.findChild<QComboBox*>("rawMode")->setCurrentIndex(2);window.findChild<QDoubleSpinBox*>("rawExposure")->setValue(0.7);
         window.findChild<QComboBox*>("rawWhiteBalance")->setCurrentIndex(8);window.findChild<QSpinBox*>("rawKelvin")->setValue(6400);
         window.findChild<QDoubleSpinBox*>("rawShoulder")->setValue(0.8);window.findChild<QSpinBox*>("rawTargetNits")->setValue(2000);
-        const auto o=window.options();QCOMPARE(o.mode,jxrc::Mode::process);QCOMPARE(o.target,jxrc::Target::avif_gainmap);QCOMPARE(o.quality.codec_quality,93);
+        const auto o=window.options();QVERIFY(o.scrgb_jxl);QCOMPARE(o.mode,jxrc::Mode::process);QCOMPARE(o.target,jxrc::Target::avif_gainmap);QCOMPARE(o.quality.codec_quality,93);
         QCOMPARE(o.quality.avif_depth,12);QCOMPARE(o.quality.jxl_distance,1.25f);QVERIFY(o.quality.downsize_gainmap);
         QCOMPARE(o.raw.hdr_mode,jxrc::RawHdrMode::custom);QCOMPARE(o.raw.exposure,0.7f);QCOMPARE(o.raw.white_balance,8);QCOMPARE(o.raw.kelvin,6400);
         mode->setCurrentIndex(0);const auto preserved=window.options();QCOMPARE(preserved.mode,jxrc::Mode::preserve);QCOMPARE(preserved.raw.exposure,0.f);QCOMPARE(preserved.raw.hdr_mode,jxrc::RawHdrMode::source);

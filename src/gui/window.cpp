@@ -220,7 +220,7 @@ const char* settingProperty(QWidget* widget) {
 }
 QList<QWidget*> MainWindow::persistentControls() const {
     return {mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
-        exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
+        exposure_,maxEdge_,bt2020_,convertGamut_,scrgbJxl_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
         formatFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
@@ -276,6 +276,9 @@ QWidget* MainWindow::buildControls() {
     convertGamut_=check("Convert scRGB gamut to BT.2020","convertGamut",true);
     convertGamut_->setToolTip("Convert scRGB to BT.2020 in Process pixels mode. Uncheck to retain scRGB for untouched linear HDR JXL and sRGB/BT.709 primaries for other outputs.");
     processingForm->addRow(convertGamut_);
+    scrgbJxl_=check("Use scRGB for JXL linear HDR","scrgbJxl");
+    scrgbJxl_->setToolTip("Override BT.2020 conversion for linear HDR JXL. Unchanged scRGB inputs use the direct path; other inputs or pixel edits are converted to linear sRGB with an 80-nit reference. Other output targets are unaffected.");
+    processingForm->addRow(scrgbJxl_);
     processingForm->addRow("Exposure (EV)",exposure_);processingForm->addRow("Max edge (px)",maxEdge_);processingForm->addRow(bt2020_);layout->addWidget(processing_);
     raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawLayout->addRow("HDR mode",rawMode_);
     rawCustom_=new QWidget;auto* rawForm=new QFormLayout(rawCustom_);rawForm->setContentsMargins(0,0,0,0);
@@ -317,8 +320,10 @@ QWidget* MainWindow::buildControls() {
     connect(renameConflicts_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
     const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
-    selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert visible files");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue · finish active files");cancel_->setObjectName("cancelQueue");
-    queueLayout->addWidget(selected_);queueLayout->addWidget(visible_);queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
+    selected_=new QPushButton("Start selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Start");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue · finish active files");cancel_->setObjectName("cancelQueue");
+    visible_->setToolTip("Convert all visible files");selected_->setToolTip("Convert selected files");
+    auto* startButtons=new QHBoxLayout;startButtons->addWidget(visible_,1);startButtons->addWidget(selected_,1);queueLayout->insertLayout(0,startButtons);
+    queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
     connect(mode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(targets_,&QListWidget::itemChanged,this,&MainWindow::updateMode);connect(preset_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(rawMode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(wb_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
     connect(selected_,&QPushButton::clicked,this,[this]{convertFiles(true);});connect(visible_,&QPushButton::clicked,this,[this]{convertFiles(false);});connect(cancel_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);
     return panel;
@@ -359,7 +364,7 @@ Options MainWindow::optionsForTarget(Target target) const {
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()?12:10;o.quality.downsize_gainmap=downsize_->isChecked();
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isEnabled()&&transcode_->isChecked()&&target==Target::jxl;
     if(o.mode==Mode::process) {
-        o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.convert_gamut=convertGamut_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.shoulder=static_cast<float>(shoulder_->value());
+        o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.convert_gamut=convertGamut_->isChecked();o.scrgb_jxl=scrgbJxl_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.shoulder=static_cast<float>(shoulder_->value());
         if(o.raw.hdr_mode!=RawHdrMode::source)o.raw.target_nits=static_cast<float>(nits_->value());
         if(o.raw.hdr_mode==RawHdrMode::custom){o.raw.exposure=static_cast<float>(rawExposure_->value());o.raw.white_balance=wb_->currentIndex();o.raw.kelvin=kelvin_->value();o.raw.highlight_stops=static_cast<float>(highlight_->value());o.raw.shoulder=static_cast<float>(shoulder_->value());o.raw.target_nits=static_cast<float>(nits_->value());o.raw.shadows=static_cast<float>(shadows_->value());o.raw.midtones=static_cast<float>(midtones_->value());o.raw.highlights=static_cast<float>(highlights_->value());o.raw.camera_look=cameraLook_->isChecked();o.raw.linear_hdr=linearHdr_->isChecked();}
     }

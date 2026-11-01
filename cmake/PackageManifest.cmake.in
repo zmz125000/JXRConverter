@@ -1,7 +1,7 @@
 set(root "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}")
 if("@CMAKE_SYSTEM_NAME@" STREQUAL "Darwin")
     # An app-only installation uses paths relative to the app bundle itself.
-    set(app "${root}/jxrconverter.app")
+    set(app "${root}/JXRConverter.app")
     set(app_manifest "Contents/Resources/share/JXRConverter/package-files.txt")
     file(GLOB_RECURSE app_entries RELATIVE "${app}" LIST_DIRECTORIES FALSE "${app}/*")
     list(APPEND app_entries "${app_manifest}" "Contents/_CodeSignature/CodeResources")

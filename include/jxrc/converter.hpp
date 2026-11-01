@@ -44,6 +44,7 @@ struct Options {
     bool overwrite = false;
     bool extended_bt2020 = true;
     bool convert_gamut = true; // Process mode: convert scRGB to BT.2020 for wider viewer compatibility.
+    bool scrgb_jxl = false; // Linear HDR JXL uses BT.709 primaries and the scRGB 80-nit unit.
 };
 struct Result {
     unsigned width = 0, height = 0;

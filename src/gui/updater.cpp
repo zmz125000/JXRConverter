@@ -42,11 +42,11 @@ Updater::Updater(QWidget* parent):QObject(parent),window_(parent),network_(new Q
     helperRelative_=helperName();manifestRelative_="share/JXRConverter/package-files.txt";
 #ifdef Q_OS_MACOS
     root_=QDir(root_).absoluteFilePath("../../..");root_=QDir::cleanPath(root_);
-    relativeGui_="jxrconverter.app/Contents/MacOS/jxrconverter";
-    helperRelative_="jxrconverter.app/Contents/Helpers/"+helperName();
+    relativeGui_="JXRConverter.app/Contents/MacOS/JXRConverter";
+    helperRelative_="JXRConverter.app/Contents/Helpers/"+helperName();
     if(!QFileInfo(root_+"/jxrconvert").isFile()) {
         appOnly_=true;root_=QDir::cleanPath(QCoreApplication::applicationDirPath()+"/../..");
-        relativeGui_="Contents/MacOS/jxrconverter";helperRelative_="Contents/Helpers/"+helperName();
+        relativeGui_="Contents/MacOS/JXRConverter";helperRelative_="Contents/Helpers/"+helperName();
         manifestRelative_="Contents/Resources/share/JXRConverter/package-files.txt";
     }
 #endif
@@ -190,7 +190,7 @@ void Updater::install() {
     const auto directories=QDir(extract_).entryList(QDir::Dirs|QDir::NoDotAndDotDot);
     if(directories.size()!=1){fail("The update package has an unexpected layout.");return;}
     QString source=extract_+"/"+directories.first();
-    if(appOnly_)source+="/jxrconverter.app";
+    if(appOnly_)source+="/JXRConverter.app";
     if(!QFileInfo::exists(source+"/"+relativeGui_)||!QFileInfo::exists(source+"/"+helperRelative_)) {
         fail("The update package is missing application files.");return;
     }

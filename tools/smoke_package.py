@@ -19,7 +19,7 @@ for archive in archives:
         # Locate installed executables, not similarly named data directories
         # (share/jxrconverter can precede the app bundle on macOS).
         cli_matches = [p for p in root.glob('*/jxrconvert' + suffix) if p.is_file()]
-        gui_pattern = ('*/jxrconverter.app/Contents/MacOS/jxrconverter'
+        gui_pattern = ('*/JXRConverter.app/Contents/MacOS/JXRConverter'
                        if sys.platform == 'darwin' else '*/jxrconverter' + suffix)
         gui_matches = [p for p in root.glob(gui_pattern) if p.is_file()]
         if len(cli_matches) != 1 or len(gui_matches) != 1:
@@ -31,11 +31,11 @@ for archive in archives:
             sys.exit('The package must contain app-local runtime DLLs, not a VC installer')
         if not (package_root / 'share/JXRConverter/package-files.txt').is_file():
             sys.exit('Missing package manifest for updates')
-        data_root = (package_root / 'jxrconverter.app/Contents/Resources/share/JXRConverter'
+        data_root = (package_root / 'JXRConverter.app/Contents/Resources/share/JXRConverter'
                      if sys.platform == 'darwin' else package_root / 'share/JXRConverter')
         if not (data_root / 'licenses/qtbase').is_dir():
             sys.exit('Missing Qt license texts')
-        helper = (package_root / 'jxrconverter.app/Contents/Helpers/jxrc-update'
+        helper = (package_root / 'JXRConverter.app/Contents/Helpers/jxrc-update'
                   if sys.platform == 'darwin' else package_root / ('jxrc-update' + suffix))
         if not helper.is_file():
             sys.exit('Missing standalone update helper')

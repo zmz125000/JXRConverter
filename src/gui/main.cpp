@@ -13,6 +13,7 @@ int main(int argc,char** argv) {
         return 0;
     }
     QApplication app(argc,argv);app.setOrganizationName("JXRConverter");app.setApplicationName("JXRConverter");app.setApplicationVersion(QString::fromStdString(jxrc::version()));
+    app.setApplicationDisplayName("JXRConverter");
     app.setWindowIcon(QIcon(":/icons/jxrconverter.png"));
     jxrc::gui::applyDesktopStyle();
     jxrc::gui::MainWindow window;window.show();

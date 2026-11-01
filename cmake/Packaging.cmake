@@ -4,7 +4,7 @@ if(JXRC_DEPLOY_QT AND NOT JXRC_BUILD_GUI)
 endif()
 set(jxrc_runtime_data "${CMAKE_INSTALL_DATADIR}/JXRConverter")
 if(APPLE AND JXRC_BUILD_GUI)
-    set(jxrc_runtime_data "jxrconverter.app/Contents/Resources/share/JXRConverter")
+    set(jxrc_runtime_data "JXRConverter.app/Contents/Resources/share/JXRConverter")
 endif()
 install(FILES README.md COPYING NOTICE
     DESTINATION ${jxrc_runtime_data} COMPONENT Runtime)

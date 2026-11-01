@@ -134,7 +134,7 @@ static void signed_float_jxl(const fs::path& dir) {
     }
     check(complete && std::memcmp(input.data(),output.data(),input.size()*sizeof(float))==0,"Signed float32 JXL samples changed");
     check(is_scrgb_jxl(encoded.data(),encoded.size()),"scRGB JXL detection");
-    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.quality.preset=jxrc::Preset::lossless;options.convert_gamut=false;
+    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.quality.preset=jxrc::Preset::lossless;options.scrgb_jxl=true;
     const auto copied=dir/"scrgb-copy.jxl";jxrc::convert(path,copied,options);
     auto copy=bytes(copied);check(is_scrgb_jxl(copy.data(),copy.size()),"Direct scRGB JXL metadata lost");
     std::vector<float> working;unsigned width=0,height=0;uhdr_color_gamut_t gamut;bool hdr=false;int transfer=0;
@@ -149,6 +149,7 @@ static void signed_float_jxl(const fs::path& dir) {
         check(info.bits==32 && info.hdr && info.transfer=="Linear" && info.primaries=="BT.709","Preset changed scRGB encoding");
     }
     options.quality.preset=jxrc::Preset::lossless;
+    options.scrgb_jxl=false;options.convert_gamut=false;
     check(jxrc::Options{}.convert_gamut,"scRGB gamut conversion must default on");
     for(auto target:{jxrc::Target::avif_pq,jxrc::Target::jxl_pq,jxrc::Target::jxl_linear}) {
         options.target=target;
@@ -162,11 +163,37 @@ static void signed_float_jxl(const fs::path& dir) {
         options.convert_gamut=false;
     }
     options.target=jxrc::Target::jxl_linear;
+    options.scrgb_jxl=true;options.convert_gamut=true;
     options.exposure=1;options.extended_bt2020=false;
     const auto processed=dir/"scrgb-exposed.jxl";jxrc::convert(path,processed,options);
-    auto changed=bytes(processed);
+    auto changed=bytes(processed);check(is_scrgb_jxl(changed.data(),changed.size()),"Edited scRGB output metadata");
     check(decode_jxl_to_linear_f32(changed.data(),changed.size(),working,width,height,&gamut,&hdr,&transfer,false,nullptr)==0,"Processed scRGB decode");
     for(size_t i=0;i<input.size();++i)check(std::abs(working[i]-input[i]*(i%4==3?1.f:160.f/203.f))<1e-5f,"scRGB exposure bypassed");
+
+    // Non-scRGB sources are rematrixed and rebased, including negative channels.
+    for(int primaries:{1,9,12}) {
+        const float pixels[]={1.25f,.25f,.0625f,.5f};
+        StillSourceColor source;source.bits=32;source.exponent_bits=8;
+        source.transfer=8;source.primaries=primaries;source.intensity_target=1000.f;
+        const auto inputPath=dir/("to-scrgb-source-"+std::to_string(primaries)+".jxl");
+        check(encode_jxl_source(1,1,pixels,true,source,inputPath.string().c_str(),StillEncodeQuality(0))==0,"scRGB conversion fixture");
+        options={};options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;
+        options.scrgb_jxl=true;options.extended_bt2020=false;options.quality.preset=jxrc::Preset::lossless;
+        const auto outputPath=dir/("to-scrgb-"+std::to_string(primaries)+".jxl");
+        jxrc::ConversionSession session(inputPath);session.convert(outputPath,options);
+        auto data=bytes(outputPath);check(is_scrgb_jxl(data.data(),data.size()),"Converted output is not scRGB");
+        check(decode_jxl_to_linear_f32(data.data(),data.size(),working,width,height,&gamut,&hdr,&transfer,false,nullptr)==0,"Converted scRGB decode");
+        float r=pixels[0],g=pixels[1],b=pixels[2];
+        if(primaries==9)linear_bt2020_to_bt709(r,g,b);
+        else if(primaries==12)linear_p3_to_bt709(r,g,b);
+        const float expected[]={r*1000.f/203.f,g*1000.f/203.f,b*1000.f/203.f,.5f};
+        for(size_t i=0;i<4;++i)check(std::abs(working[i]-expected[i])<1e-5f,"scRGB conversion changed luminance, gamut or alpha");
+        options.target=jxrc::Target::jxl_pq;
+        const auto queued=dir/("after-scrgb-"+std::to_string(primaries)+".jxl"),single=dir/("single-pq-"+std::to_string(primaries)+".jxl");
+        session.convert(queued,options);jxrc::convert(inputPath,single,options);
+        check(bytes(queued)==bytes(single),"scRGB output mutated shared pixels");
+        check(jxrc::inspect(queued).primaries==(primaries==9?"BT.2020":primaries==12?"Display P3":"BT.709"),"scRGB toggle affected PQ output");
+    }
 
 }
 
@@ -175,6 +202,19 @@ static void shared_render(const fs::path& dir) {
     jxrc::ConversionSession session(source);
     jxrc::Options o;o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl;o.quality.preset=jxrc::Preset::lossless;
     session.convert(dir/"session.jxl",o);
+    auto sc=o;sc.target=jxrc::Target::jxl_linear;sc.scrgb_jxl=true;
+    session.convert(dir/"sdr-to-scrgb.jxl",sc);
+    auto converted=bytes(dir/"sdr-to-scrgb.jxl");check(is_scrgb_jxl(converted.data(),converted.size()),"SDR to scRGB metadata");
+    const auto raster=decode_regular(raster_png8.data(),raster_png8.size());
+    std::vector<float> expected,actual;uhdr_color_gamut_t gamut;unsigned width=0,height=0;bool decodedHdr=false;int transfer=0;
+    regular_to_linear(raster,expected,gamut);
+    for(size_t i=0;i<expected.size();i+=4) {
+        if(gamut==UHDR_CG_BT_2100)linear_bt2020_to_bt709(expected[i],expected[i+1],expected[i+2]);
+        else if(gamut==UHDR_CG_DISPLAY_P3)linear_p3_to_bt709(expected[i],expected[i+1],expected[i+2]);
+    }
+    check(decode_jxl_to_linear_f32(converted.data(),converted.size(),actual,width,height,&gamut,&decodedHdr,&transfer,false,nullptr)==0,"SDR to scRGB decode");
+    check(actual.size()==expected.size(),"SDR to scRGB dimensions");
+    for(size_t i=0;i<expected.size();++i)check(std::abs(actual[i]-expected[i])<1e-6f,"SDR to scRGB changed brightness");
     o.target=jxrc::Target::avif;
     session.convert(dir/"session.avif",o);
     jxrc::convert(source,dir/"single.avif",o);
