@@ -387,7 +387,7 @@ template<class Sample>
 bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
                             unsigned& w, unsigned& h, bool composite_alpha_on_black = true,
                             bool* out_untagged_linear = nullptr, uhdr_color_gamut_t* out_cg = nullptr,
-                            unsigned thumbnail_edge = 0, int* out_source_depth = nullptr) {
+                            unsigned thumbnail_edge = 0, int* out_source_depth = nullptr, int* out_native_kind = nullptr) {
     if (out_untagged_linear) *out_untagged_linear = false;
     if (out_cg) *out_cg = UHDR_CG_BT_709;
     if (!data || len == 0) return false;
@@ -466,6 +466,7 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<Sample>
         return false;
     }
     JxrPix pix = classify_guid(guid);
+    if(out_native_kind)*out_native_kind=pix==JxrPix::RgbaF16?1:pix==JxrPix::RgbaF32?2:pix==JxrPix::Fixed16?3:0;
     if (out_source_depth) {
         switch (pix) {
             case JxrPix::RgbaF32: case JxrPix::RgbaF32Prem: *out_source_depth = 32; break;
@@ -1537,4 +1538,12 @@ int decode_jxr_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsi
         if(gamut)*gamut=UHDR_CG_BT_2100;
     }
     return 0;
+}
+
+// Native scRGB samples, without the 80/203 rebase or gamut conversion.
+bool decode_jxr_scrgb(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,bool& half) {
+    bool untagged=false;int native=0;
+    if(!decode_jxr_from_memory(data,size,rgba,w,h,false,&untagged,nullptr,0,nullptr,&native))return false;
+    half=native==1;
+    return untagged && native!=0;
 }

@@ -23,6 +23,7 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-pq, avif, avif-pq, avif-gainma
 Processing controls:
   --exposure -3..3              Linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing
+  --convert-gamut              Convert scRGB to the BT.2020 working gamut
   --no-extended-bt2020          Disable extended BT.2020 working conversion for JXL
 RAW controls (process mode):
   --raw-mode source|boost|custom  Source headroom, default boost, or custom controls
@@ -69,6 +70,7 @@ int run(int argc,char** argv) {
         else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}
         else if(arg=="--keep-exif")o.keep_exif=true;
         else if(arg=="--overwrite")o.overwrite=true;
+        else if(arg=="--convert-gamut")o.convert_gamut=true;
         else if(arg=="--no-extended-bt2020")o.extended_bt2020=false;
         else if(arg=="--exposure")o.exposure=number(value());
         else if(arg=="--max-edge"){const int v=integer(value());if(v<0)throw std::invalid_argument("max-edge must be nonnegative");o.max_edge=v;}

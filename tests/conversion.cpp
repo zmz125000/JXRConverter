@@ -114,7 +114,7 @@ static void signed_float_jxl(const fs::path& dir) {
         for(unsigned c=0;c<3;++c)input[i*4+c]=values[(i+c)%8];
         input[i*4+3]=(i%3)*0.5f;
     }
-    StillSourceColor color;color.bits=32;color.exponent_bits=8;color.transfer=8;
+    StillSourceColor color;color.bits=32;color.exponent_bits=8;color.transfer=8;color.intensity_target=80.f;
     const auto path=dir/"signed-float32.jxl";
     const int rc=encode_jxl_source(w,h,input.data(),true,color,path.string().c_str(),StillEncodeQuality(0));
     if(rc)throw std::runtime_error("Signed float32 JXL encode: "+std::to_string(rc));
@@ -133,6 +133,28 @@ static void signed_float_jxl(const fs::path& dir) {
         else check(status!=JXL_DEC_ERROR && status!=JXL_DEC_NEED_MORE_INPUT,"Float32 JXL decode");
     }
     check(complete && std::memcmp(input.data(),output.data(),input.size()*sizeof(float))==0,"Signed float32 JXL samples changed");
+    check(is_scrgb_jxl(encoded.data(),encoded.size()),"scRGB JXL detection");
+    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.quality.preset=jxrc::Preset::lossless;
+    const auto copied=dir/"scrgb-copy.jxl";jxrc::convert(path,copied,options);
+    auto copy=bytes(copied);check(is_scrgb_jxl(copy.data(),copy.size()),"Direct scRGB JXL metadata lost");
+    std::vector<float> working;unsigned width=0,height=0;uhdr_color_gamut_t gamut;bool hdr=false;int transfer=0;
+    check(decode_jxl_to_linear_f32(copy.data(),copy.size(),working,width,height,&gamut,&hdr,&transfer,false,nullptr)==0 && hdr,"scRGB working decode");
+    for(size_t i=0;i<input.size();++i)check(std::abs(working[i]-input[i]*(i%4==3?1.f:80.f/203.f))<1e-6f,"scRGB luminance scale");
+    for(auto preset:{jxrc::Preset::lossless,jxrc::Preset::high,jxrc::Preset::medium,jxrc::Preset::low,jxrc::Preset::custom}) {
+        options.quality.preset=preset;options.quality.jxl_distance=.73f;
+        const auto output=dir/("scrgb-preset-"+std::to_string(int(preset))+".jxl");
+        jxrc::convert(path,output,options);const auto data=bytes(output);
+        check(is_scrgb_jxl(data.data(),data.size()),"Preset bypassed direct scRGB path");
+        const auto info=jxrc::inspect(output);
+        check(info.bits==32 && info.hdr && info.transfer=="Linear" && info.primaries=="BT.709","Preset changed scRGB encoding");
+    }
+    options.quality.preset=jxrc::Preset::lossless;
+    options.exposure=1;options.extended_bt2020=false;
+    const auto processed=dir/"scrgb-exposed.jxl";jxrc::convert(path,processed,options);
+    auto changed=bytes(processed);
+    check(decode_jxl_to_linear_f32(changed.data(),changed.size(),working,width,height,&gamut,&hdr,&transfer,false,nullptr)==0,"Processed scRGB decode");
+    for(size_t i=0;i<input.size();++i)check(std::abs(working[i]-input[i]*(i%4==3?1.f:160.f/203.f))<1e-5f,"scRGB exposure bypassed");
+
 }
 
 static void shared_render(const fs::path& dir) {

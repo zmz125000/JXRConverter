@@ -215,9 +215,16 @@ same reuse to library callers and snapshots a source for the session's lifetime.
 Changed processing controls invalidate the prepared pixels.
 
 Processing remains float32 until encoding. PQ JXL stores 16-bit integer codes.
-Linear HDR JXL from 16-bit HDR JXR stores half-float samples; other linear JXL
-processing uses float32. This chooses output storage precision and does not bypass
-orientation, exposure, color conversion or the HDR luminance normalization.
+For scRGB JXR or scRGB JXL to linear HDR JXL, zero exposure, original size and
+no explicit gamut conversion select a direct sample-preserving path. Half-float
+JXR stays half-float, float32 stays float32, and fixed-point expands exactly to
+float32. The path retains signed/extended RGB, alpha and the scRGB 80-nit unit,
+without BT.2020 conversion or HDR normalization. All presets (Lossless, High,
+Medium, Low and Custom) use this path. Select Lossless for exact samples; the other
+presets apply their JXL compression distance to the same scRGB input. Reader support for extended scRGB
+JXL varies. Exposure, resizing, PQ or the "Convert scRGB gamut to BT.2020" control
+(`--convert-gamut`) selects float32 processing; processed linear JXL stays float32.
+The scRGB JXR direct path also supports Preserve mode with JXL output.
 AVIF depth is a maximum: 8-bit sources remain 8-bit, with higher-depth sources
 capped by the preset or custom 10/12-bit choice. AVIF supports 8/10/12-bit files;
 its uint16 RGB encoder input buffer does not imply a 16-bit AVIF file.

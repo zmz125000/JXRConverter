@@ -46,10 +46,11 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         auto dec=JxlDecoderMake(nullptr);
         if(!dec||JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING)!=JXL_DEC_SUCCESS)throw std::runtime_error("Cannot allocate JXL inspector");
         JxlDecoderSetInput(dec.get(),bytes.data(),bytes.size());JxlDecoderCloseInput(dec.get());
+        float intensity=0;
         for(;;){auto status=JxlDecoderProcessInput(dec.get());
-            if(status==JXL_DEC_BASIC_INFO){JxlBasicInfo info{};if(JxlDecoderGetBasicInfo(dec.get(),&info)!=JXL_DEC_SUCCESS)break;out.width=info.xsize;out.height=info.ysize;out.bits=info.bits_per_sample;out.format="JXL";out.hdr=info.intensity_target>=400.f;}
+            if(status==JXL_DEC_BASIC_INFO){JxlBasicInfo info{};if(JxlDecoderGetBasicInfo(dec.get(),&info)!=JXL_DEC_SUCCESS)break;out.width=info.xsize;out.height=info.ysize;out.bits=info.bits_per_sample;out.format="JXL";intensity=info.intensity_target;out.hdr=info.intensity_target>=400.f;}
             else if(status==JXL_DEC_COLOR_ENCODING){JxlColorEncoding color{};
-                if(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS){out.transfer=color.transfer_function==JXL_TRANSFER_FUNCTION_PQ?"PQ":color.transfer_function==JXL_TRANSFER_FUNCTION_HLG?"HLG":color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR?"Linear":"SDR";out.hdr=out.hdr||color.transfer_function==JXL_TRANSFER_FUNCTION_PQ||color.transfer_function==JXL_TRANSFER_FUNCTION_HLG;out.primaries=color.primaries==JXL_PRIMARIES_2100?"BT.2020":color.primaries==JXL_PRIMARIES_P3?"Display P3":"BT.709";}else{out.transfer="ICC";out.primaries="ICC";}break;
+                if(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS){out.transfer=color.transfer_function==JXL_TRANSFER_FUNCTION_PQ?"PQ":color.transfer_function==JXL_TRANSFER_FUNCTION_HLG?"HLG":color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR?"Linear":"SDR";out.hdr=out.hdr||(intensity==80.f && color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR && color.primaries==JXL_PRIMARIES_SRGB)||color.transfer_function==JXL_TRANSFER_FUNCTION_PQ||color.transfer_function==JXL_TRANSFER_FUNCTION_HLG;out.primaries=color.primaries==JXL_PRIMARIES_2100?"BT.2020":color.primaries==JXL_PRIMARIES_P3?"Display P3":"BT.709";}else{out.transfer="ICC";out.primaries="ICC";}break;
             }else if(status==JXL_DEC_ERROR||status==JXL_DEC_NEED_MORE_INPUT||status==JXL_DEC_SUCCESS)break;
         }
     } else if(bytes.size()>=4&&bytes[0]=='I'&&bytes[1]=='I'&&bytes[2]==0xbc&&bytes[3]==1) {

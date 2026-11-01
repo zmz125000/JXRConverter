@@ -240,7 +240,8 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
         StillSourceColor source;source.bits=info.bits_per_sample;source.exponent_bits=info.exponent_bits_per_sample;
         source.intensity_target=info.intensity_target;source.primaries=p;source.transfer=t;
         source.icc=icc.data();source.icc_size=icc.size();
-        if((t==16 || t==18) && (p==1 || p==9 || p==12))source.icc_size=0;
+        if(((t==16 || t==18) && (p==1 || p==9 || p==12)) ||
+           (t==8 && p==1 && info.intensity_target==80.f))source.icc_size=0;
         quality.exif=exif.data();quality.exif_size=exif.size();
         const int result=encode_jxl_source(info.xsize,info.ysize,pixels.data(),info.bits_per_sample>8,source,output,quality);
         encoded_result=result==0?1:result;

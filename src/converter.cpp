@@ -128,9 +128,9 @@ void validate(const Options& o) {
     if(o.jpeg_transcoding&&(o.mode!=Mode::preserve||o.target!=Target::jxl))throw std::invalid_argument("JPEG transcoding requires preserve mode and JXL target");
     if(o.mode==Mode::preserve) {
         const RawControls d;
-        if(o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
+        if(o.convert_gamut||o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
             throw std::invalid_argument("Pixel and RAW controls require --mode process");
-        if(o.target==Target::jxl_linear||o.target==Target::jxl_pq||o.target==Target::avif_pq)
+        if(o.target==Target::jxl_pq||o.target==Target::avif_pq)
             throw std::invalid_argument("An explicit transfer conversion requires --mode process; preserve uses the source transfer");
     }
 }
@@ -139,7 +139,7 @@ struct ConversionSession::Impl {
     std::vector<uint8_t> bytes,exif;
     std::vector<float> linear,raw_sdr;
     unsigned w=0,h=0,bits=32;
-    bool half_jxr=false;
+    bool half_jxr=false,scrgb=false;
     uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
     int format=-1;
     bool ready=false;
@@ -149,7 +149,8 @@ namespace {
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
-    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.extended_bt2020,raw_kind,
+    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.extended_bt2020,o.convert_gamut,raw_kind,
+        format==4 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && !o.convert_gamut,
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr);
 }
@@ -177,9 +178,13 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     const auto path=stage.file.u8string();
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
     Result result;
-    if(o.mode==Mode::preserve) {
+    const bool direct_jxl=format==3 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
+        !o.exposure && !o.max_edge && !o.convert_gamut && is_scrgb_jxl(bytes.data(),bytes.size());
+    if(o.mode==Mode::preserve && o.target==Target::jxl_linear)require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
+    if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||o.target==Target::jxl_linear,"JXR preservation requires linear JXL output");
+    if(direct_jxl || (o.mode==Mode::preserve && format!=4)) {
         require(format==0||format==1||format==3||format==6,"Source preservation supports JPEG, AVIF, JXL and regular raster images; use --mode process for RAW/JXR");
-        int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:o.target==Target::jxl?1:2;
+        int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:2;
         int rc=0;
         if(o.jpeg_transcoding) {
             require(format==0,"JPEG transcoding requires a JPEG source");
@@ -197,17 +202,22 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         }
         result.width=info[0];result.height=info[1];result.gainmap=info[2];result.transfer=info[3];
         if(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap)require(result.gainmap,"Source has no transferable gain map; use --mode process to generate one");
-        result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":result.transfer==18?"hlg":"source";
+        result.encoding=direct_jxl?"linear":result.gainmap?"gainmap":result.transfer==16?"pq":result.transfer==18?"hlg":"source";
     } else {
         auto& linear=cache.linear;auto& raw_sdr=cache.raw_sdr;auto& exif=cache.exif;
         auto& w=cache.w;auto& h=cache.h;auto& gamut=cache.gamut;
         if(!cache.ready || processing_key(cache.previous,format)!=processing_key(o,format)) {
-            cache.ready=false;linear.clear();raw_sdr.clear();exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
+            cache.ready=false;cache.scrgb=false;linear.clear();raw_sdr.clear();exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
             if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
             else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,o.extended_bt2020,o.keep_exif?&exif:nullptr);
-            else if(format==4)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut);
+            else if(format==4) {
+                if((o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && !o.convert_gamut)
+                    cache.scrgb=decode_jxr_scrgb(bytes.data(),bytes.size(),linear,w,h,cache.half_jxr);
+                require(o.mode!=Mode::preserve || cache.scrgb,"JXR source is not preservable scRGB; use --mode process");
+                if(!cache.scrgb)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut);
+            }
             else if(format==6) {
                 const auto raster=decode_regular(bytes.data(),bytes.size());
                 require(!o.keep_exif || raster.format!="TIFF","TIFF EXIF retention is not implemented yet");
@@ -260,13 +270,22 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             if(format!=5&&o.max_edge)scale_rgba_f32_max_edge(linear,w,h,o.max_edge);
             cache.previous=o;cache.ready=true;
         }
-        q.exif=exif.data();q.exif_size=exif.size();q.source_bits=cache.bits;q.jxl_half=cache.half_jxr;
+        q.exif=exif.data();q.exif_size=exif.size();q.source_bits=cache.bits;
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
-        int rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,raw_sdr.empty()?nullptr:raw_sdr.data());
+        int rc;
+        if(cache.scrgb) {
+            StillSourceColor color;color.bits=cache.half_jxr?16:32;color.exponent_bits=cache.half_jxr?5:8;
+            color.transfer=8;color.primaries=1;color.intensity_target=80.f;
+            if(cache.half_jxr) {
+                std::vector<uint16_t> half(linear.size());
+                std::transform(linear.begin(),linear.end(),half.begin(),float_to_half);
+                rc=encode_jxl_source(w,h,half.data(),true,color,path.c_str(),q);
+            } else rc=encode_jxl_source(w,h,linear.data(),true,color,path.c_str(),q);
+        } else rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,raw_sdr.empty()?nullptr:raw_sdr.data());
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
         result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         result.transfer=o.target==Target::avif_pq||o.target==Target::jxl_pq?16:0;
-        result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":o.target==Target::jxl_linear?"linear":"sdr";
+        result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":(o.target==Target::jxl_linear||cache.scrgb)?"linear":"sdr";
     }
     require(std::filesystem::file_size(stage.file)>0,"Encoder produced no output");stage.publish(output,o.overwrite);return result;
 }
