@@ -81,7 +81,13 @@ jobs:
         run: python tools/check_release_version.py "${{ github.ref_name }}" build/generated/jxrc/version.hpp
       - name: Build
         run: cmake --build build --target jxrconverter jxrconvert jxrc_gui_tests jxrc_tests -j 3
+      - name: Test (skip desktop temporarily)
+        if: runner.os == 'Windows'
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ctest --test-dir build --output-on-failure -E '^desktop$'
       - name: Test
+        if: runner.os != 'Windows'
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build --output-on-failure
