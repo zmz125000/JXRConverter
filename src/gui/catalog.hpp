@@ -33,7 +33,7 @@ class Catalog : public QAbstractTableModel {
 public:
     enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, ColumnCount };
     enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole };
-    explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 65536);
+    explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 128*1024);
     ~Catalog() override;
     int rowCount(const QModelIndex& parent = {}) const override;
     int columnCount(const QModelIndex& parent = {}) const override;
@@ -76,7 +76,7 @@ private:
     QString metadataPath_;
     QRunnable* metadataTask_ = nullptr;
     bool backgroundMetadata_ = true;
-    QCache<QString, QImage> cache_{65536}; // KiB; bounded independently of catalog size.
+    QCache<QString, QImage> cache_{128*1024}; // 128 MiB of 8-bit RGBA thumbnails; costs in KiB.
     QStringList visibleThumbnails_;
     QMap<QString, std::shared_ptr<std::atomic_bool>> thumbnailJobs_;
     QMap<QString, QRunnable*> thumbnailTasks_;
