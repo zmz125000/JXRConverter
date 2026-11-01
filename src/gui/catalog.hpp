@@ -10,6 +10,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+class QRunnable;
 
 namespace jxrc::gui {
 struct Record {
@@ -31,7 +32,7 @@ class Catalog : public QAbstractTableModel {
 public:
     enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, ColumnCount };
     enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole };
-    explicit Catalog(QObject* parent = nullptr);
+    explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 65536);
     ~Catalog() override;
     int rowCount(const QModelIndex& parent = {}) const override;
     int columnCount(const QModelIndex& parent = {}) const override;
@@ -46,6 +47,7 @@ public:
     void beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible);
     void endThumbnailFrame();
     int thumbnailJobCount() const { return thumbnailJobs_.size(); }
+    int thumbnailCacheCost() const { return cache_.totalCost(); }
     bool scanning() const { return scanning_ > 0; }
 signals:
     void scanStateChanged(bool scanning);
@@ -53,6 +55,8 @@ signals:
 private:
     void insertPaths(const QStringList& paths);
     void pumpThumbnails();
+    void cancelThumbnail(const QString& path);
+    void fitThumbnailCache();
     int find(const QString& path) const;
     QVector<Record> records_;
     QSet<QString> known_;
@@ -60,6 +64,8 @@ private:
     QCache<QString, QImage> cache_{65536}; // KiB; bounded independently of catalog size.
     QStringList visibleThumbnails_;
     QMap<QString, std::shared_ptr<std::atomic_bool>> thumbnailJobs_;
+    QMap<QString, QRunnable*> thumbnailTasks_;
+    int thumbnailEdge_ = 384;
     bool thumbnailFrame_ = false;
     int thumbnailFrameDepth_ = 0;
     std::function<bool(const QModelIndex&)> thumbnailVisible_;

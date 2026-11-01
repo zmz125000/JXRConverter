@@ -6,6 +6,7 @@
 #include <QIcon>
 #include <QPixmap>
 #include <QRegularExpression>
+#include <QRunnable>
 #include <algorithm>
 #include <cmath>
 #include <QLocale>
@@ -78,15 +79,17 @@ Record readMetadata(const QString& path) {
     r.inspected = true; return r;
 }
 QImage readThumbnail(const QString& path, int edge) {
-    auto p = preview(nativePath(path), edge);
+    auto p = preview(nativePath(path), std::min(edge,768));
     return QImage(p.rgba.data(),int(p.width),int(p.height),int(p.width)*4,QImage::Format_RGBA8888).copy();
 }
-Catalog::Catalog(QObject* parent) : QAbstractTableModel(parent) {
+Catalog::Catalog(QObject* parent, int thumbnailCacheKiB) : QAbstractTableModel(parent) {
+    cache_.setMaxCost(std::max(1,thumbnailCacheKiB));
     scans_.setMaxThreadCount(1); metadata_.setMaxThreadCount(2); thumbnails_.setMaxThreadCount(2);
 }
 Catalog::~Catalog() {
     scans_.clear(); metadata_.clear(); thumbnails_.clear();
     scans_.waitForDone(); metadata_.waitForDone(); thumbnails_.waitForDone();
+    qDeleteAll(thumbnailTasks_);
 }
 int Catalog::rowCount(const QModelIndex& parent) const { return parent.isValid()?0:records_.size(); }
 int Catalog::columnCount(const QModelIndex& parent) const { return parent.isValid()?0:ColumnCount; }
@@ -103,9 +106,9 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     if (role == SummaryRole) return QStringList{dimensions(r), r.format, r.transfer}.filter(QRegularExpression(".+")).join(" · ");
     if (role == Qt::ToolTipRole) return r.path + "\n" + dimensions(r) + "\n" + r.camera + "\n" + r.status + (r.error.isEmpty()?QString{}:"\n"+r.error) + (r.metadataWarning.isEmpty()?QString{}:"\nMetadata: "+r.metadataWarning);
     if ((role == Qt::DecorationRole || role == ThumbnailRole) && index.column() == Name) {
-        if (auto* image = cache_.object(r.path)) return QIcon(QPixmap::fromImage(*image));
         if(role==ThumbnailRole&&thumbnailFrame_&&!visibleThumbnails_.contains(r.path))
             const_cast<Catalog*>(this)->visibleThumbnails_.append(r.path);
+        if (auto* image = cache_.object(r.path)) return QIcon(QPixmap::fromImage(*image));
         return {};
     }
     if (role != Qt::DisplayRole) return {};
@@ -164,11 +167,40 @@ void Catalog::endThumbnailFrame() {
     for(int i=visibleThumbnails_.size()-1;i>=0;--i) {
         const auto path=visibleThumbnails_[i];const int row=find(path);
         if(row<0||!thumbnailVisible_(index(row,Name))) {
-            if(auto token=thumbnailJobs_.value(path))token->store(false);
+            cancelThumbnail(path);
             visibleThumbnails_.removeAt(i);
         }
     }
-    thumbnailVisible_={};thumbnailFrameDepth_=0;pumpThumbnails();
+    thumbnailVisible_={};thumbnailFrameDepth_=0;fitThumbnailCache();pumpThumbnails();
+}
+void Catalog::cancelThumbnail(const QString& path) {
+    if(auto token=thumbnailJobs_.value(path))token->store(false);
+    auto* task=thumbnailTasks_.value(path);
+    if(task&&thumbnails_.tryTake(task)) {
+        delete task;thumbnailTasks_.remove(path);thumbnailJobs_.remove(path);
+        const int row=find(path);if(row>=0)records_[row].thumbnailPending=false;
+    }
+}
+void Catalog::fitThumbnailCache() {
+    // All visible images must coexist in the cache. Otherwise completion of
+    // later cells evicts early ones, and pumpThumbnails re-decodes them forever.
+    // Include eight in-flight images and rounded-up KiB costs in the budget.
+    const qint64 count=std::max<qint64>(1,visibleThumbnails_.size()+8);
+    const qint64 bytesPerImage=qint64(cache_.maxCost())*1024/count;
+    thumbnailEdge_=std::clamp(int(std::sqrt(std::max<qint64>(4,bytesPerImage-1023)/4.0)),1,384);
+    bool shrink=false;
+    for(const auto& path:visibleThumbnails_)if(auto* image=cache_.object(path))
+        shrink|=std::max(image->width(),image->height())>thumbnailEdge_;
+    if(!shrink)return; // The lookups above also refresh visible LRU entries.
+    QMap<QString,QImage> visible;
+    for(const auto& path:visibleThumbnails_)if(auto* image=cache_.take(path)) {
+        auto ready=*image;delete image;
+        if(std::max(ready.width(),ready.height())>thumbnailEdge_)ready=ready.scaled(thumbnailEdge_,thumbnailEdge_,Qt::KeepAspectRatio,Qt::SmoothTransformation);
+        visible.insert(path,ready);
+    }
+    // Reinsert visible images last, protecting them from offscreen LRU entries.
+    for(auto it=visible.cbegin();it!=visible.cend();++it)
+        cache_.insert(it.key(),new QImage(it.value()),std::max<qint64>(1,(it.value().sizeInBytes()+1023)/1024));
 }
 void Catalog::pumpThumbnails() {
     // Eight submitted jobs total, including the two currently decoding. Queued
@@ -183,19 +215,25 @@ void Catalog::pumpThumbnails() {
         // Capture only the path and cancellation token. Opening the file and
         // constructing its decoder happen inside readThumbnail, after this
         // runnable starts and checks cancellation.
-        thumbnails_.start([this,path,token] {
+        const int edge=thumbnailEdge_;
+        auto* task=QRunnable::create([this,path,token,edge] {
             QImage image;QString error;
             if(token->load()) {
-                try {image=readThumbnail(path);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
+                try {image=readThumbnail(path,edge);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
             }
             QMetaObject::invokeMethod(this,[this,path,token,image,error] {
                 thumbnailJobs_.remove(path);
+                delete thumbnailTasks_.take(path);
                 const int row=find(path);
                 if(row>=0) {
                     auto& r=records_[row];r.thumbnailPending=false;
                     if(token->load()) {
                         r.thumbnailFailed=image.isNull();
-                        if(!image.isNull())cache_.insert(path,new QImage(image),std::max<qint64>(1,image.sizeInBytes()/1024));
+                        if(!image.isNull()) {
+                            auto ready=image;
+                            if(std::max(ready.width(),ready.height())>thumbnailEdge_)ready=ready.scaled(thumbnailEdge_,thumbnailEdge_,Qt::KeepAspectRatio,Qt::SmoothTransformation);
+                            cache_.insert(path,new QImage(ready),std::max<qint64>(1,(ready.sizeInBytes()+1023)/1024));
+                        }
                         else if(r.metadataWarning.isEmpty())r.metadataWarning="Thumbnail: "+error;
                         emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole,Qt::ToolTipRole});
                     }
@@ -203,13 +241,16 @@ void Catalog::pumpThumbnails() {
                 pumpThumbnails();
             },Qt::QueuedConnection);
         });
+        // Own the runnable until completion, avoiding tryTake's documented
+        // pointer-reuse race with automatically deleted runnables.
+        task->setAutoDelete(false);thumbnailTasks_.insert(path,task);thumbnails_.start(task);
     }
 }
 void Catalog::removePaths(const QStringList& paths) {
     const QSet<QString> removal(paths.begin(),paths.end());
     for(int i=records_.size()-1;i>=0;--i)if(removal.contains(records_[i].path)) {
         const auto path=records_[i].path;
-        visibleThumbnails_.removeAll(path);if(auto token=thumbnailJobs_.value(path))token->store(false);
+        visibleThumbnails_.removeAll(path);cancelThumbnail(path);
         beginRemoveRows({},i,i);records_.removeAt(i);known_.remove(key(path));cache_.remove(path);endRemoveRows();
     }
 }

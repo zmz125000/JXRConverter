@@ -125,6 +125,30 @@ private slots:
         QTRY_VERIFY(ready());QTRY_COMPARE(model.thumbnailJobCount(),0);
         for(int i=0;i<30;++i){QVERIFY(!model.record(i).thumbnailPending);QVERIFY(qvariant_cast<QIcon>(model.index(i,0).data(Qt::DecorationRole)).isNull());}
     }
+    void thumbnailCacheBudgetAndSize() {
+        const auto directory=root("thumbnail-cache");
+        for(int i=0;i<40;++i)QVERIFY(!makeImage(directory,QString("%1.jpg").arg(i),384,192,100).isEmpty());
+        Catalog model(nullptr,64);model.addPaths({directory});QTRY_COMPARE(model.rowCount(),40);QTRY_VERIFY(!model.scanning()&&inspected(model));
+        model.beginThumbnailFrame([](const QModelIndex&){return true;});
+        for(int i=0;i<40;++i)model.index(i,0).data(Catalog::ThumbnailRole);
+        model.endThumbnailFrame();
+        auto ready=[&]{for(int i=0;i<40;++i)if(qvariant_cast<QIcon>(model.index(i,0).data(Qt::DecorationRole)).isNull())return false;return true;};
+        // Forty full thumbnails cannot fit this cache. They must be reduced
+        // so every visible cell finishes, rather than evicting in a decode loop.
+        QTRY_VERIFY(ready());QTRY_COMPARE(model.thumbnailJobCount(),0);QVERIFY(model.thumbnailCacheCost()<=64);
+        model.beginThumbnailFrame([](const QModelIndex&){return true;});
+        for(int i=0;i<40;++i)model.index(i,0).data(Catalog::ThumbnailRole);
+        model.endThumbnailFrame();QCOMPARE(model.thumbnailJobCount(),0);
+
+        const auto jpeg=makeImage(directory,"large.jpg",1536,1024,100);
+        QCOMPARE(readThumbnail(jpeg,1024).size(),QSize(768,512));
+        QImage raster(1024,1536,QImage::Format_RGB32);raster.fill(QColor(60,110,180));
+        for(const auto& extension:{"png","bmp","tif"}) {
+            const auto path=directory+"/large."+extension;
+            if(!raster.save(path))continue; // Qt plugin availability varies by platform.
+            QCOMPARE(readThumbnail(path,1024).size(),QSize(512,768));
+        }
+    }
     void scrollingAndCellShape() {
         QStandardItemModel model(200,1);FileListView list;ThumbnailDelegate delegate;
         list.setItemDelegate(&delegate);list.setModel(&model);list.resize(640,300);list.setPresentation(true,200);list.show();

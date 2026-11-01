@@ -78,6 +78,7 @@ struct Preview {
     std::vector<uint8_t> rgba; // sRGB display thumbnail, straight alpha; not an export intermediate.
 };
 JXRC_API ImageInfo inspect(const std::filesystem::path& input);
+// Display previews are capped at 768 px even when a larger edge is requested.
 JXRC_API Preview preview(const std::filesystem::path& input, unsigned max_edge = 384);
 JXRC_API void validate(const Options& options);
 JXRC_API std::string version();

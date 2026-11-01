@@ -73,8 +73,33 @@ int kind(const std::vector<uint8_t>& b) {
     if(is_regular_image(b.data(),b.size()))return 6;
     return 5; // Sensor formats are validated by LibRaw, never guessed from suffix.
 }
+// Preview-only reduction, before allocating color-transform intermediates.
+// Encoded integer rasters are box filtered; half-float HDR is averaged as float.
+template<class Code, bool Half = false>
+std::vector<Code> reduce_preview(const Code* source,unsigned& w,unsigned& h,size_t stride,unsigned channels,unsigned edge) {
+    const unsigned longest=std::max(w,h);
+    if(!edge||longest<=edge)return {};
+    const unsigned nw=std::max(1u,unsigned(uint64_t(w)*edge/longest));
+    const unsigned nh=std::max(1u,unsigned(uint64_t(h)*edge/longest));
+    std::vector<Code> result(size_t(nw)*nh*channels);
+    for(unsigned y=0;y<nh;++y)for(unsigned x=0;x<nw;++x) {
+        const unsigned x0=unsigned(uint64_t(x)*w/nw),x1=unsigned(uint64_t(x+1)*w/nw);
+        const unsigned y0=unsigned(uint64_t(y)*h/nh),y1=unsigned(uint64_t(y+1)*h/nh);
+        double sums[4]={};
+        for(unsigned sy=y0;sy<y1;++sy)for(unsigned sx=x0;sx<x1;++sx)for(unsigned c=0;c<channels;++c) {
+            const auto value=source[size_t(sy)*stride+size_t(sx)*channels+c];
+            if constexpr(Half)sums[c]+=half_to_float(value);else sums[c]+=value;
+        }
+        const double count=double(x1-x0)*(y1-y0);
+        for(unsigned c=0;c<channels;++c) {
+            if constexpr(Half)result[(size_t(y)*nw+x)*channels+c]=float_to_half(float(sums[c]/count));
+            else result[(size_t(y)*nw+x)*channels+c]=Code(sums[c]/count+0.5);
+        }
+    }
+    w=nw;h=nh;return result;
+}
 template<class Sample>
-void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,unsigned& w,unsigned& h,uhdr_color_gamut_t& gamut,bool& hdr) {
+void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,unsigned& w,unsigned& h,uhdr_color_gamut_t& gamut,bool& hdr,unsigned thumbnail_edge=0) {
     using Decoder=std::unique_ptr<uhdr_codec_private_t,void(*)(uhdr_codec_private_t*)>;
     Decoder dec(uhdr_create_decoder(),uhdr_release_decoder);
     require(bool(dec),"Cannot allocate JPEG decoder");
@@ -87,8 +112,12 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
         require(uhdr_dec_get_image_width(dec.get())>0&&uhdr_dec_get_image_height(dec.get())>0&&uint64_t(uhdr_dec_get_image_width(dec.get()))*uhdr_dec_get_image_height(dec.get())<=80000000,"JPEG dimensions exceed limit");
         status=uhdr_decode(dec.get());
         require(status.error_code==UHDR_CODEC_OK,std::string("Ultra HDR decode failed: ")+(status.has_detail?status.detail:"no codec detail"));
-        const auto* image=uhdr_get_decoded_image(dec.get());require(image,"Missing Ultra HDR pixels");
-        w=image->w;h=image->h;gamut=image->cg;hdr=true;pixels.resize(size_t(w)*h*4);
+        const auto* decoded=uhdr_get_decoded_image(dec.get());require(decoded,"Missing Ultra HDR pixels");
+        auto reduced=*decoded;const auto* image=&reduced;
+        w=image->w;h=image->h;gamut=image->cg;hdr=true;
+        auto small=reduce_preview<uint16_t,true>(static_cast<const uint16_t*>(image->planes[0]),w,h,size_t(image->stride[0])*4,4,thumbnail_edge);
+        if(!small.empty()){reduced.w=w;reduced.h=h;reduced.planes[0]=small.data();reduced.stride[0]=w;}
+        pixels.resize(size_t(w)*h*4);
         for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w*4;++x)
             pixels[size_t(y)*w*4+x]=store_working<Sample>(half_to_float(static_cast<const uint16_t*>(image->planes[0])[size_t(y)*image->stride[0]*4+x]));
         return;
@@ -97,10 +126,12 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
     require(jpeg.parseImage(bytes.data(),bytes.size()).error_code==UHDR_CODEC_OK,"JPEG parse failed");
     require(uint64_t(jpeg.getDecompressedImageWidth())*jpeg.getDecompressedImageHeight()<=80000000,"JPEG dimensions exceed limit");
     require(jpeg.decompressImage(bytes.data(),bytes.size(),ultrahdr::DECODE_STREAM).error_code==UHDR_CODEC_OK,"JPEG decode failed");
-    const auto image=jpeg.getDecompressedImage();w=image.w;h=image.h;
+    auto image=jpeg.getDecompressedImage();w=image.w;h=image.h;
     require(w&&h,"Empty JPEG");
     const unsigned channels=image.fmt==UHDR_IMG_FMT_8bppYCbCr400?1:image.fmt==UHDR_IMG_FMT_24bppRGB888?3:image.fmt==UHDR_IMG_FMT_32bppRGBA8888?4:0;
     require(channels!=0,"Unsupported JPEG pixel layout");
+    auto small=reduce_preview(static_cast<const uint8_t*>(image.planes[0]),w,h,size_t(image.stride[0])*channels,channels,thumbnail_edge);
+    if(!small.empty()){image.w=w;image.h=h;image.planes[0]=small.data();image.stride[0]=w;}
     skcms_ICCProfile source=*skcms_sRGB_profile(),destination;
     const auto icc=source_jpeg_icc(bytes.data(),bytes.size());
     if(!icc.empty())require(skcms_Parse(icc.data(),icc.size(),&source),"Invalid JPEG ICC profile");
@@ -334,23 +365,32 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
 }
 Preview preview(const std::filesystem::path& input,unsigned edge) {
     require(edge>0&&edge<=1024,"Preview edge must be 1..1024");
+    edge=std::min(edge,768u);
     JxrcThreadBudget budget(1);
     auto bytes=read(input);const int format=kind(bytes);
     std::vector<uint16_t> linear;std::vector<uint8_t> raw_pixels;
     unsigned w=0,h=0,raster_orientation=1;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;bool hdr=false;int gain=0,transfer=0,rc=0;
-    if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
+    if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,edge);
     else if(format==1)rc=decode_avif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,edge,nullptr);
     else if(format==3)rc=decode_jxl_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,false,edge,false,nullptr,nullptr);
     else if(format==4)rc=decode_jxr_memory(bytes.data(),bytes.size(),linear,w,h,&gamut,std::min(edge,768u));
     else if(format==6) {
-        const auto raster=decode_regular(bytes.data(),bytes.size());
-        w=raster.width;h=raster.height;raster_orientation=raster.orientation;regular_to_linear(raster,linear,gamut);
+        auto raster=decode_regular(bytes.data(),bytes.size());
+        w=raster.width;h=raster.height;raster_orientation=raster.orientation;
+        if(raster.bits>8) {
+            const auto small=reduce_preview(reinterpret_cast<const uint16_t*>(raster.pixels.data()),w,h,size_t(w)*4,4,edge);
+            if(!small.empty()){std::vector<uint8_t> reduced(small.size()*2);std::memcpy(reduced.data(),small.data(),reduced.size());raster.pixels=std::move(reduced);}
+        } else {
+            auto small=reduce_preview(raster.pixels.data(),w,h,size_t(w)*4,4,edge);
+            if(!small.empty())raster.pixels=std::move(small);
+        }
+        raster.width=w;raster.height=h;regular_to_linear(raster,linear,gamut);
     }
     else {
         std::vector<uint8_t> jpeg;bool embedded=false;
         if(raw_jpeg_thumbnail(bytes.data(),bytes.size(),jpeg)) {
             try {
-                jpeg_linear(jpeg,linear,w,h,gamut,hdr);
+                jpeg_linear(jpeg,linear,w,h,gamut,hdr,edge);
                 const int orient=source_orientation(jpeg.data(),jpeg.size(),0,nullptr);
                 require(orient>=1 && orient<=8,"Invalid RAW thumbnail orientation");
                 raster_orientation=unsigned(orient);embedded=true;
