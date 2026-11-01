@@ -137,7 +137,7 @@ auto result = jxrc::convert("camera.dng", "output.avif", options);
 ```
 
 Options are per-call values, independent of global viewer settings. Decoders
-hand off straight-alpha linear F16 pixels in the declared RGB primaries, with
+hand off straight-alpha linear F32 pixels for processing in the declared RGB primaries, with
 1.0 corresponding to 203 nits. RAW HDR gain-map exports retain a separate SDR
 camera-look render. Pixel-processing controls are rejected in preservation mode.
 There is no silent fallback between those modes.
@@ -176,3 +176,9 @@ These settings are persistent. Rename disables replacement of existing files.
 RAW outputs rendered with Boost highlights or Custom include `_hdr_boost` or
 `_hdr_custom` before the target suffix. RAW thumbnails prefer the camera's
 embedded JPEG, falling back to a reduced-size demosaic when it is unavailable.
+
+Pixel processing uses float32 through exposure, orientation, resizing and JXL
+encoding. AVIF quantizes directly to its selected bit depth; JPEG composites
+alpha onto black in linear light before encoding. RAW gain-map SDR bases retain
+float precision until encoding. JPEG gain-map decoding and encoding use F16 only
+at the Ultra HDR API boundary, and LibRaw supplies 16-bit demosaiced samples.

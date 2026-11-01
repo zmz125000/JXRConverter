@@ -15,6 +15,13 @@ std::vector<uint8_t> source_jpeg_icc(const uint8_t*,size_t);
 int source_orientation(const uint8_t*,size_t,int,std::vector<uint8_t>*);
 void normalize_exif(std::vector<uint8_t>&);
 void scale_rgba_f16_max_edge(std::vector<uint16_t>&,unsigned&,unsigned&,unsigned);
+void scale_rgba_f32_max_edge(std::vector<float>&,unsigned&,unsigned&,unsigned);
+int encode_still_export_f32(const float*,unsigned,unsigned,int,int,const char*,StillEncodeQuality,const float* sdr_base = nullptr);
 
 
 jxrc::ImageInfo inspect_jxr(const uint8_t*,size_t);
+
+int decode_jxl_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*,bool*,int*,bool,std::vector<uint8_t>*);
+int decode_avif_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,int*,int*,uhdr_color_gamut_t*,std::vector<uint8_t>*);
+int decode_jxr_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*);
+int decode_raw_f32(const uint8_t*,size_t,const jxrc::RawControls&,bool,unsigned,std::vector<float>&,std::vector<float>&,unsigned&,unsigned&,int&);

@@ -45,8 +45,20 @@ of Qt and OS bitmap APIs. PNG palette/grayscale/transparency expand to straight
 RGBA without gamma correction or premultiplication. PNG/TIFF 16-bit samples stay
 integer through preserve-mode JXL encoding; lossless JXL can retain their exact
 sample codes, including transparent RGB. JPEG remains lossy, and AVIF quantizes
-16-bit inputs to the selected 10/12-bit depth. Process mode intentionally converts
-to the existing linear F16 working space. ICC profiles are retained for preservation
+16-bit inputs to the selected 10/12-bit depth. Process mode now uses straight-alpha linear F32 for JPEG, AVIF, JXL, JXR,
+regular rasters and LibRaw's rendered output. Exposure, orientation and resizing
+retain that precision; resizing filters premultiplied colors and restores straight
+alpha to avoid transparent-edge fringes. JXL receives F32, AVIF quantizes directly
+to the selected 10/12-bit codes, and JPEG composites onto black in linear light
+before quantizing to 8-bit sRGB codes. RAW's paired SDR base remains linear F32
+until encoding, including deep-color AVIF gain-map bases.
+
+Ultra HDR's public codec API supports half-float linear pixels, so JPEG gain-map
+decode/encode still crosses that external F16 boundary. LibRaw's demosaic produces
+16-bit integer samples; those expand directly to float before camera-look work.
+Finite signed and extended-range values remain available for exposure and gamut
+conversion. SDR/PQ bounds are applied at output; linear HDR JXL keeps extended
+range. These processing conversions are not promises of source-code identity. ICC profiles are retained for preservation
 and used for processing; PNG gAMA/cHRM produce an equivalent matrix/TRC profile.
 PNG/WebP EXIF and raster orientation are supported. Untagged rasters assume sRGB.
 

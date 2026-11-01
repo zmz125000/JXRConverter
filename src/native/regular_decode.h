@@ -11,5 +11,6 @@ struct RegularImage {
 bool is_regular_image(const uint8_t* data, size_t size);
 RegularImage decode_regular(const uint8_t* data, size_t size);
 void regular_to_linear(const RegularImage&, std::vector<uint16_t>&, uhdr_color_gamut_t&);
+void regular_to_linear(const RegularImage&, std::vector<float>&, uhdr_color_gamut_t&);
 unsigned regular_orientation(const std::vector<uint8_t>& exif);
 int convert_regular_source(const RegularImage&, int target, const char*, StillEncodeQuality, bool keep_exif, int* info);

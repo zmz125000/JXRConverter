@@ -303,3 +303,12 @@ void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,u
     check(skcms_Transform(image.pixels.data(),format,skcms_AlphaFormat_Unpremul,&source,pixels.data(),skcms_PixelFormat_RGBA_hhhh,skcms_AlphaFormat_Unpremul,&destination,size_t(image.width)*image.height),"Raster color transform failed");
     gamut=UHDR_CG_BT_2100;
 }
+void regular_to_linear(const RegularImage& image,std::vector<float>& pixels,uhdr_color_gamut_t& gamut) {
+    skcms_ICCProfile source=*skcms_sRGB_profile(),destination;
+    if(!image.icc.empty())check(skcms_Parse(image.icc.data(),image.icc.size(),&source),"Invalid raster ICC profile");
+    check(make_linear_bt2020_profile(&destination),"Cannot build working profile");
+    pixels.resize(size_t(image.width)*image.height*4);const uint16_t endian=1;
+    const auto format=image.bits==8?skcms_PixelFormat_RGBA_8888:*reinterpret_cast<const uint8_t*>(&endian)?skcms_PixelFormat_RGBA_16161616LE:skcms_PixelFormat_RGBA_16161616BE;
+    check(skcms_Transform(image.pixels.data(),format,skcms_AlphaFormat_Unpremul,&source,pixels.data(),skcms_PixelFormat_RGBA_ffff,skcms_AlphaFormat_Unpremul,&destination,size_t(image.width)*image.height),"Raster color transform failed");
+    gamut=UHDR_CG_BT_2100;
+}

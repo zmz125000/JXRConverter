@@ -2,6 +2,7 @@
 #include "jxrc/version.hpp"
 #include "reader_pixels.h"
 #include "codec_api.h"
+#include "working_pixels.h"
 #include "input_format.h"
 #include "regular_decode.h"
 #include "hdr_parallel.h"
@@ -70,7 +71,8 @@ int kind(const std::vector<uint8_t>& b) {
     if(is_regular_image(b.data(),b.size()))return 6;
     return 5; // Sensor formats are validated by LibRaw, never guessed from suffix.
 }
-void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<uint16_t>& pixels,unsigned& w,unsigned& h,uhdr_color_gamut_t& gamut,bool& hdr) {
+template<class Sample>
+void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,unsigned& w,unsigned& h,uhdr_color_gamut_t& gamut,bool& hdr) {
     using Decoder=std::unique_ptr<uhdr_codec_private_t,void(*)(uhdr_codec_private_t*)>;
     Decoder dec(uhdr_create_decoder(),uhdr_release_decoder);
     require(bool(dec),"Cannot allocate JPEG decoder");
@@ -85,7 +87,8 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<uint16_t>& pixels
         require(status.error_code==UHDR_CODEC_OK,std::string("Ultra HDR decode failed: ")+(status.has_detail?status.detail:"no codec detail"));
         const auto* image=uhdr_get_decoded_image(dec.get());require(image,"Missing Ultra HDR pixels");
         w=image->w;h=image->h;gamut=image->cg;hdr=true;pixels.resize(size_t(w)*h*4);
-        for(unsigned y=0;y<h;++y)std::memcpy(pixels.data()+size_t(y)*w*4,static_cast<const uint16_t*>(image->planes[0])+size_t(y)*image->stride[0]*4,size_t(w)*8);
+        for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w*4;++x)
+            pixels[size_t(y)*w*4+x]=store_working<Sample>(half_to_float(static_cast<const uint16_t*>(image->planes[0])[size_t(y)*image->stride[0]*4+x]));
         return;
     }
     ultrahdr::JpegDecoderHelper jpeg;
@@ -108,7 +111,7 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<uint16_t>& pixels
         rgba[i+3]=255;
     }
     pixels.resize(size_t(w)*h*4);
-    require(skcms_Transform(rgba.data(),skcms_PixelFormat_RGBA_8888,skcms_AlphaFormat_Unpremul,&source,pixels.data(),skcms_PixelFormat_RGBA_hhhh,skcms_AlphaFormat_Unpremul,&destination,size_t(w)*h),"JPEG color transform failed");
+    require(skcms_Transform(rgba.data(),skcms_PixelFormat_RGBA_8888,skcms_AlphaFormat_Unpremul,&source,pixels.data(),working_format<Sample>(),skcms_AlphaFormat_Unpremul,&destination,size_t(w)*h),"JPEG color transform failed");
 }
 }
 void validate(const Options& o) {
@@ -163,12 +166,12 @@ Result convert(const std::filesystem::path& input,const std::filesystem::path& o
         if(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap)require(result.gainmap,"Source has no transferable gain map; use --mode process to generate one");
         result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":result.transfer==18?"hlg":"source";
     } else {
-        std::vector<uint16_t> linear;std::vector<uint8_t> raw_pixels,exif;unsigned w=0,h=0;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
-        bool hdr=false;int gain=0,transfer=0,rc=0;size_t sdr_offset=0;unsigned raster_orientation=1;
+        std::vector<float> linear,raw_sdr;std::vector<uint8_t> exif;unsigned w=0,h=0;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
+        bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
         if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
-        else if(format==1)rc=decode_avif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,0,o.keep_exif?&exif:nullptr);
-        else if(format==3)rc=decode_jxl_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,false,0,o.extended_bt2020,o.keep_exif?&exif:nullptr,nullptr);
-        else if(format==4)rc=decode_jxr_memory(bytes.data(),bytes.size(),linear,w,h,&gamut);
+        else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
+        else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,o.extended_bt2020,o.keep_exif?&exif:nullptr);
+        else if(format==4)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut);
         else if(format==6) {
             const auto raster=decode_regular(bytes.data(),bytes.size());
             require(!o.keep_exif || raster.format!="TIFF","TIFF EXIF retention is not implemented yet");
@@ -179,11 +182,12 @@ Result convert(const std::filesystem::path& input,const std::filesystem::path& o
         else {
             int cg=0;const bool previous=paired_sdr;paired_sdr=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
             struct Reset{bool value;~Reset(){paired_sdr=value;}} reset{previous};
-            rc=decode_raw(bytes.data(),bytes.size(),o.raw,hdr_target(o.target),o.max_edge,raw_pixels,w,h,cg);
+            rc=decode_raw_f32(bytes.data(),bytes.size(),o.raw,hdr_target(o.target),o.max_edge,linear,raw_sdr,w,h,cg);
             gamut=cg==2?UHDR_CG_BT_2100:cg==1?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
-            if(rc==0) {linear.resize(size_t(w)*h*4);std::memcpy(linear.data(),raw_pixels.data(),linear.size()*2);if(raw_pixels.size()>linear.size()*2)sdr_offset=linear.size()*2;}
         }
-        require(rc==0&&w&&h&&uint64_t(w)*h<=80000000&&linear.size()==size_t(w)*h*4,"Image decode failed (codec "+std::to_string(rc)+")");
+        require(rc==0&&w&&h&&uint64_t(w)*h<=80000000&&
+                linear.size()==size_t(w)*h*4,
+                "Image decode failed (codec "+std::to_string(rc)+")");
         require(!(o.keep_exif&&(format==4||format==5)),"EXIF retention for processed JXR/RAW is not implemented yet");
         // JXL decoder emits a 4-byte box offset before TIFF; normalize orientation after decode.
         if(format==3&&!exif.empty()) {
@@ -195,7 +199,7 @@ Result convert(const std::filesystem::path& input,const std::filesystem::path& o
         require(orient>=1&&orient<=8,"Unsupported image orientation/crop");
         if(orient!=1) {
             const unsigned dw=orient>=5?h:w,dh=orient>=5?w:h;
-            std::vector<uint16_t> oriented(linear.size());
+            std::vector<float> oriented(linear.size());
             for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
                 unsigned dx=x,dy=y;
                 switch(orient) {
@@ -214,15 +218,13 @@ Result convert(const std::filesystem::path& input,const std::filesystem::path& o
         normalize_exif(exif);
         q.exif=exif.data();q.exif_size=exif.size();
         if(o.exposure) {
-            require(!sdr_offset,"Use --raw-exposure when exporting RAW gain maps");
+            require(raw_sdr.empty(),"Use --raw-exposure when exporting RAW gain maps");
             const float multiplier=std::exp2(o.exposure);
-            for(size_t i=0;i<linear.size();++i)if(i%4!=3)linear[i]=float_to_half(half_to_float(linear[i])*multiplier);
+            for(size_t i=0;i<linear.size();++i)if(i%4!=3)linear[i]*=multiplier;
         }
-        if(format!=5&&o.max_edge)scale_rgba_f16_max_edge(linear,w,h,o.max_edge);
-        const uint8_t* data=reinterpret_cast<const uint8_t*>(linear.data());size_t size=linear.size()*2;
-        if(sdr_offset) {data=raw_pixels.data();size=raw_pixels.size();}
+        if(format!=5&&o.max_edge)scale_rgba_f32_max_edge(linear,w,h,o.max_edge);
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
-        rc=encode_still_export(data,size,w,h,true,cg,static_cast<int>(o.target),false,path.c_str(),sdr_offset,q,false);
+        rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,raw_sdr.empty()?nullptr:raw_sdr.data());
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
         result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         result.transfer=o.target==Target::avif_pq||o.target==Target::jxl_pq?16:0;

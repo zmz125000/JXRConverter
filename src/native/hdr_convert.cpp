@@ -1,3 +1,4 @@
+#include "working_pixels.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
  * JPEG XR / HDR raster → Ultra HDR JPEG via libultrahdr.
@@ -233,7 +234,8 @@ JxrPix classify_guid(const PKPixelFormatGUID& g) {
  *
  * Output is linear BT.2020 F16 (1.0 ≈ paper white).
  */
-bool apply_jxr_color_context(std::vector<uint16_t>& rgba, size_t npx, const uint8_t* icc,
+template<class Sample>
+bool apply_jxr_color_context(std::vector<Sample>& rgba, size_t npx, const uint8_t* icc,
                              size_t icc_len) {
     if (!icc || icc_len < 128 || npx == 0) return false;
     skcms_ICCProfile src{};
@@ -246,28 +248,23 @@ bool apply_jxr_color_context(std::vector<uint16_t>& rgba, size_t npx, const uint
         ALOGI("JXR ICC: linear BT.2020 dest not usable");
         return false;
     }
-    // skcms supports IEEE-754 half pixels directly. Transforming the existing
-    // F16 frame in place avoids a second full-frame RGBA_F32 allocation (16 B/px),
-    // which otherwise causes GC/native-memory pressure before Bitmap presentation.
-    if (!skcms_Transform(rgba.data(), skcms_PixelFormat_RGBA_hhhh, skcms_AlphaFormat_Unpremul, &src,
-                         rgba.data(), skcms_PixelFormat_RGBA_hhhh, skcms_AlphaFormat_Unpremul, &dst,
+    // Export transforms floats in place; legacy display callers retain half.
+    // The float path preserves signed and extended-range color values.
+    if (!skcms_Transform(rgba.data(), working_format<Sample>(), skcms_AlphaFormat_Unpremul, &src,
+                         rgba.data(), working_format<Sample>(), skcms_AlphaFormat_Unpremul, &dst,
                          npx)) {
         ALOGI("JXR ICC skcms_Transform failed");
         return false;
     }
     for (size_t i = 0; i < npx; i++) {
-        auto clamp01p = [](float v) {
-            if (!std::isfinite(v) || v < 0.f) return 0.f;
-            if (v > kMaxLinear) return kMaxLinear;
-            return v;
-        };
-        rgba[i * 4 + 0] = float_to_half(clamp01p(half_to_float(rgba[i * 4 + 0])));
-        rgba[i * 4 + 1] = float_to_half(clamp01p(half_to_float(rgba[i * 4 + 1])));
-        rgba[i * 4 + 2] = float_to_half(clamp01p(half_to_float(rgba[i * 4 + 2])));
-        float a = half_to_float(rgba[i * 4 + 3]);
+        auto clamp01p = [](float v) { return sanitize_working<Sample>(v); };
+        rgba[i * 4 + 0] = store_working<Sample>(clamp01p(read_working(rgba[i * 4 + 0])));
+        rgba[i * 4 + 1] = store_working<Sample>(clamp01p(read_working(rgba[i * 4 + 1])));
+        rgba[i * 4 + 2] = store_working<Sample>(clamp01p(read_working(rgba[i * 4 + 2])));
+        float a = read_working(rgba[i * 4 + 3]);
         if (!std::isfinite(a) || a < 0.f) a = 0.f;
         if (a > 1.f) a = 1.f;
-        rgba[i * 4 + 3] = float_to_half(a);
+        rgba[i * 4 + 3] = store_working<Sample>(a);
     }
     ALOGI("JXR ICC applied via skcms (%zu B, full TRC)", icc_len);
     return true;
@@ -278,18 +275,19 @@ bool apply_jxr_color_context(std::vector<uint16_t>& rgba, size_t npx, const uint
  * JPEG / libultrahdr read only RGB and ignore A; transparent edges otherwise show
  * pre-composite colors. Matches JXL path.
  */
-void composite_straight_alpha_on_black(std::vector<uint16_t>& rgba, size_t npx) {
+template<class Sample>
+void composite_straight_alpha_on_black(std::vector<Sample>& rgba, size_t npx) {
     for (size_t i = 0; i < npx; i++) {
-        float a = half_to_float(rgba[i * 4 + 3]);
+        float a = read_working(rgba[i * 4 + 3]);
         if (!std::isfinite(a) || a < 0.f) a = 0.f;
         if (a > 1.f) a = 1.f;
         if (a >= 1.f) {
-            rgba[i * 4 + 3] = float_to_half(1.f);
+            rgba[i * 4 + 3] = store_working<Sample>(1.f);
             continue;
         }
-        float r = half_to_float(rgba[i * 4 + 0]);
-        float g = half_to_float(rgba[i * 4 + 1]);
-        float b = half_to_float(rgba[i * 4 + 2]);
+        float r = read_working(rgba[i * 4 + 0]);
+        float g = read_working(rgba[i * 4 + 1]);
+        float b = read_working(rgba[i * 4 + 2]);
         if (!std::isfinite(r) || r < 0.f) r = 0.f;
         if (!std::isfinite(g) || g < 0.f) g = 0.f;
         if (!std::isfinite(b) || b < 0.f) b = 0.f;
@@ -299,10 +297,10 @@ void composite_straight_alpha_on_black(std::vector<uint16_t>& rgba, size_t npx) 
         if (r > kMaxLinear) r = kMaxLinear;
         if (g > kMaxLinear) g = kMaxLinear;
         if (b > kMaxLinear) b = kMaxLinear;
-        rgba[i * 4 + 0] = float_to_half(r);
-        rgba[i * 4 + 1] = float_to_half(g);
-        rgba[i * 4 + 2] = float_to_half(b);
-        rgba[i * 4 + 3] = float_to_half(1.f);
+        rgba[i * 4 + 0] = store_working<Sample>(r);
+        rgba[i * 4 + 1] = store_working<Sample>(g);
+        rgba[i * 4 + 2] = store_working<Sample>(b);
+        rgba[i * 4 + 3] = store_working<Sample>(1.f);
     }
 }
 
@@ -385,7 +383,8 @@ bool setup_full_frame(PKImageDecode* dec, PKPixelFormatGUID* fmt, unsigned max_e
  * @param composite_alpha_on_black true for JPEG/UHDR (no alpha plane) — flatten
  *   straight alpha onto black. false for direct Bitmap display — keep A.
  */
-bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<uint16_t>& out_rgba,
+template<class Sample>
+bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
                             unsigned& w, unsigned& h, bool composite_alpha_on_black = true,
                             bool* out_untagged_linear = nullptr, uhdr_color_gamut_t* out_cg = nullptr,
                             unsigned thumbnail_edge = 0, int* out_source_depth = nullptr) {
@@ -573,20 +572,20 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<uint16_
     const size_t npx = static_cast<size_t>(w) * h;
 
     auto store_lin = [&](size_t i, float r, float g, float b, float a) {
-        out_rgba[i * 4 + 0] = float_to_half(r);
-        out_rgba[i * 4 + 1] = float_to_half(g);
-        out_rgba[i * 4 + 2] = float_to_half(b);
-        out_rgba[i * 4 + 3] = float_to_half(a);
+        out_rgba[i * 4 + 0] = store_working<Sample>(r);
+        out_rgba[i * 4 + 1] = store_working<Sample>(g);
+        out_rgba[i * 4 + 2] = store_working<Sample>(b);
+        out_rgba[i * 4 + 3] = store_working<Sample>(a);
     };
     auto store_enc_rgb = [&](size_t i, float er, float eg, float eb, float ea) {
         if (expand_as_encoded) {
             // Keep encoded; skcms applies ICC TRC + matrix → linear BT.2020.
             store_lin(i, er, eg, eb, ea);
         } else {
-            out_rgba[i * 4 + 0] = enc_to_lin_half(er);
-            out_rgba[i * 4 + 1] = enc_to_lin_half(eg);
-            out_rgba[i * 4 + 2] = enc_to_lin_half(eb);
-            out_rgba[i * 4 + 3] = float_to_half(ea);
+            out_rgba[i * 4 + 0] = store_working<Sample>(srgb_eotf(er));
+            out_rgba[i * 4 + 1] = store_working<Sample>(srgb_eotf(eg));
+            out_rgba[i * 4 + 2] = store_working<Sample>(srgb_eotf(eb));
+            out_rgba[i * 4 + 3] = store_working<Sample>(ea);
         }
     };
 
@@ -597,10 +596,10 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<uint16_
                 const uint16_t* p =
                     reinterpret_cast<const uint16_t*>(row + static_cast<size_t>(x) * src_bpp);
                 const size_t i = static_cast<size_t>(y) * w + x;
-                out_rgba[i * 4 + 0] = p[0];
-                out_rgba[i * 4 + 1] = p[1];
-                out_rgba[i * 4 + 2] = p[2];
-                out_rgba[i * 4 + 3] = rgba_half ? p[3] : float_to_half(1.0f);
+                out_rgba[i * 4 + 0] = store_working<Sample>(half_to_float(p[0]));
+                out_rgba[i * 4 + 1] = store_working<Sample>(half_to_float(p[1]));
+                out_rgba[i * 4 + 2] = store_working<Sample>(half_to_float(p[2]));
+                out_rgba[i * 4 + 3] = store_working<Sample>(rgba_half ? half_to_float(p[3]) : 1.0f);
             }
         }
         ok = true;
@@ -801,16 +800,17 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<uint16_
  * so leaving the codes unchanged lifts midtones against a reference monitor.
  * Scale RGB only. Alpha stays. Integer sRGB and ICC frames must not come here.
  */
-void rebase_untagged_scrgb(std::vector<uint16_t>& rgba, unsigned w, unsigned h, bool to_bt2020 = false) {
+template<class Sample>
+void rebase_untagged_scrgb(std::vector<Sample>& rgba, unsigned w, unsigned h, bool to_bt2020 = false) {
     constexpr float kScRgbWhiteNits = 80.f;
     const float scale = kScRgbWhiteNits / kSdrWhiteNits;
     const size_t npx = static_cast<size_t>(w) * h;
     if (w == 0 || h == 0 || rgba.size() < npx * 4) return;
     hdr_parallel_pixels(npx, to_bt2020 ? hdr_pixel_jobs(npx) : 1, [&](size_t begin, size_t end, unsigned) {
         for (size_t i = begin; i < end; i++) {
-            float r = half_to_float(rgba[i * 4 + 0]);
-            float g = half_to_float(rgba[i * 4 + 1]);
-            float b = half_to_float(rgba[i * 4 + 2]);
+            float r = read_working(rgba[i * 4 + 0]);
+            float g = read_working(rgba[i * 4 + 1]);
+            float b = read_working(rgba[i * 4 + 2]);
             if (to_bt2020) {
                 // Linear BT.709/scRGB D65 -> BT.2020 D65. Keep signed channels
                 // through the matrix: negative scRGB values can represent WCG.
@@ -820,9 +820,9 @@ void rebase_untagged_scrgb(std::vector<uint16_t>& rgba, unsigned w, unsigned h, 
                 if (!std::isfinite(b)) b = 0.f;
                 linear_bt709_to_bt2020(r, g, b);
             }
-            rgba[i * 4 + 0] = float_to_half(r * scale);
-            rgba[i * 4 + 1] = float_to_half(g * scale);
-            rgba[i * 4 + 2] = float_to_half(b * scale);
+            rgba[i * 4 + 0] = store_working<Sample>(r * scale);
+            rgba[i * 4 + 1] = store_working<Sample>(g * scale);
+            rgba[i * 4 + 2] = store_working<Sample>(b * scale);
         }
     });
     ALOGI("JXR scRGB rebase 80/203 %ux%u bt2020=%d", w, h, to_bt2020);
@@ -916,7 +916,10 @@ int encode_baseline_sdr_jpeg(unsigned w, unsigned h, const uint16_t* rgba, const
     const auto& srgb_codes = half_srgb_u8_table();
     hdr_parallel_pixels(pixels, hdr_pixel_jobs(pixels), [&](size_t begin, size_t end, unsigned) {
         for (size_t i = begin; i < end; ++i) {
-            for (unsigned c = 0; c < 3; ++c) rgb[i * 3 + c] = srgb_codes[rgba[i * 4 + c]];
+            float alpha=half_to_float(rgba[i*4+3]);if(!std::isfinite(alpha))alpha=0.f;
+            alpha=std::clamp(alpha,0.f,1.f);
+            for(unsigned c=0;c<3;++c)rgb[i*3+c]=alpha==1.f?srgb_codes[rgba[i*4+c]]:
+                linear_to_srgb_u8(half_to_float(rgba[i*4+c])*alpha);
         }
     });
 
@@ -937,6 +940,8 @@ int encode_baseline_sdr_jpeg(unsigned w, unsigned h, const uint16_t* rgba, const
             float r = half_to_float(rgba[i * 4 + 0]);
             float g = half_to_float(rgba[i * 4 + 1]);
             float b = half_to_float(rgba[i * 4 + 2]);
+            float alpha=half_to_float(rgba[i*4+3]);if(!std::isfinite(alpha))alpha=0.f;
+            alpha=std::clamp(alpha,0.f,1.f);r*=alpha;g*=alpha;b*=alpha;
             if (cg == UHDR_CG_DISPLAY_P3) {
                 linear_p3_to_bt709(r, g, b);
             } else {
@@ -1430,100 +1435,80 @@ int decode_jxr_memory(const uint8_t* data,size_t size,std::vector<uint16_t>& rgb
     return 0;
 }
 
-void scale_rgba_f16_max_edge(std::vector<uint16_t>& rgba, unsigned& w, unsigned& h,
-                             unsigned max_edge) {
-    if (max_edge == 0 || w == 0 || h == 0) return;
-    const unsigned long_edge = w > h ? w : h;
-    if (long_edge <= max_edge) return;
-
-    const float scale = static_cast<float>(max_edge) / static_cast<float>(long_edge);
-    const unsigned nw = std::max(1u, static_cast<unsigned>(w * scale));
-    const unsigned nh = std::max(1u, static_cast<unsigned>(h * scale));
-    std::vector<uint16_t> out(static_cast<size_t>(nw) * nh * 4);
-
-    auto h2f = [](uint16_t hv) -> float {
-        const uint32_t sign = (static_cast<uint32_t>(hv) & 0x8000u) << 16;
-        uint32_t exp = (hv >> 10) & 0x1fu;
-        uint32_t mant = hv & 0x3ffu;
-        uint32_t o;
-        if (exp == 0) {
-            if (mant == 0) {
-                o = sign;
-            } else {
-                exp = 1;
-                while ((mant & 0x400u) == 0) {
-                    mant <<= 1;
-                    exp--;
-                }
-                mant &= 0x3ffu;
-                o = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
-            }
-        } else if (exp == 31) {
-            o = sign | 0x7f800000u | (mant << 13);
-        } else {
-            o = sign | ((exp + (127 - 15)) << 23) | (mant << 13);
+int encode_still_export_f32(const float* src,unsigned w,unsigned h,int gamut,int mode,
+                            const char* path,StillEncodeQuality quality,const float* sdr_base) {
+    if(!src||!path||!w||!h||mode<0||mode>kExportJxlPq||uint64_t(w)*h>80000000)return -50;
+    const auto cg=export_gamut(gamut);const size_t pixels=size_t(w)*h;
+    if(mode==kExportJxl||mode==kExportJxlHdr||mode==kExportJxlPq)
+        return encode_jxl_f32(w,h,src,cg,mode!=kExportJxl,path,quality,mode==kExportJxlPq);
+    if(mode>=kExportAvif&&mode<=kExportAvifGainMap)
+        return encode_avif_f32(w,h,src,cg,mode-kExportAvif,path,quality,sdr_base);
+    if(mode==kExportJpeg) {
+        std::vector<uint8_t> rgba(pixels*4);
+        for(size_t i=0;i<pixels;++i) {
+            const float alpha=std::isfinite(src[i*4+3])?std::clamp(src[i*4+3],0.f,1.f):0.f;
+            for(unsigned c=0;c<3;++c)rgba[i*4+c]=linear_to_srgb_u8(src[i*4+c]*alpha);
+            rgba[i*4+3]=255;
         }
-        union {
-            uint32_t u;
-            float f;
-        } v{o};
-        return v.f;
-    };
-    auto f2h = [](float f) -> uint16_t {
-        union {
-            float f;
-            uint32_t u;
-        } v{f};
-        uint32_t x = v.u;
-        uint32_t sign = (x >> 16) & 0x8000u;
-        int32_t exp = static_cast<int32_t>((x >> 23) & 0xff) - 127 + 15;
-        uint32_t mant = x & 0x7fffffu;
-        if (exp <= 0) {
-            if (exp < -10) return static_cast<uint16_t>(sign);
-            mant |= 0x800000u;
-            uint32_t t = 14 - exp;
-            uint32_t m = mant >> t;
-            if ((mant >> (t - 1)) & 1u) m++;
-            return static_cast<uint16_t>(sign | m);
+        return encode_srgb_jpeg_u8(w,h,rgba.data(),path,cg,quality);
+    }
+    // Ultra HDR's public codec accepts linear half, not float32. Narrow only at
+    // this external boundary; its JPEG base is necessarily 8-bit.
+    std::vector<uint16_t> half(pixels*4);std::vector<uint8_t> base(sdr_base?pixels*4:0);
+    for(size_t i=0;i<pixels;++i) {
+        const float alpha=std::isfinite(src[i*4+3])?std::clamp(src[i*4+3],0.f,1.f):0.f;
+        for(unsigned c=0;c<3;++c) {
+            float v=src[i*4+c]*alpha;if(!std::isfinite(v))v=0.f;
+            half[i*4+c]=float_to_half(std::clamp(v,0.f,kMaxLinear));
+            if(sdr_base)base[i*4+c]=linear_to_srgb_u8(sdr_base[i*4+c]*alpha);
         }
-        if (exp >= 31) {
-            if (mant) return static_cast<uint16_t>(sign | 0x7e00u);
-            return static_cast<uint16_t>(sign | 0x7c00u);
-        }
-        uint32_t half = sign | (static_cast<uint32_t>(exp) << 10) | (mant >> 13);
-        if (mant & 0x1000u) half++;
-        return static_cast<uint16_t>(half);
-    };
+        half[i*4+3]=float_to_half(1.f);if(sdr_base)base[i*4+3]=255;
+    }
+    return encode_linear_rgba_f16_to_uhdr(w,h,half.data(),path,cg,0.f,true,sdr_base?base.data():nullptr,quality);
+}
 
-    for (unsigned y = 0; y < nh; y++) {
-        const unsigned sy0 = y * h / nh;
-        const unsigned sy1 = std::min(h, (y + 1) * h / nh);
-        for (unsigned x = 0; x < nw; x++) {
-            const unsigned sx0 = x * w / nw;
-            const unsigned sx1 = std::min(w, (x + 1) * w / nw);
-            float acc[4] = {0, 0, 0, 0};
-            unsigned cnt = 0;
-            for (unsigned sy = sy0; sy < sy1; sy++) {
-                for (unsigned sx = sx0; sx < sx1; sx++) {
-                    const size_t i = (static_cast<size_t>(sy) * w + sx) * 4;
-                    acc[0] += h2f(rgba[i + 0]);
-                    acc[1] += h2f(rgba[i + 1]);
-                    acc[2] += h2f(rgba[i + 2]);
-                    acc[3] += h2f(rgba[i + 3]);
-                    cnt++;
+// Area filtering in linear light. RGB is premultiplied only while filtering;
+// fractional boundary weights avoid uneven sampling at non-integer scales.
+template<class Sample>
+void scale_rgba_working(std::vector<Sample>& rgba,unsigned& w,unsigned& h,unsigned max_edge) {
+    const unsigned edge=std::max(w,h);
+    if(!max_edge||!w||!h||edge<=max_edge)return;
+    const unsigned nw=std::max(1u,static_cast<unsigned>(uint64_t(w)*max_edge/edge));
+    const unsigned nh=std::max(1u,static_cast<unsigned>(uint64_t(h)*max_edge/edge));
+    std::vector<Sample> out(size_t(nw)*nh*4);
+    for(unsigned y=0;y<nh;++y) {
+        const double top=double(y)*h/nh,bottom=double(y+1)*h/nh;
+        const unsigned y0=static_cast<unsigned>(top),y1=std::min(h,static_cast<unsigned>(std::ceil(bottom)));
+        for(unsigned x=0;x<nw;++x) {
+            const double left=double(x)*w/nw,right=double(x+1)*w/nw;
+            const unsigned x0=static_cast<unsigned>(left),x1=std::min(w,static_cast<unsigned>(std::ceil(right)));
+            double sum[4]={0,0,0,0},area=0;
+            for(unsigned sy=y0;sy<y1;++sy) {
+                const double wy=std::min(bottom,double(sy+1))-std::max(top,double(sy));
+                for(unsigned sx=x0;sx<x1;++sx) {
+                    const double weight=wy*(std::min(right,double(sx+1))-std::max(left,double(sx)));
+                    const size_t i=(size_t(sy)*w+sx)*4;
+                    const float a=read_working(rgba[i+3]);
+                    const double alpha=std::isfinite(a)?std::clamp(a,0.f,1.f):0.f;
+                    if(alpha>0)for(unsigned c=0;c<3;++c) {
+                        const float v=read_working(rgba[i+c]);
+                        if(std::isfinite(v))sum[c]+=double(v)*alpha*weight;
+                    }
+                    sum[3]+=alpha*weight;area+=weight;
                 }
             }
-            if (cnt == 0) cnt = 1;
-            const size_t o = (static_cast<size_t>(y) * nw + x) * 4;
-            out[o + 0] = f2h(acc[0] / cnt);
-            out[o + 1] = f2h(acc[1] / cnt);
-            out[o + 2] = f2h(acc[2] / cnt);
-            out[o + 3] = f2h(acc[3] / cnt);
+            const size_t o=(size_t(y)*nw+x)*4;
+            for(unsigned c=0;c<3;++c)out[o+c]=store_working<Sample>(sum[3]>0?static_cast<float>(sum[c]/sum[3]):0.f);
+            out[o+3]=store_working<Sample>(area>0?static_cast<float>(sum[3]/area):0.f);
         }
     }
-    rgba.swap(out);
-    w = nw;
-    h = nh;
+    rgba.swap(out);w=nw;h=nh;
+}
+void scale_rgba_f32_max_edge(std::vector<float>& rgba,unsigned& w,unsigned& h,unsigned max_edge) {
+    scale_rgba_working(rgba,w,h,max_edge);
+}
+void scale_rgba_f16_max_edge(std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,unsigned max_edge) {
+    scale_rgba_working(rgba,w,h,max_edge);
 }
 
 jxrc::ImageInfo inspect_jxr(const uint8_t* data,size_t size) {
@@ -1542,4 +1527,14 @@ jxrc::ImageInfo inspect_jxr(const uint8_t* data,size_t size) {
         case JxrPix::Rgb16:case JxrPix::Rgba16:case JxrPix::Gray16:info.bits=16;break;
         case JxrPix::Rgb101010:info.bits=10;break;default:break;}
     info.transfer=info.hdr?"Linear":"SDR";info.primaries="Source profile";return info;
+}
+
+int decode_jxr_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut) {
+    bool untagged=false;
+    if(!decode_jxr_from_memory(data,size,rgba,w,h,false,&untagged,gamut,0,nullptr))return -1;
+    if(untagged) {
+        rebase_untagged_scrgb(rgba,w,h,true);
+        if(gamut)*gamut=UHDR_CG_BT_2100;
+    }
+    return 0;
 }

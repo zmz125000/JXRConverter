@@ -1,3 +1,4 @@
+#include "working_pixels.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
  * JPEG XL → one linear RGBA_F16 working contract via libjxl's CMS.
@@ -188,7 +189,8 @@ bool is_linear_working_encoding(const JxlColorEncoding& src, uhdr_color_gamut_t 
  * [composite_alpha_on_black] is true only for JPEG/UHDR destinations.
  * @return 0 OK
  */
-int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out_rgba,
+template<class Sample>
+int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
                              unsigned& w, unsigned& h, uhdr_color_gamut_t* out_cg,
                              bool* out_force_hdr = nullptr, int* out_transfer_cicp = nullptr,
                              bool composite_alpha_on_black = true, unsigned thumbnail_edge = 0,
@@ -393,7 +395,8 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out_
         // linear values relative to intensity_target, not 203-nit SDR white.
         float peak_nits = hdr_cms ? cms_intensity : intensity;
         if (!std::isfinite(peak_nits) || peak_nits < 1.f) peak_nits = 1000.f;
-        scale = std::clamp(peak_nits / kSdrWhiteNits, 1.f, kMaxLinear);
+        if constexpr(std::is_same_v<Sample,float>)scale=std::max(peak_nits/kSdrWhiteNits,1.f);
+        else scale=std::clamp(peak_nits/kSdrWhiteNits,1.f,kMaxLinear);
     }
 
     const auto converted_sample = [&](size_t i, float* sample) {
@@ -420,14 +423,9 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out_
             a = 1.f;
         }
 
-        auto clamp_hf = [](float v) {
-            if (!std::isfinite(v) || v < 0.f) return 0.f;
-            if (v > kMaxLinear) return kMaxLinear;
-            return v;
-        };
-        rl = clamp_hf(rl);
-        gl = clamp_hf(gl);
-        bl = clamp_hf(bl);
+        rl = sanitize_working<Sample>(rl);
+        gl = sanitize_working<Sample>(gl);
+        bl = sanitize_working<Sample>(bl);
         sample[0] = rl;
         sample[1] = gl;
         sample[2] = bl;
@@ -451,12 +449,14 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out_
                         for (unsigned sx = sx0; sx < sx1; ++sx) {
                             float sample[4];
                             converted_sample(static_cast<size_t>(sy) * w + sx, sample);
-                            for (unsigned c = 0; c < 4; ++c) sum[c] += sample[c];
+                            for(unsigned c=0;c<3;++c)sum[c]+=sample[c]*sample[3];
+                            sum[3]+=sample[3];
                         }
                     }
                     const float count = static_cast<float>((sy1 - sy0) * (sx1 - sx0));
                     const size_t offset = (static_cast<size_t>(y) * nw + x) * 4;
-                    for (unsigned c = 0; c < 4; ++c) out_rgba[offset + c] = float_to_half(sum[c] / count);
+                    for(unsigned c=0;c<3;++c)out_rgba[offset+c]=store_working<Sample>(sum[3]>0.f?sum[c]/sum[3]:0.f);
+                    out_rgba[offset+3]=store_working<Sample>(sum[3]/count);
                 }
             }
         });
@@ -468,7 +468,7 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out_
             for (size_t i = begin; i < end; ++i) {
                 float sample[4];
                 converted_sample(i, sample);
-                for (unsigned c = 0; c < 4; ++c) out_rgba[i * 4 + c] = float_to_half(sample[c]);
+                for (unsigned c = 0; c < 4; ++c) out_rgba[i * 4 + c] = store_working<Sample>(sample[c]);
             }
         });
     }
@@ -486,4 +486,9 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<uint16_t>& out_
 int decode_jxl_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,
     uhdr_color_gamut_t* gamut,bool* hdr,int* transfer,bool composite,unsigned edge,bool bt2020,std::vector<uint8_t>* exif,int* depth) {
     return decode_jxl_impl(data,size,rgba,w,h,gamut,hdr,transfer,composite,edge,bt2020,exif,depth);
+}
+
+int decode_jxl_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,
+    uhdr_color_gamut_t* gamut,bool* hdr,int* transfer,bool bt2020,std::vector<uint8_t>* exif) {
+    return decode_jxl_impl(data,size,rgba,w,h,gamut,hdr,transfer,false,0,bt2020,exif,nullptr);
 }

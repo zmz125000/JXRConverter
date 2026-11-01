@@ -92,6 +92,7 @@ uint16_t float_to_half(float value) {
 
 struct Decoded {
     std::vector<uint8_t> pixels;
+    std::vector<float> linear, sdr;
     int w = 0;
     int h = 0;
     int format = 0;
@@ -247,7 +248,7 @@ void apply_raw_zones(float& r, float& g, float& b, float shadows, float midtones
 
 bool pack_image(const libraw_processed_image_t* img, int max_edge, int present, float panel_boost,
                 float exposure_ev, float highlight_stops, const rawlook::CameraLook* look, bool hdr_linear,
-                float shoulder, float camera_white, float shadows, float midtones, float highlights, Decoded& out) {
+                float shoulder, float camera_white, float shadows, float midtones, float highlights, Decoded& out, bool float_output = false) {
     if (!img || img->width == 0 || img->height == 0) return false;
     if (img->type != LIBRAW_IMAGE_BITMAP) return false;
     const int sw = img->width;
@@ -289,11 +290,14 @@ bool pack_image(const libraw_processed_image_t* img, int max_edge, int present, 
         base_at_anchor = look && !linear_hdr ? rawlook::tone_map(*look, anchor) : anchor;
     }
 
-    // Export HDR retains the camera-look SDR render in the same gamut. Append
-    // RGBA8 after the F16 plane so decode/encode share one JNI array and demosaic.
+    // Export retains a separate linear F32 camera-look SDR render. Legacy
+    // half callers append RGBA8 after the half plane for compatibility.
     const bool keep_sdr = present >= 3 && export_pixels_keep_sdr();
     const size_t sdr_bytes = keep_sdr ? static_cast<size_t>(dw) * dh * 4u : 0u;
-    out.pixels.assign(bytes + sdr_bytes, 0);
+    if(float_output) {
+        out.linear.resize(static_cast<size_t>(dw)*dh*4);
+        if(keep_sdr)out.sdr.resize(static_cast<size_t>(dw)*dh*4);
+    } else out.pixels.assign(bytes + sdr_bytes, 0);
     out.w = dw;
     out.h = dh;
     out.format = deep ? 1 : 0;
@@ -348,10 +352,14 @@ bool pack_image(const libraw_processed_image_t* img, int max_edge, int present, 
                         float base[3] = {rgb[0], rgb[1], rgb[2]};
                         apply_raw_zones(base[0], base[1], base[2], shadows, midtones, highlights);
                         const size_t sdr = bytes + (static_cast<size_t>(y) * dw + x) * 4u;
-                        for (int c = 0; c < 3; ++c) {
-                            out.pixels[sdr + c] = static_cast<uint8_t>(std::lround(rawlook::srgb_encode(base[c]) * 255.f));
+                        const size_t pixel=(static_cast<size_t>(y)*dw+x)*4;
+                        if(float_output) {
+                            for(int c=0;c<3;++c)out.sdr[pixel+c]=base[c];
+                            out.sdr[pixel+3]=1.f;
+                        } else {
+                            for (int c = 0; c < 3; ++c)out.pixels[sdr+c]=static_cast<uint8_t>(std::lround(rawlook::srgb_encode(base[c])*255.f));
+                            out.pixels[sdr+3]=255;
                         }
-                        out.pixels[sdr + 3] = 255;
                     }
                     if (hdr && look && !linear_hdr && hdr_shoulder > 0.f) {
                         // The curve's shoulder moves highlights toward white. Put the
@@ -399,13 +407,15 @@ bool pack_image(const libraw_processed_image_t* img, int max_edge, int present, 
                         for (int c = 0; c < 3; ++c) {
                             float v = hdr ? rgb[c] : raw_linear_sample(rgb[c], 0.f, highlight_stops, cap);
                             peak = std::max(peak, v);
-                            uint16_t half = float_to_half(v);
-                            out.pixels[o + static_cast<size_t>(c) * 2] = static_cast<uint8_t>(half & 0xff);
-                            out.pixels[o + static_cast<size_t>(c) * 2 + 1] = static_cast<uint8_t>(half >> 8);
+                            if(float_output)out.linear[(static_cast<size_t>(y)*dw+x)*4+c]=v;
+                            else {
+                                uint16_t half = float_to_half(v);
+                                out.pixels[o+static_cast<size_t>(c)*2]=static_cast<uint8_t>(half&0xff);
+                                out.pixels[o+static_cast<size_t>(c)*2+1]=static_cast<uint8_t>(half>>8);
+                            }
                         }
-                        uint16_t alpha = 0x3c00;
-                        out.pixels[o + 6] = static_cast<uint8_t>(alpha & 0xff);
-                        out.pixels[o + 7] = static_cast<uint8_t>(alpha >> 8);
+                        if(float_output)out.linear[(static_cast<size_t>(y)*dw+x)*4+3]=1.f;
+                        else {out.pixels[o+6]=0;out.pixels[o+7]=0x3c;}
                     }
                 }
             }
@@ -724,7 +734,7 @@ float highlight_fit(const LibRaw& raw, float sat_fit) {
 bool process_open_raw(HeadroomRaw& raw, const uint8_t* tiff, size_t tiff_len, int max_edge, int present, float panel_boost,
                       int demosaic_qual, int wb_mode, float exposure_ev, float highlight_stops, int kelvin,
                       bool hdr_linear, bool camera_look, float shoulder, float shadows, float midtones, float highlights,
-                      Decoded& out) {
+                      Decoded& out, bool float_output = false) {
     configure_process(raw, present, max_edge, demosaic_qual, wb_mode, kelvin);
     if (raw.unpack() != LIBRAW_SUCCESS) return false;
     if (raw.dcraw_process() != LIBRAW_SUCCESS) return false;
@@ -759,7 +769,7 @@ bool process_open_raw(HeadroomRaw& raw, const uint8_t* tiff, size_t tiff_len, in
     }
     const float shoulder_amount = std::isfinite(shoulder) ? std::clamp(shoulder, 0.f, 1.f) : 0.5f;
     bool ok = pack_image(img, max_edge, present, panel_boost, pack_ev, highlight_stops, look_ptr, linear_hdr,
-                          shoulder_amount, camera_white, shadows, midtones, highlights, out);
+                          shoulder_amount, camera_white, shadows, midtones, highlights, out, float_output);
     LibRaw::dcraw_clear_mem(img);
     return ok;
 }
@@ -795,4 +805,18 @@ bool raw_jpeg_thumbnail(const uint8_t* data,size_t size,std::vector<uint8_t>& jp
     if(!image || error!=LIBRAW_SUCCESS || image->type!=LIBRAW_IMAGE_JPEG || image->data_size<2 || image->data_size>512u*1024*1024)return false;
     if(image->data[0]!=255 || image->data[1]!=216)return false;
     jpeg.assign(image->data,image->data+image->data_size);return true;
+}
+
+int decode_raw_f32(const uint8_t* data,size_t size,const jxrc::RawControls& controls,bool hdr,unsigned max_edge,
+                   std::vector<float>& pixels,std::vector<float>& sdr,unsigned& w,unsigned& h,int& gamut) {
+    auto storage=std::make_unique<HeadroomRaw>();auto& raw=*storage;
+    request_embedded_matrix(raw,controls.white_balance);
+    if(raw.open_buffer(data,size)!=LIBRAW_SUCCESS)return -1;
+    if(uint64_t(raw.imgdata.sizes.width)*raw.imgdata.sizes.height>80000000)return -2;
+    Decoded result;
+    if(!process_open_raw(raw,data,size,max_edge,hdr?(controls.hdr_mode==jxrc::RawHdrMode::source?3:4):1,
+        (controls.hdr_mode==jxrc::RawHdrMode::source?10000.f:float(controls.target_nits))/203.f,
+        3,controls.white_balance,controls.exposure,controls.highlight_stops,controls.kelvin,
+        controls.linear_hdr,controls.camera_look,controls.shoulder,controls.shadows,controls.midtones,controls.highlights,result,true))return -3;
+    w=result.w;h=result.h;gamut=result.gamut;pixels=std::move(result.linear);sdr=std::move(result.sdr);return 0;
 }

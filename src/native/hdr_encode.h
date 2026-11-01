@@ -109,9 +109,10 @@ inline float half_to_float(uint16_t h) {
 }
 
 /**
- * Shared contract for native still decode, direct Bitmap pack, and JPEG/UHDR encode.
+ * Legacy half-float contract for display adapters and the Ultra HDR codec boundary.
  *
- * Every decoder must hand off straight-alpha RGBA F16 in linear light. [cg] names
+ * These adapters accept straight-alpha RGBA F16 in linear light; the export
+ * processing pipeline uses F32. [cg] names
  * the actual RGB primaries of those samples; it is never a source-profile hint.
  * 1.0 is SDR reference white (203 nits), HDR is represented by values above 1.0,
  * and transfer conversion must already be complete before this API is called.
@@ -334,6 +335,9 @@ int pack_linear_f16_for_direct(std::vector<uint16_t>& rgba, unsigned w, unsigned
 /** Straight-alpha linear F16 → JXL. PQ uses uint16 codes, linear uses F16. Mutates RGBA. */
 int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality = 1, bool pq = false);
+/** Straight-alpha linear F32 → JXL, preserving the full working precision. */
+int encode_jxl_f32(unsigned w, unsigned h, const float* rgba, uhdr_color_gamut_t cg,
+                   bool hdr, const char* path, StillEncodeQuality quality, bool pq);
 
 /** Straight-alpha sRGB-curve RGBA8 → 8-bit SDR JXL. */
 int encode_jxl_u8(unsigned w, unsigned h, const uint8_t* rgba, uhdr_color_gamut_t cg,
@@ -362,3 +366,5 @@ struct StillSourceColor {
 };
 int encode_jxl_source(unsigned w, unsigned h, const void* rgba, bool sixteen,
                       const StillSourceColor& color, const char* path, StillEncodeQuality quality);
+
+int encode_avif_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,int,const char*,StillEncodeQuality,const float* sdr_base = nullptr);
