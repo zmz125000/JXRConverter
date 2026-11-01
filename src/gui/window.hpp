@@ -21,6 +21,7 @@ class QSpinBox;
 class QStackedWidget;
 class QWidget;
 namespace jxrc::gui {
+class Updater;
 class FileListView;
 class FileTableView;
 class ThumbnailDelegate;
@@ -61,6 +62,7 @@ private:
     Catalog* catalog_;
     CatalogFilter* proxy_;
     ConversionQueue* queue_;
+    Updater* updater_=nullptr;
     QItemSelectionModel* selection_;
     FileListView* list_;
     FileTableView* table_;

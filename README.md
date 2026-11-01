@@ -182,3 +182,23 @@ encoding. AVIF quantizes directly to its selected bit depth; JPEG composites
 alpha onto black in linear light before encoding. RAW gain-map SDR bases retain
 float precision until encoding. JPEG gain-map decoding and encoding use F16 only
 at the Ultra HDR API boundary, and LibRaw supplies 16-bit demosaiced samples.
+
+Release packages use one shared `jxrc` codec engine for the GUI and CLI. Keep the
+whole extracted folder together when using the CLI, including its libraries.
+On macOS the GUI app can be moved separately; its updater and licenses are inside
+the app bundle. Windows packages carry
+the required MSVC runtime DLLs directly and need no bundled VC installer.
+
+The **Update** button checks stable releases in `zmz125000/JXRConverter`, downloads
+the matching OS/CPU desktop archive, verifies its SHA-256 checksum, extracts it,
+and restarts after installation. Updates require a writable extracted release
+folder and the system `tar` tool (built into current Windows/macOS and standard
+Linux installations). Conversion must finish before updating. Replacement errors
+restore the prior files and are reported on relaunch. The package manifest tracks
+obsolete program files; user images and settings are preserved. Forks can set
+`JXRC_UPDATE_REPOSITORY=owner/repository` at configure time.
+
+Before `cpack`, run `python tools/prepare_release_sources.py build`. Release CI
+also publishes `JXRConverter-<version>-source.tar.gz` with native dependency sources
+and the matching Qt/ICU source archives. See [redistribution](docs/redistribution.md)
+and the [package audit](docs/release-audit.md).

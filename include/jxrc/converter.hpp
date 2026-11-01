@@ -1,4 +1,5 @@
 #pragma once
+#include "export.hpp"
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -50,7 +51,7 @@ struct Result {
 };
 // Throws std::invalid_argument for invalid controls, std::runtime_error for codec/I/O errors.
 // Options are captured per call. Output is staged beside the destination before publication.
-Result convert(const std::filesystem::path& input, const std::filesystem::path& output, const Options& options = {});
+JXRC_API Result convert(const std::filesystem::path& input, const std::filesystem::path& output, const Options& options = {});
 struct ImageInfo {
     unsigned width = 0, height = 0, bits = 0;
     bool raw = false, gainmap = false, hdr = false;
@@ -60,8 +61,8 @@ struct Preview {
     unsigned width = 0, height = 0;
     std::vector<uint8_t> rgba; // sRGB display thumbnail, straight alpha; not an export intermediate.
 };
-ImageInfo inspect(const std::filesystem::path& input);
-Preview preview(const std::filesystem::path& input, unsigned max_edge = 384);
-void validate(const Options& options);
-std::string version();
+JXRC_API ImageInfo inspect(const std::filesystem::path& input);
+JXRC_API Preview preview(const std::filesystem::path& input, unsigned max_edge = 384);
+JXRC_API void validate(const Options& options);
+JXRC_API std::string version();
 } // namespace jxrc

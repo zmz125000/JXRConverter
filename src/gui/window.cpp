@@ -1,6 +1,7 @@
 #include "window.hpp"
 #include "views.hpp"
 #include "style.hpp"
+#include "updater.hpp"
 #include <QStyleHints>
 #include <QMenu>
 #include <QClipboard>
@@ -131,6 +132,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
+    updater_=new Updater(this);auto* updateButton=new QPushButton("Update");updateButton->setObjectName("updateApplication");toolbar->addWidget(updateButton);
+    connect(updateButton,&QPushButton::clicked,this,[this]{if(!queue_->busy())updater_->start();});
+    connect(updater_,&Updater::statusChanged,updateButton,&QPushButton::setText);
+    connect(updater_,&Updater::busyChanged,this,[this,updateButton](bool busy){updateButton->setEnabled(!busy);updateCounts();});
     auto* theme=combo({"Auto","Light","Dark"},"theme");toolbar->addWidget(theme);
     theme->setCurrentIndex(QSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
     connect(theme,&QComboBox::currentIndexChanged,this,[theme]{QSettings().setValue("appearance/theme",theme->currentIndex());applyDesktopStyle(theme->currentIndex());});
@@ -408,7 +413,8 @@ void MainWindow::updatePresentation() {
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& index:selection_->selectedRows(0))out<<index.data(Catalog::PathRole).toString();return out;}
 void MainWindow::updateCounts() {
-    const int selected=selection_->selectedRows(0).size();const bool busy=queue_->busy(),hasTargets=!selectedTargets().isEmpty();
+    const int selected=selection_->selectedRows(0).size();const bool busy=queue_->busy()||(updater_&&updater_->busy()),hasTargets=!selectedTargets().isEmpty();
+    if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy);
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
     selected_->setEnabled(selected>0&&hasTargets&&!busy);visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(busy);remove_->setEnabled(selected>0&&!busy);clear_->setEnabled(catalog_->rowCount()>0&&!busy&&!catalog_->scanning());workers_->setEnabled(!busy);
 }
@@ -422,7 +428,7 @@ void MainWindow::showMetadata() {
 }
 void MainWindow::convertFiles(bool selected) {
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
-    if(paths.isEmpty()||queue_->busy())return;
+    if(paths.isEmpty()||queue_->busy()||(updater_&&updater_->busy()))return;
     try {
         const auto targets=selectedTargets();if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");

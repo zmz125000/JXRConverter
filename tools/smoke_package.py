@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 build = Path(sys.argv[1]).resolve()
-archives = sorted(build.glob('JXRConverter-*.zip')) + sorted(build.glob('JXRConverter-*.tar.gz'))
+archives = sorted(build.glob('JXRConverter-*-desktop.zip')) + sorted(build.glob('JXRConverter-*-desktop.tar.gz'))
 if not archives:
     sys.exit('No package archive found')
 for archive in archives:
@@ -26,6 +26,24 @@ for archive in archives:
             sys.exit(f'Expected one installed CLI and GUI in {archive.name}; '
                      f'found CLI={cli_matches}, GUI={gui_matches}')
         cli, gui = cli_matches[0], gui_matches[0]
+        package_root = cli.parent
+        if list(package_root.glob('vc_redist*.exe')):
+            sys.exit('The package must contain app-local runtime DLLs, not a VC installer')
+        if not (package_root / 'share/JXRConverter/package-files.txt').is_file():
+            sys.exit('Missing package manifest for updates')
+        data_root = (package_root / 'jxrconverter.app/Contents/Resources/share/JXRConverter'
+                     if sys.platform == 'darwin' else package_root / 'share/JXRConverter')
+        if not (data_root / 'licenses/qtbase').is_dir():
+            sys.exit('Missing Qt license texts')
+        helper = (package_root / 'jxrconverter.app/Contents/Helpers/jxrc-update'
+                  if sys.platform == 'darwin' else package_root / ('jxrc-update' + suffix))
+        if not helper.is_file():
+            sys.exit('Missing standalone update helper')
+        if os.name == 'nt':
+            for name in ('jxrc.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'msvcp140_2.dll',
+                         'vcruntime140.dll', 'vcruntime140_1.dll'):
+                if not (package_root / name).is_file():
+                    sys.exit(f'Missing app-local runtime: {name}')
         env = os.environ.copy()
         qt_root = env.pop('QT_ROOT_DIR', '') or env.get('QTDIR', '')
         for name in ('QT_PLUGIN_PATH', 'QML2_IMPORT_PATH', 'QTDIR', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH'):
@@ -45,6 +63,9 @@ for archive in archives:
         subprocess.run([str(gui), '--version'], env=env, check=True)
         if sys.platform.startswith('linux'):
             dependencies = subprocess.check_output(['ldd', str(gui)], env=env, text=True)
+            engine = [line for line in dependencies.splitlines() if 'libjxrc.so' in line]
+            if not engine or any(str(root) not in line for line in engine):
+                sys.exit(f'The shared engine must resolve inside the package:\n{dependencies}')
             qt_libraries = [line for line in dependencies.splitlines() if 'libQt6' in line]
             if not qt_libraries or any(str(root) not in line for line in qt_libraries):
                 sys.exit(f'Qt libraries must resolve inside the extracted package:\n{dependencies}')

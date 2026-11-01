@@ -79,17 +79,15 @@ downloads and uploads the inner archives automatically.
 
 Archive inspection found no SDK headers, static/import libraries, PDBs, CMake
 files, build logs or test executables. Linux's largest runtime dependency is
-ICU data (about 31 MiB); Windows includes the Visual C++ redistributable
-installer (about 18 MiB) and Qt's graphics support DLLs. These are retained for
-runtime compatibility. If the Visual C++ runtime is missing on Windows, run
-`vc_redist.x64.exe` before launching either application (older 0.1.1 samples place
-it under `bin/`; new portable packages place executables at the extracted root).
+ICU data (about 31 MiB); Older Windows samples include a Visual C++ redistributable installer and Qt's optional shader compiler DLLs. New packages replace the installer with app-local
+CRT DLLs and omit the optional shader compiler payloads; no installer step is
+required. Executables remain at the extracted root.
 
-Deployment now excludes optional networking/TLS, generic embedded input and
-EGL framebuffer plugins, plus embedded platform plugins, using Qt's
+Deployment excludes optional network-information, image-format, generic embedded
+input and EGL framebuffer plugins, plus embedded platform plugins, using Qt's
 [deployment selection options](https://doc.qt.io/qt-6/qt-generate-deploy-app-script.html).
-Desktop display backends, image codecs, input methods, ICU and dependency
-licenses remain included. The samples predate these exclusions; new package
+Desktop display backends, TLS for updates, input methods, ICU and dependency
+licenses remain included. Image codecs are provided by the native engine. The samples predate these exclusions; new package
 sizes have not been measured.
 
 ## Integration fixes
@@ -104,3 +102,7 @@ The Ultra HDR CPU-budget adaptation still applies to a generated build-tree
 copy; it does not modify downloaded sources. LocalViewer source caches are
 reused only if their HEAD matches the requested release tag, so dependency
 updates cannot silently keep an older cached release.
+
+The GUI and CLI share the `jxrc` engine by default. The source/license audit and
+source release process are documented in [release-audit.md](release-audit.md) and
+[redistribution.md](redistribution.md).

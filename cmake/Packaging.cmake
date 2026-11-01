@@ -2,24 +2,40 @@ option(JXRC_DEPLOY_QT "Bundle Qt runtime dependencies when installing the GUI" O
 if(JXRC_DEPLOY_QT AND NOT JXRC_BUILD_GUI)
     message(FATAL_ERROR "JXRC_DEPLOY_QT requires JXRC_BUILD_GUI")
 endif()
+set(jxrc_runtime_data "${CMAKE_INSTALL_DATADIR}/JXRConverter")
+if(APPLE AND JXRC_BUILD_GUI)
+    set(jxrc_runtime_data "jxrconverter.app/Contents/Resources/share/JXRConverter")
+endif()
 install(FILES README.md COPYING NOTICE
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/JXRConverter COMPONENT Runtime)
-install(FILES docs/dependencies.md docs/build-warnings.md
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/JXRConverter/docs COMPONENT Runtime)
+    DESTINATION ${jxrc_runtime_data} COMPONENT Runtime)
+install(FILES docs/dependencies.md docs/build-warnings.md docs/release-audit.md docs/redistribution.md
+    DESTINATION ${jxrc_runtime_data}/docs COMPONENT Runtime)
 # Retain dependency licenses and patents, including upstream submodules.
 foreach(source libultrahdr jpeg libjxl libaom libavif libraw jpegxr_src exiv2 zlib libpng libwebp libtiff stb)
     if(DEFINED ${source}_SOURCE_DIR)
         file(GLOB_RECURSE licenses LIST_DIRECTORIES FALSE
             "${${source}_SOURCE_DIR}/*LICENSE*" "${${source}_SOURCE_DIR}/*COPYING*"
-            "${${source}_SOURCE_DIR}/*COPYRIGHT*" "${${source}_SOURCE_DIR}/*PATENTS*")
+            "${${source}_SOURCE_DIR}/*COPYRIGHT*" "${${source}_SOURCE_DIR}/*PATENTS*"
+            "${${source}_SOURCE_DIR}/*license*" "${${source}_SOURCE_DIR}/*copying*"
+            "${${source}_SOURCE_DIR}/*copyright*" "${${source}_SOURCE_DIR}/*NOTICE*")
         foreach(license IN LISTS licenses)
             file(RELATIVE_PATH relative "${${source}_SOURCE_DIR}" "${license}")
             get_filename_component(folder "${relative}" DIRECTORY)
             install(FILES "${license}" DESTINATION
-                "${CMAKE_INSTALL_DATADIR}/JXRConverter/licenses/${source}/${folder}" COMPONENT Runtime)
+                "${jxrc_runtime_data}/licenses/${source}/${folder}" COMPONENT Runtime)
         endforeach()
     endif()
 endforeach()
+if(JXRC_DEPLOY_QT)
+    # These notices are collected from the exact upstream Qt/ICU source versions.
+    install(CODE "if(NOT EXISTS \"${PROJECT_BINARY_DIR}/runtime-licenses/qtbase\")
+message(FATAL_ERROR \"Run python tools/prepare_release_sources.py ${PROJECT_BINARY_DIR} before packaging\")
+endif()" COMPONENT Runtime)
+    install(DIRECTORY "${PROJECT_BINARY_DIR}/runtime-licenses/" DESTINATION "${jxrc_runtime_data}/licenses" COMPONENT Runtime)
+    # Generated last, after Qt deployment: the updater can remove superseded files.
+    configure_file("${PROJECT_SOURCE_DIR}/cmake/PackageManifest.cmake.in" "${PROJECT_BINARY_DIR}/PackageManifest.cmake" @ONLY)
+    install(SCRIPT "${PROJECT_BINARY_DIR}/PackageManifest.cmake" COMPONENT Runtime)
+endif()
 set(CPACK_PACKAGE_NAME JXRConverter)
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_VENDOR JXRConverter)

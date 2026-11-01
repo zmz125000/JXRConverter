@@ -1,5 +1,6 @@
 #pragma once
 
+#include "jxrc/export.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <system_error>
@@ -7,14 +8,16 @@
 #include <vector>
 
 // A budget belongs to the calling conversion, not to the process or GUI pool.
-inline thread_local unsigned jxrc_codec_threads = 0;
+JXRC_API unsigned jxrc_thread_budget();
+JXRC_API void jxrc_set_thread_budget(unsigned);
 struct JxrcThreadBudget {
     unsigned previous;
-    explicit JxrcThreadBudget(unsigned count) : previous(jxrc_codec_threads) { jxrc_codec_threads = count; }
-    ~JxrcThreadBudget() { jxrc_codec_threads = previous; }
+    explicit JxrcThreadBudget(unsigned count) : previous(jxrc_thread_budget()) { jxrc_set_thread_budget(count); }
+    ~JxrcThreadBudget() { jxrc_set_thread_budget(previous); }
 };
 inline unsigned jxrc_limit_threads(unsigned count) {
-    return std::max(1u, jxrc_codec_threads ? std::min(count, jxrc_codec_threads) : count);
+    const unsigned budget = jxrc_thread_budget();
+    return std::max(1u, budget ? std::min(count, budget) : count);
 }
 
 // Reader pages can decode concurrently. Share the cores and avoid starting

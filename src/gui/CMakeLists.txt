@@ -1,4 +1,4 @@
-find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Test)
+find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Network Test)
 option(JXRC_USE_SYSTEM_EXIV2 "Use an installed Exiv2 instead of the pinned current release" OFF)
 if(JXRC_USE_SYSTEM_EXIV2)
     find_package(exiv2 REQUIRED CONFIG)
@@ -30,11 +30,26 @@ elseif(TARGET exiv2lib)
 else()
     message(FATAL_ERROR "The Exiv2 package does not export a supported CMake target")
 endif()
-add_library(jxrc_desktop STATIC catalog.cpp catalog.hpp queue.cpp queue.hpp views.cpp views.hpp window.cpp window.hpp style.cpp style.hpp)
+add_library(jxrc_desktop STATIC catalog.cpp catalog.hpp queue.cpp queue.hpp views.cpp views.hpp window.cpp window.hpp style.cpp style.hpp updater.cpp updater.hpp)
 set_target_properties(jxrc_desktop PROPERTIES AUTOMOC ON)
 target_include_directories(jxrc_desktop PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(jxrc_desktop PUBLIC jxrc Qt6::Widgets ${JXRC_EXIV2_TARGET})
+target_link_libraries(jxrc_desktop PUBLIC jxrc Qt6::Widgets Qt6::Network ${JXRC_EXIV2_TARGET})
+set(JXRC_UPDATE_REPOSITORY "zmz125000/JXRConverter" CACHE STRING "GitHub owner/repository for release updates")
+if(NOT JXRC_UPDATE_REPOSITORY MATCHES "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+    message(FATAL_ERROR "Invalid JXRC_UPDATE_REPOSITORY")
+endif()
+target_compile_definitions(jxrc_desktop PRIVATE JXRC_UPDATE_REPOSITORY="${JXRC_UPDATE_REPOSITORY}" JXRC_PACKAGE_SYSTEM="${CMAKE_SYSTEM_NAME}")
+add_executable(jxrc_update update_helper.cpp)
+set_target_properties(jxrc_update PROPERTIES OUTPUT_NAME jxrc-update RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+if(MSVC)
+    # The helper is copied out of the installation before launch; it must not
+    # keep the app's runtime DLLs locked during replacement.
+    set_property(TARGET jxrc_update PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+elseif(MINGW)
+    target_link_options(jxrc_update PRIVATE -municode -static)
+endif()
 add_executable(jxrconverter WIN32 MACOSX_BUNDLE main.cpp)
+add_dependencies(jxrconverter jxrc_update)
 qt_add_resources(jxrconverter app_icons PREFIX "/icons"
     BASE "${PROJECT_SOURCE_DIR}/assets/icons"
     FILES "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.png")
@@ -62,18 +77,42 @@ endif()
 install(FILES "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.svg"
     DESTINATION "${CMAKE_INSTALL_DATADIR}/icons/hicolor/scalable/apps" COMPONENT Runtime)
 install(TARGETS jxrconverter RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime BUNDLE DESTINATION . COMPONENT Runtime)
+if(APPLE)
+    install(TARGETS jxrc_update RUNTIME DESTINATION "jxrconverter.app/Contents/Helpers" COMPONENT Runtime)
+    if(JXRC_SHARED_ENGINE)
+        install(TARGETS jxrc LIBRARY DESTINATION "jxrconverter.app/Contents/Frameworks" COMPONENT Runtime NAMELINK_SKIP)
+    endif()
+else()
+    install(TARGETS jxrc_update RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
+endif()
 option(JXRC_DEPLOY_QT "Bundle Qt runtime dependencies when installing the GUI" OFF)
 if(JXRC_DEPLOY_QT)
     if(Qt6_VERSION VERSION_LESS 6.10)
         message(FATAL_ERROR "Runtime packaging requires Qt 6.10 or newer")
     endif()
+    set(jxrc_deploy_options)
+    set(jxrc_extra_excluded_plugins)
+    if(WIN32 OR APPLE)
+        # Use the native TLS backend, avoiding an extra OpenSSL distribution.
+        list(APPEND jxrc_extra_excluded_plugins qopensslbackend)
+    endif()
+    if(WIN32)
+        list(APPEND jxrc_deploy_options --no-system-d3d-compiler --no-system-dxc-compiler --no-opengl-sw)
+        set(CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS_SKIP TRUE)
+        set(CMAKE_INSTALL_UCRT_LIBRARIES FALSE)
+        include(InstallRequiredSystemLibraries)
+        if(NOT CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS)
+            message(FATAL_ERROR "MSVC runtime DLLs were not found for app-local deployment")
+        endif()
+        install(PROGRAMS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS} DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT Runtime)
+    endif()
     qt6_generate_deploy_app_script(TARGET jxrconverter OUTPUT_SCRIPT deploy_script
-        NO_TRANSLATIONS INCLUDE_PLUGINS qoffscreen
-        # Local file conversion needs neither network/TLS plugins nor embedded
-        # framebuffer/input backends. Keep desktop platforms, themes, image
-        # codecs and input methods, including Wayland and X11 on Linux.
-        EXCLUDE_PLUGIN_TYPES networkinformation tls generic egldeviceintegrations
-        EXCLUDE_PLUGINS qeglfs qlinuxfb qvkkhrdisplay qminimalegl)
+        NO_TRANSLATIONS NO_COMPILER_RUNTIME INCLUDE_PLUGINS qoffscreen
+        DEPLOY_TOOL_OPTIONS ${jxrc_deploy_options}
+        # Native codecs provide image decoding. Keep TLS for release updates,
+        # plus desktop platforms, themes and input methods.
+        EXCLUDE_PLUGIN_TYPES networkinformation generic egldeviceintegrations imageformats
+        EXCLUDE_PLUGINS qeglfs qlinuxfb qvkkhrdisplay qminimalegl ${jxrc_extra_excluded_plugins})
     install(SCRIPT "${deploy_script}" COMPONENT Runtime)
 endif()
 if(JXRC_BUILD_TESTS)
