@@ -122,7 +122,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     thumbnailFit_->setToolTip("Fit shows the whole image. Fill crops the image to fill its thumbnail cell. Click to switch.");viewBar->addWidget(thumbnailFit_);
     viewBar->addWidget(new QLabel("Minimum size"));
     size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(100,500);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(200);size_->setFixedWidth(140);
-    size_->setToolTip("Minimum grid cell width in dp (100–500). Columns grow to fill the available width.");viewBar->addWidget(size_);
+    size_->setToolTip("Minimum grid cell width in dp (100–500). Like LocalViewer, columns adapt to this minimum plus fixed gaps, and cells stretch evenly to fill the available width.");viewBar->addWidget(size_);
     auto* sizeValue=new QLabel("200 dp");sizeValue->setMinimumWidth(48);viewBar->addWidget(sizeValue);
     connect(size_,&QSlider::valueChanged,this,[this,sizeValue](int value){const int snapped=((value+5)/10)*10;if(value!=snapped){size_->setValue(snapped);return;}sizeValue->setText(QString::number(value)+" dp");});layout->addLayout(viewBar);
     views_=new QStackedWidget;list_=new FileListView;table_=new FileTableView;delegate_=new ThumbnailDelegate(list_);list_->setItemDelegate(delegate_);

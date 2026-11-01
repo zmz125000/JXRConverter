@@ -113,14 +113,20 @@ void FileListView::resizeEvent(QResizeEvent* event) {
     QListView::resizeEvent(event);updateCellSize();
 }
 void FileListView::updateCellSize() {
-    // Match LocalViewer's adaptive columns: minimum cell width, fixed gutters,
-    // and leftover width shared by all cells. Qt geometry uses logical pixels.
+    // LocalViewer 535800129: GridCells.Adaptive chooses columns from the
+    // minimum cell width plus fixed gaps, then stretches the cells to fill
+    // the content width. Qt geometry is already in logical pixels (dp).
     constexpr int gutter=10;
     constexpr int margin=5;
     const int available=std::max(1,viewport()->width()-2*margin);
-    const int columns=std::max(1,(available+gutter)/(minimumCell_+gutter));
-    const int slot=std::max(1,(available+gutter)/columns);
-    const int edge=grid_?std::max(1,slot-30):minimumCell_;
+    const int columns=std::max(1,(available+gutter)/(std::max(1,minimumCell_)+gutter));
+    // QListView compares the next slot against QRect::right() (inclusive).
+    // Reserve one pixel in width allocation so the final column does not wrap.
+    const int cell=std::max(1,(available-gutter*(columns-1)-1)/columns);
+    // QListView slots include the gutter; the delegate paints a 5 dp inset
+    // on both sides, leaving the fitted cell width and a fixed 10 dp gap.
+    const int slot=cell+gutter;
+    const int edge=grid_?std::max(1,cell-20):minimumCell_;
     if(auto* delegate=dynamic_cast<ThumbnailDelegate*>(itemDelegate())){delegate->grid=grid_;delegate->edge=edge;delegate->wide=wide_;}
     setGridSize(grid_?QSize(slot,(wide_?qRound(edge*9.0/16):edge)+94):QSize{});
     setIconSize(QSize(edge,edge));doItemsLayout();viewport()->update();
@@ -146,7 +152,7 @@ void FileTableView::hideEvent(QHideEvent* e){QTableView::hideEvent(e);ThumbnailF
 void FileTableView::dragEnterEvent(QDragEnterEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
 void FileTableView::dragMoveEvent(QDragMoveEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
 void FileTableView::dropEvent(QDropEvent* e){if(e->mimeData()->hasUrls()){emit pathsDropped(paths(e->mimeData()));e->acceptProposedAction();}}
-QSize ThumbnailDelegate::sizeHint(const QStyleOptionViewItem&,const QModelIndex&) const {return grid?QSize(edge+24,thumbnailHeight()+94):QSize(240,std::clamp(edge/2+20,52,156));}
+QSize ThumbnailDelegate::sizeHint(const QStyleOptionViewItem&,const QModelIndex&) const {return grid?QSize(edge+30,thumbnailHeight()+94):QSize(240,std::clamp(edge/2+20,52,156));}
 void ThumbnailDelegate::paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const {
     painter->save();painter->setRenderHint(QPainter::Antialiasing);
     const bool selected=option.state&QStyle::State_Selected;

@@ -127,8 +127,14 @@ private slots:
     }
     void scrollingAndCellShape() {
         QStandardItemModel model(200,1);FileListView list;ThumbnailDelegate delegate;
-        list.setItemDelegate(&delegate);list.setModel(&model);list.resize(400,300);list.setPresentation(true,200);list.show();
+        list.setItemDelegate(&delegate);list.setModel(&model);list.resize(640,300);list.setPresentation(true,200);list.show();
         QVERIFY(QTest::qWaitForWindowExposed(&list));
+        // LocalViewer's adaptive rule includes the fixed gaps when choosing
+        // columns: two 200 dp cells fit here, then stretch to fill the row.
+        QTRY_COMPARE(list.visualRect(model.index(1,0)).top(),list.visualRect(model.index(0,0)).top());
+        QTRY_VERIFY(list.visualRect(model.index(2,0)).top()>list.visualRect(model.index(0,0)).top());
+        const int unused=list.viewport()->width()-list.visualRect(model.index(1,0)).right()-1;
+        QVERIFY(unused>=1&&unused<=2);
         const int squareHeight=list.gridSize().height();list.setPresentation(true,200,true);
         QVERIFY(list.gridSize().height()<squareHeight);QVERIFY(delegate.wide);
         list.setPresentation(false,100);auto* bar=list.verticalScrollBar();QTRY_VERIFY(bar->maximum()>200);bar->setSingleStep(40);bar->setValue(0);
