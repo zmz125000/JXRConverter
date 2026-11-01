@@ -4,6 +4,7 @@
 #include <QStyleHints>
 #include <QMenu>
 #include <QClipboard>
+#include <QButtonGroup>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
@@ -106,9 +107,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* date:{dateFrom_,dateTo_}){date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setEnabled(false);}
     dates->addWidget(dateEnabled_);dates->addWidget(dateFrom_);dates->addWidget(new QLabel("to"));dates->addWidget(dateTo_);
     auto* reset=new QPushButton("Reset filters");filters->addWidget(reset);dates->addStretch();
-    auto* viewBar=new QHBoxLayout;viewMode_=combo({"Grid","List","Details"},"viewMode");sort_=new QComboBox;sort_->setObjectName("sortField");
+    auto* viewBar=new QHBoxLayout;viewMode_=new QButtonGroup(this);viewMode_->setObjectName("viewMode");viewMode_->setExclusive(true);
+    const QStringList viewNames={"Grid","List","Details"};for(int i=0;i<viewNames.size();++i){auto* button=new QPushButton(viewNames[i]);button->setCheckable(true);viewMode_->addButton(button,i);viewBar->addWidget(button);}viewMode_->button(0)->setChecked(true);sort_=new QComboBox;sort_->setObjectName("sortField");
     for(int col=0;col<Catalog::ColumnCount;++col)sort_->addItem(catalog_->headerData(col,Qt::Horizontal,Qt::DisplayRole).toString(),col);
-    auto* direction=new QPushButton("Ascending");direction->setObjectName("sortDirection");viewBar->addWidget(viewMode_);viewBar->addWidget(new QLabel("Sort"));viewBar->addWidget(sort_);viewBar->addWidget(direction);viewBar->addStretch();viewBar->addWidget(new QLabel("Minimum size"));
+    auto* direction=new QPushButton("Ascending");direction->setObjectName("sortDirection");viewBar->addWidget(new QLabel("Sort"));viewBar->addWidget(sort_);viewBar->addWidget(direction);viewBar->addStretch();viewBar->addWidget(new QLabel("Minimum size"));
     size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(100,500);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(100);size_->setFixedWidth(140);
     size_->setToolTip("Minimum grid cell width in dp (100–500). Columns grow to fill the available width.");viewBar->addWidget(size_);
     auto* sizeValue=new QLabel("100 dp");sizeValue->setMinimumWidth(48);viewBar->addWidget(sizeValue);
@@ -123,10 +125,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     sidebar->addTab(scroll,"Conversion");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
     auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
-    auto* outputToggle=new QPushButton("▾ Output & queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
+    auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
     auto* outputScroll=new QScrollArea;outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);sideLayout->addWidget(outputScroll);
-    sideLayout->addWidget(progress_);
-    connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output & queue":"▸ Output & queue");});
+    auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(12,6,12,12);progressLayout->addWidget(progress_);sideLayout->addWidget(progressFrame);
+    connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
     auto* theme=combo({"Auto","Light","Dark"},"theme");toolbar->addWidget(theme);
@@ -173,7 +175,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
     connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
     connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(column);direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
-    connect(viewMode_,&QComboBox::currentIndexChanged,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
+    connect(viewMode_,&QButtonGroup::idClicked,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
     connect(selection_,&QItemSelectionModel::selectionChanged,this,[this]{updateCounts();showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,&MainWindow::updateCounts);connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this]{updateCounts();showMetadata();});
@@ -190,16 +192,16 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     }
     for(auto* control:findChildren<QComboBox*>())control->installEventFilter(this);
     for(auto* control:findChildren<QAbstractSpinBox*>())control->installEventFilter(this);
-    QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->setCurrentIndex(settings.value("browser/view",0).toInt());size_->setValue(settings.value("browser/minCellDp",100).toInt());
+    QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",100).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
-    restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output & queue":"▸ Output & queue");
+    restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     updateMode();updateFilter();updatePresentation();updateCounts();
     QTimer::singleShot(0,this,[this]{if(loadFolder_->isChecked()&&!recentFolders_.isEmpty())addPaths({recentFolders_.first()});if(loadFiles_->isChecked())addPaths(lastFiles_);});
 }
 MainWindow::~MainWindow() {
     saveSettings();
-    QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->currentIndex());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("conversion/output",output_->text());
+    QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("conversion/output",output_->text());
 }
 namespace {
 const char* settingProperty(QWidget* widget) {
@@ -282,7 +284,7 @@ QWidget* MainWindow::buildControls() {
     boostTarget_->setToolTip("HDR highlight target for Boost highlights and Custom modes. Shoulder controls how strongly highlights approach this target. Source headroom mode uses the source's headroom instead.");
     rawLayout->addRow("HDR boost target",boostTarget_);rawLayout->addRow("HDR shoulder",shoulderRow);rawLayout->addRow(rawCustom_);layout->addWidget(raw_);
     queuePanel_=new QWidget;auto* queueLayout=new QVBoxLayout(queuePanel_);queueLayout->setContentsMargins(14,0,14,10);queueLayout->setSpacing(8);
-    auto* destination=new QGroupBox("Output & queue");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
+    auto* destination=new QGroupBox("Output queue");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
     auto* folderButtons=new QHBoxLayout;
     auto* browse=new QPushButton("Choose folder…");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});folderButtons->addWidget(browse);
     auto* openOutput=new QPushButton("Open output folder");openOutput->setObjectName("openOutputFolder");folderButtons->addWidget(openOutput);destinationLayout->addLayout(folderButtons);
@@ -382,7 +384,7 @@ void MainWindow::updateFilter() {
     proxy_->setFilter(f);updateCounts();
 }
 void MainWindow::updatePresentation() {
-    const bool details=viewMode_->currentIndex()==2,grid=viewMode_->currentIndex()==0;
+    const bool details=viewMode_->checkedId()==2,grid=viewMode_->checkedId()==0;
     views_->setCurrentWidget(details?static_cast<QWidget*>(table_):list_);list_->setPresentation(grid,size_->value());
     table_->setIconSize(QSize(size_->value()/2,size_->value()/2));table_->verticalHeader()->setDefaultSectionSize(std::max(32,size_->value()/2+8));
 }

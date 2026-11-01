@@ -4,9 +4,17 @@
 #include <QStyle>
 #include <QStyleHints>
 #include <QPalette>
+#include <QScopedValueRollback>
 namespace jxrc::gui {
 void applyDesktopStyle(int theme) {
+    static bool applying=false;
+    if(applying)return;
+    QScopedValueRollback<bool> guard(applying,true);
     auto& app=*qApp;
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    // Ask the native platform to style window decorations as well as widgets.
+    app.styleHints()->setColorScheme(theme==0?Qt::ColorScheme::Unknown:theme==2?Qt::ColorScheme::Dark:Qt::ColorScheme::Light);
+#endif
     static bool initialized=false;
     if(!initialized){app.setStyle(QStyleFactory::create("Fusion"));initialized=true;}
     bool dark=theme==2;

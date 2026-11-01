@@ -2,6 +2,7 @@
 #include "catalog.hpp"
 #include "queue.hpp"
 #include <QMainWindow>
+class QButtonGroup;
 class QCheckBox;
 class QCloseEvent;
 class QComboBox;
@@ -64,7 +65,8 @@ private:
     FileTableView* table_;
     ThumbnailDelegate* delegate_;
     QStackedWidget* views_;
-    QComboBox *viewMode_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *rawMode_, *wb_;
+    QButtonGroup* viewMode_;
+    QComboBox *sort_, *range_, *mode_, *preset_, *avifDepth_, *rawMode_, *wb_;
     QListWidget* targets_;
     QLineEdit *search_, *instant_, *format_, *output_;
     QSlider* size_;

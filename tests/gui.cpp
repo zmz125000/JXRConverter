@@ -2,6 +2,8 @@
 #include <QAbstractItemModelTester>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QButtonGroup>
+#include <QAbstractButton>
 #include <QDoubleSpinBox>
 #include <QDragEnterEvent>
 #include <QDropEvent>
@@ -105,16 +107,16 @@ private slots:
     void viewsSelectionAndDrop() {
         const QString directory=root("views");makeImage(directory,"one.jpg",160,80,100);makeImage(directory,"two.jpg",160,80,200);makeImage(directory,"three.jpg",160,80,300);
         MainWindow window;window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));window.addPaths({directory});QTRY_COMPARE(window.catalog()->rowCount(),3);
-        auto* list=window.findChild<FileListView*>("fileList");auto* modes=window.findChild<QComboBox*>("viewMode");auto* slider=window.findChild<QSlider*>("thumbnailSize");QVERIFY(list&&modes&&slider);
+        auto* list=window.findChild<FileListView*>("fileList");auto* modes=window.findChild<QButtonGroup*>("viewMode");auto* slider=window.findChild<QSlider*>("thumbnailSize");QVERIFY(list&&modes&&slider);
         QTest::qWait(120);window.grab().save(QDir::tempPath()+"/jxrc-desktop-test.png");
-        modes->setCurrentIndex(0);slider->setValue(100);QTRY_VERIFY(list->visualRect(window.filterModel()->index(2,0)).isValid());
+        modes->button(0)->click();slider->setValue(100);QTRY_VERIFY(list->visualRect(window.filterModel()->index(2,0)).isValid());
         QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,list->visualRect(window.filterModel()->index(0,0)).center());
         QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::ControlModifier,list->visualRect(window.filterModel()->index(2,0)).center());
         QCOMPARE(list->selectionModel()->selectedRows(0).size(),2);
-        modes->setCurrentIndex(2);auto* table=window.findChild<FileTableView*>("fileDetails");QCOMPARE(table->selectionModel()->selectedRows(0).size(),2);
+        modes->button(2)->click();auto* table=window.findChild<FileTableView*>("fileDetails");QCOMPARE(table->selectionModel()->selectedRows(0).size(),2);
         slider->setValue(200);QCOMPARE(table->verticalHeader()->defaultSectionSize(),108);
-        modes->setCurrentIndex(1);QCOMPARE(list->viewMode(),QListView::ListMode);QCOMPARE(list->selectionModel()->selectedRows(0).size(),2);
-        modes->setCurrentIndex(0);slider->setValue(100);list->selectionModel()->clearSelection();QTest::qWait(30);
+        modes->button(1)->click();QCOMPARE(list->viewMode(),QListView::ListMode);QCOMPARE(list->selectionModel()->selectedRows(0).size(),2);
+        modes->button(0)->click();slider->setValue(100);list->selectionModel()->clearSelection();QTest::qWait(30);
         const QPoint start(list->viewport()->width()-15,list->viewport()->height()-15),end(3,3);
         QTest::mousePress(list->viewport(),Qt::LeftButton,Qt::NoModifier,start);QTest::mouseMove(list->viewport(),end,50);QTest::mouseRelease(list->viewport(),Qt::LeftButton,Qt::NoModifier,end);
         QTRY_COMPARE(list->selectionModel()->selectedRows(0).size(),3);
