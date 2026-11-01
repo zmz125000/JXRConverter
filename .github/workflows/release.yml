@@ -23,7 +23,7 @@ jobs:
           path: assets
       - name: Checksums
         working-directory: assets
-        run: sha256sum JXRConverter-* > SHA256SUMS.txt
+        run: sha256sum JXRConverter-*-desktop.* > SHA256SUMS.txt
       - name: Publish release
         uses: softprops/action-gh-release@v3
         with:
@@ -32,6 +32,6 @@ jobs:
           generate_release_notes: true
           fail_on_unmatched_files: true
           files: |
-            assets/JXRConverter-*.zip
-            assets/JXRConverter-*.tar.gz
+            assets/JXRConverter-*-desktop.zip
+            assets/JXRConverter-*-desktop.tar.gz
             assets/SHA256SUMS.txt

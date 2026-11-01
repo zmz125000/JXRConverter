@@ -201,10 +201,10 @@ restore the prior files and are reported on relaunch. The package manifest track
 obsolete program files; user images and settings are preserved. Forks can set
 `JXRC_UPDATE_REPOSITORY=owner/repository` at configure time.
 
-Before `cpack`, run `python tools/prepare_release_sources.py build`. Release CI
-also publishes `JXRConverter-<version>-source.tar.gz` with native dependency sources
-and the matching Qt/ICU source archives. See [redistribution](docs/redistribution.md)
-and the [package audit](docs/release-audit.md).
+Before `cpack`, run `python tools/prepare_release_sources.py build` to collect
+runtime licenses and source references. Releases publish the desktop packages and
+`SHA256SUMS.txt`. See [redistribution](docs/redistribution.md) and the
+[package audit](docs/release-audit.md).
 
 Multiple outputs share one float32 render per source in Process pixels mode.
 The queue runs different source files in parallel and encodes each source's targets

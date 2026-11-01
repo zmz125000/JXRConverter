@@ -24,27 +24,18 @@ this project's GPLv3 distribution. The shared engine removes duplicated binary
 code. This is a source/license compatibility review; patent grants and conditions
 remain in the shipped notices, rather than a claim of universal patent clearance.
 
-Release jobs publish `JXRConverter-<version>-source.tar.gz` alongside binaries.
-It contains the application/build scripts, the exact populated native dependency
-sources (including libjxl's submodules), dependency revisions, and Qt/ICU source
-archives matching the runtime. Qt/ICU source files are hosted in this project’s
-release, rather than relying only on an upstream link. Binary packages carry a
-source-access notice naming that same release.
+Release jobs publish desktop runtime packages and `SHA256SUMS.txt`. They do not
+create or upload separate source or Qt build-info archives.
 
-To build native dependencies without refetching their repositories, extract the
-source release and run `cmake --preset source-release`. The generated
-`CMakeUserPresets.json` points FetchContent at each included `third_party/` tree.
-Install a compatible Qt SDK first, or build Qt from `external_sources/` using its
-upstream instructions and set `CMAKE_PREFIX_PATH` to that installation. Download the matching `JXRConverter-<version>-<OS>-<CPU>-qt-buildinfo.tar.gz`
-companion for that platform's Qt configuration summaries and SBOM. Upstream source
-digests are recorded in the source manifest. These build details are kept out of
-the runtime archives. Standard compiler/toolchain and OS system libraries remain prerequisites.
+Runtime packages retain the application and dependency licenses. `SOURCE-ACCESS.txt`
+links to the application source revision and names `cmake/Dependencies.cmake` for
+the native dependency repositories and pinned releases. The bundled
+`upstream-source-manifest.json` lists the Qt/ICU source URLs and SHA-256 digests.
 
-Before CPack, run `python tools/prepare_release_sources.py build` to collect runtime
-license texts; `--archive` additionally builds the corresponding-source package.
-The workflow performs both steps automatically. Keep binary and source assets
-available together when distributing or mirroring releases. Distributors still
-need to review their own changes and distribution terms.
+Before CPack, run `python tools/prepare_release_sources.py build` to collect those
+notices and references. The workflow does this automatically. Source references
+do not replace the obligations in the licenses linked below; distributors are
+responsible for the source access arrangements required for their distribution.
 
 References: [GPLv3 section 6](https://www.gnu.org/licenses/gpl-3.0.html#section6),
 [GNU license FAQ](https://www.gnu.org/licenses/gpl-faq.html),

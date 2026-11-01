@@ -39,11 +39,10 @@ The updater installs only package files, retains unrelated images/user files,
 removes obsolete files recorded by the previous package manifest, and rolls back
 replacement failures. It does not modify existing published release assets.
 
-See [redistribution requirements](redistribution.md) for the source release flow.
+See [redistribution requirements](redistribution.md) for license and source references.
 Local Linux 0.1.6 build/package inspection passed: GUI 4.34 MiB, CLI 0.05 MiB,
 one shared engine 20.01 MiB, complete runtime archive 96.15 MiB unpacked and
 36.88 MiB compressed. Both installed executables resolve the packaged engine;
 no missing dynamic libraries were reported. The manifest matches all 293 files
-and symlinks. Qt notices and TLS are present; duplicate SBOM/build metadata stays
-in source assets. Windows/macOS still require their CI builds; live self-update
+and symlinks. Qt notices and TLS are present; SBOM/build metadata is excluded from runtime packages. Windows/macOS still require their CI builds; live self-update
 replacement has not been exercised.

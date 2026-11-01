@@ -91,15 +91,8 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: ctest --test-dir build --output-on-failure
-      - name: Collect Qt and ICU source notices
+      - name: Collect Qt and ICU license notices
         run: python tools/prepare_release_sources.py build --repository ${{ github.repository }}
-      - name: Upload matching Qt build configuration
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: JXRConverter-build-info-${{ matrix.platform }}
-          path: build/JXRConverter-*-qt-buildinfo.tar.gz
-          if-no-files-found: error
-          retention-days: 14
       - name: Package GUI, CLI and runtime dependencies
         working-directory: build
         run: cpack -C Release
@@ -112,16 +105,5 @@ jobs:
           path: |
             build/JXRConverter-*-desktop.zip
             build/JXRConverter-*-desktop.tar.gz
-          if-no-files-found: error
-          retention-days: 14
-      - name: Assemble corresponding sources
-        if: runner.os == 'Linux'
-        run: python tools/prepare_release_sources.py build --repository ${{ github.repository }} --archive
-      - name: Upload corresponding sources
-        if: runner.os == 'Linux'
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: JXRConverter-source
-          path: build/JXRConverter-*-source.tar.gz
           if-no-files-found: error
           retention-days: 14
