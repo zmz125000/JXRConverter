@@ -387,7 +387,12 @@ int main(int argc,char** argv) try {
     std::cout<<"Gain-map, PQ, linear HDR and JPEG reconstruction passed\n";
     o={};o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl;o.max_edge=20;o.exposure=1;
     r=jxrc::convert(jpeg,dir/"resized.jxl",o);check(r.width==20&&r.height==15,"Resize dimensions");
-    fails([&]{jxrc::convert(jpeg,dir/"resized.jxl",o);});o.overwrite=true;jxrc::convert(jpeg,dir/"resized.jxl",o);
+    const auto previous=bytes(dir/"resized.jxl");
+    check(jxrc::convert(jpeg,dir/"resized.jxl",o).skipped,"Existing output was not skipped");
+    write(dir/"invalid-source",{1,2,3});
+    check(jxrc::convert(dir/"invalid-source",dir/"resized.jxl",o).skipped,"Conflict check decoded the source");
+    check(bytes(dir/"resized.jxl")==previous,"Skip modified existing output");
+    o.overwrite=true;jxrc::convert(jpeg,dir/"resized.jxl",o);
     fails([&]{jxrc::convert(jpeg,jpeg,o);});
     o.mode=jxrc::Mode::preserve;fails([&]{jxrc::validate(o);});o={};o.raw.shoulder=NAN;fails([&]{jxrc::validate(o);});
     write(dir/"bad",{1,2,3,4});o={};fails([&]{jxrc::convert(dir/"bad",dir/"bad-output",o);});check(!fs::exists(dir/"bad-output"),"Bad input published");

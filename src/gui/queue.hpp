@@ -28,6 +28,7 @@ public:
     void start(QVector<Job> jobs, int parallelism, int cores = coreCount());
     void cancelPending();
     bool busy() const { return active_ > 0 || next_ < jobs_.size(); }
+    int skipped() const { return skipped_; }
     int total() const { return jobs_.size(); }
 signals:
     void statusChanged(const QString& path, const QString& state, const QString& detail);
@@ -35,14 +36,14 @@ signals:
     void batchFinished(int succeeded, int failed, int cancelled);
 private:
     void pump();
-    void finishFile(const Job& job, const QString& error, bool cancelled);
+    void finishFile(const Job& job, const QString& error, bool cancelled, bool skipped = false);
     QVector<Job> jobs_;
-    int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, limit_ = 1;
+    int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, skipped_ = 0, limit_ = 1;
     QThreadPool pool_;
     Convert converter_;
     QSet<QString> activeInputs_;
     QHash<QString,std::shared_ptr<ConversionSession>> sessions_;
-    QHash<QString, int> remaining_, fileCancelled_;
+    QHash<QString, int> remaining_, fileCancelled_, fileSkipped_, fileSucceeded_;
     QHash<QString, QString> fileErrors_;
 };
 }

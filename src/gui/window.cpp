@@ -188,7 +188,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(catalog_,&Catalog::scanError,this,[this](const QString& error){statusBar()->showMessage(error,6000);});
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
     connect(queue_,&ConversionQueue::progress,this,[this](int done,int total,int active){progress_->setRange(0,total);progress_->setValue(done);queueState_->setText(QString("%1 / %2 outputs finished · %3 active").arg(done).arg(total).arg(active));updateCounts();});
-    connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){queueState_->setText(QString("%1 done · %2 failed · %3 cancelled").arg(success).arg(failed).arg(cancelled));updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
+    connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){queueState_->setText(QString("%1 done · %2 skipped · %3 failed · %4 cancelled").arg(success).arg(queue_->skipped()).arg(failed).arg(cancelled));updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
     auto* deleteShortcut=new QShortcut(QKeySequence::Delete,this);connect(deleteShortcut,&QShortcut::activated,this,[this]{if(!queue_->busy()&&(list_->hasFocus()||table_->hasFocus()))catalog_->removePaths(selectedPaths());});
     auto* allShortcut=new QShortcut(QKeySequence::SelectAll,this);connect(allShortcut,&QShortcut::activated,this,[this]{if(list_->hasFocus())list_->selectAll();else if(table_->hasFocus())table_->selectAll();});
     for(auto* view:QList<QAbstractItemView*>{list_,table_}) {

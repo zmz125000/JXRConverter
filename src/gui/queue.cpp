@@ -61,10 +61,10 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
         return a.input==b.input?family(a.options.target)<family(b.options.target):order[a.input]<order[b.input];
     });
     sessions_.clear();activeInputs_.clear();
-    jobs_=std::move(jobs);next_=active_=finished_=succeeded_=failed_=cancelled_=0;
+    jobs_=std::move(jobs);next_=active_=finished_=succeeded_=failed_=cancelled_=skipped_=0;
     limit_=std::clamp(parallelism,1,std::max(1,cores));pool_.setMaxThreadCount(limit_);
     const unsigned budget=std::max(1,cores/limit_);
-    remaining_.clear();fileCancelled_.clear();fileErrors_.clear();
+    remaining_.clear();fileCancelled_.clear();fileSkipped_.clear();fileSucceeded_.clear();fileErrors_.clear();
     for(const auto& job:jobs_)++remaining_[job.input];
     for(auto& job:jobs_){job.options.threads=budget;emit statusChanged(job.input,"Queued",job.output);}
     pump();
@@ -82,7 +82,13 @@ void ConversionQueue::pump() {
         if(candidate==jobs_.size())break;
         // Rotate rather than swap so each source retains its render-family order.
         std::rotate(jobs_.begin()+next_,jobs_.begin()+candidate,jobs_.begin()+candidate+1);
-        const Job job=jobs_[next_++];++active_;activeInputs_.insert(job.input);
+        const Job job=jobs_[next_++];
+        std::error_code outputError;
+        const auto outputStatus=std::filesystem::symlink_status(nativePath(job.output),outputError);
+        if(!job.options.overwrite && std::filesystem::exists(outputStatus)) {
+            ++skipped_;++finished_;finishFile(job,{},false,true);continue;
+        }
+        ++active_;activeInputs_.insert(job.input);
         std::shared_ptr<ConversionSession> session;
         if(!converter_) {
             auto& stored=sessions_[job.input];
@@ -91,13 +97,13 @@ void ConversionQueue::pump() {
         }
         emit statusChanged(job.input,"Converting",job.output);
         pool_.start([this,job,session] {
-            QString error;
-            try {if(session)session->convert(nativePath(job.output),job.options);else converter_(nativePath(job.input),nativePath(job.output),job.options);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
+            QString error;bool skipped=false;
+            try {const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);skipped=result.skipped;}catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
-            QMetaObject::invokeMethod(this,[this,job,error] {
+            QMetaObject::invokeMethod(this,[this,job,error,skipped] {
                 --active_;activeInputs_.remove(job.input);++finished_;
-                if(error.isEmpty())++succeeded_;else ++failed_;
-                finishFile(job,error,false);
+                if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
+                finishFile(job,error,false,skipped);
                 pump();
             },Qt::QueuedConnection);
         });
@@ -105,9 +111,11 @@ void ConversionQueue::pump() {
     emit progress(finished_,jobs_.size(),active_);
     if(!busy())emit batchFinished(succeeded_,failed_,cancelled_);
 }
-void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancelled) {
+void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancelled,bool skipped) {
     if(!error.isEmpty())fileErrors_[job.input]+=job.output+": "+error+"\n";
     if(cancelled)++fileCancelled_[job.input];
+    if(skipped)++fileSkipped_[job.input];
+    if(error.isEmpty()&&!cancelled&&!skipped)++fileSucceeded_[job.input];
     const int left=--remaining_[job.input];
     // With multiple outputs, a later success must not hide an earlier failure.
     if(left>0){emit statusChanged(job.input,QString("In progress · %1 outputs remaining").arg(left),fileErrors_.value(job.input));return;}
@@ -115,6 +123,7 @@ void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancel
     const auto errors=fileErrors_.value(job.input);
     if(!errors.isEmpty())emit statusChanged(job.input,"Failed",errors);
     else if(fileCancelled_.value(job.input))emit statusChanged(job.input,"Cancelled",QString("%1 output(s) not started").arg(fileCancelled_.value(job.input)));
+    else if(fileSkipped_.value(job.input))emit statusChanged(job.input,fileSucceeded_.value(job.input)?"Done · skipped existing outputs":"Skipped",QString("%1 existing output(s) skipped\n%2").arg(fileSkipped_.value(job.input)).arg(job.output));
     else emit statusChanged(job.input,"Done",job.output);
 }
 }

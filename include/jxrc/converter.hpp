@@ -51,6 +51,7 @@ struct Result {
     bool gainmap = false;
     int transfer = 0;
     std::string encoding;
+    bool skipped = false; // Existing output with overwrite disabled; no image work performed.
 };
 // Throws std::invalid_argument for invalid controls, std::runtime_error for codec/I/O errors.
 // Options are captured per call. Output is staged beside the destination before publication.

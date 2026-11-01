@@ -182,6 +182,25 @@ private slots:
         MainWindow window;auto* rename=window.findChild<QCheckBox*>("renameConflicts");auto* overwrite=window.findChild<QCheckBox*>("overwrite");
         QVERIFY(rename && overwrite);rename->setChecked(true);QVERIFY(!overwrite->isEnabled());rename->setChecked(false);QVERIFY(overwrite->isEnabled());
     }
+    void existingOutputsSkipBeforeConversion() {
+        const QString output=root("existing-output.avif");QFile file(output);
+        QVERIFY(file.open(QIODevice::WriteOnly));file.write("keep");file.close();
+        std::atomic<int> calls{0};
+        ConversionQueue queue(nullptr,[&](const auto&,const auto&,const auto&){++calls;return jxrc::Result{};});
+        QSignalSpy done(&queue,&ConversionQueue::batchFinished),states(&queue,&ConversionQueue::statusChanged);
+        jxrc::Options options;
+        queue.start({{"source",output,options}},1,1);
+        QCOMPARE(done.count(),1);QCOMPARE(calls.load(),0);QCOMPARE(queue.skipped(),1);
+        QCOMPARE(done[0][0].toInt(),0);QCOMPARE(done[0][1].toInt(),0);
+        QCOMPARE(states.last()[1].toString(),QString("Skipped"));QVERIFY(!queue.busy());
+        queue.start({{"source",output,options},{"source",root("new-output.avif"),options}},1,1);
+        QTRY_COMPARE(done.count(),2);QCOMPARE(calls.load(),1);QCOMPARE(queue.skipped(),1);
+        QCOMPARE(done[1][0].toInt(),1);QCOMPARE(done[1][1].toInt(),0);
+        QVERIFY(states.last()[1].toString().startsWith("Done"));
+        options.overwrite=true;queue.start({{"source",output,options}},1,1);
+        QTRY_COMPARE(done.count(),3);QCOMPARE(calls.load(),2);QCOMPARE(queue.skipped(),0);
+        QVERIFY(file.open(QIODevice::ReadOnly));QCOMPARE(file.readAll(),QByteArray("keep"));
+    }
     void outputCollisionAndActualQueue() {
         const QString a=makeImage(root("jobs/a"),"same.jpg",64,48,200),b=makeImage(root("jobs/b"),"same.jpg",64,48,400);
         const QString destination=root("jobs/output");QDir().mkpath(destination);jxrc::Options o;o.target=jxrc::Target::avif;

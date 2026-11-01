@@ -170,7 +170,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     require(std::filesystem::is_regular_file(input),"Input must be a regular file");
     std::error_code ec;
     require(!std::filesystem::equivalent(input,output,ec),"Input and output refer to the same file");
-    require(o.overwrite||!std::filesystem::exists(output),"Output exists; pass --overwrite to replace it");
+    if(!o.overwrite && std::filesystem::exists(std::filesystem::symlink_status(output))) {
+        Result skipped;skipped.skipped=true;return skipped;
+    }
     if(cache.format<0){
         auto source=read(input);const int format=kind(source);
         if(format!=6 && format!=5){const auto info=inspect_bytes(source);cache.bits=info.bits;cache.half_jxr=format==4&&info.hdr&&info.bits==16;}

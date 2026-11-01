@@ -86,3 +86,7 @@ The scRGB JXR direct path also supports Preserve mode with JXL output.
 AVIF depth is a maximum: 8-bit sources remain 8-bit, with higher-depth sources
 capped by the preset or custom 10/12-bit choice. AVIF supports 8/10/12-bit files;
 its uint16 RGB encoder input buffer does not imply a 16-bit AVIF file.
+
+Existing output files are skipped before decoding or encoding when replacement
+is disabled. The queue reports skipped outputs separately. Rename-if-conflict
+chooses a new name as before; replacement still requires the overwrite toggle.
