@@ -102,9 +102,11 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     if (role == RawRole) return r.raw;
     if (role == SummaryRole) return QStringList{dimensions(r), r.format, r.transfer}.filter(QRegularExpression(".+")).join(" · ");
     if (role == Qt::ToolTipRole) return r.path + "\n" + dimensions(r) + "\n" + r.camera + "\n" + r.status + (r.error.isEmpty()?QString{}:"\n"+r.error) + (r.metadataWarning.isEmpty()?QString{}:"\nMetadata: "+r.metadataWarning);
-    if (role == Qt::DecorationRole && index.column() == Name) {
+    if ((role == Qt::DecorationRole || role == ThumbnailRole) && index.column() == Name) {
         if (auto* image = cache_.object(r.path)) return QIcon(QPixmap::fromImage(*image));
-        const_cast<Catalog*>(this)->requestThumbnail(index.row()); return {};
+        if(role==ThumbnailRole&&thumbnailFrame_&&!visibleThumbnails_.contains(r.path))
+            const_cast<Catalog*>(this)->visibleThumbnails_.append(r.path);
+        return {};
     }
     if (role != Qt::DisplayRole) return {};
     switch(index.column()) {
@@ -151,24 +153,61 @@ void Catalog::insertPaths(const QStringList& paths) {
         });
     }
 }
-void Catalog::requestThumbnail(int row) {
-    auto& record=records_[row];if(record.thumbnailPending||record.thumbnailFailed)return;
-    record.thumbnailPending=true;const QString path=record.path;
-    thumbnails_.start([this,path] {
-        QImage image;QString error;
-        try {image=readThumbnail(path);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
-        QMetaObject::invokeMethod(this,[this,path,image,error] {
-            const int row=find(path);if(row<0)return;auto& r=records_[row];r.thumbnailPending=false;r.thumbnailFailed=image.isNull();
-            if(!image.isNull())cache_.insert(path,new QImage(image),std::max<qint64>(1,image.sizeInBytes()/1024));
-            else if(r.metadataWarning.isEmpty())r.metadataWarning="Thumbnail: "+error;
-            emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole,Qt::ToolTipRole});
-        },Qt::QueuedConnection);
-    });
+void Catalog::beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible) {
+    if(thumbnailFrameDepth_++==0){thumbnailVisible_=visible;thumbnailFrame_=true;}
+}
+void Catalog::endThumbnailFrame() {
+    if(thumbnailFrameDepth_>1){--thumbnailFrameDepth_;return;}
+    // Painting can trigger layout probes too. Check geometry after layout has
+    // finished, with collection disabled to avoid recursive decoration probes.
+    thumbnailFrame_=false;
+    for(int i=visibleThumbnails_.size()-1;i>=0;--i) {
+        const auto path=visibleThumbnails_[i];const int row=find(path);
+        if(row<0||!thumbnailVisible_(index(row,Name))) {
+            if(auto token=thumbnailJobs_.value(path))token->store(false);
+            visibleThumbnails_.removeAt(i);
+        }
+    }
+    thumbnailVisible_={};thumbnailFrameDepth_=0;pumpThumbnails();
+}
+void Catalog::pumpThumbnails() {
+    // Eight submitted jobs total, including the two currently decoding. Queued
+    // jobs carry cancellation tokens so scrolling never decodes stale cells.
+    for(const auto& path:visibleThumbnails_) {
+        if(thumbnailJobs_.size()>=8)break;
+        const int row=find(path);if(row<0)continue;
+        auto& record=records_[row];
+        if(cache_.contains(path)||record.thumbnailFailed||thumbnailJobs_.contains(path))continue;
+        record.thumbnailPending=true;
+        auto token=std::make_shared<std::atomic_bool>(true);thumbnailJobs_.insert(path,token);
+        thumbnails_.start([this,path,token] {
+            QImage image;QString error;
+            if(token->load()) {
+                try {image=readThumbnail(path);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
+            }
+            QMetaObject::invokeMethod(this,[this,path,token,image,error] {
+                thumbnailJobs_.remove(path);
+                const int row=find(path);
+                if(row>=0) {
+                    auto& r=records_[row];r.thumbnailPending=false;
+                    if(token->load()) {
+                        r.thumbnailFailed=image.isNull();
+                        if(!image.isNull())cache_.insert(path,new QImage(image),std::max<qint64>(1,image.sizeInBytes()/1024));
+                        else if(r.metadataWarning.isEmpty())r.metadataWarning="Thumbnail: "+error;
+                        emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole,Qt::ToolTipRole});
+                    }
+                }
+                pumpThumbnails();
+            },Qt::QueuedConnection);
+        });
+    }
 }
 void Catalog::removePaths(const QStringList& paths) {
     const QSet<QString> removal(paths.begin(),paths.end());
     for(int i=records_.size()-1;i>=0;--i)if(removal.contains(records_[i].path)) {
-        const auto path=records_[i].path;beginRemoveRows({},i,i);records_.removeAt(i);known_.remove(key(path));cache_.remove(path);endRemoveRows();
+        const auto path=records_[i].path;
+        visibleThumbnails_.removeAll(path);if(auto token=thumbnailJobs_.value(path))token->store(false);
+        beginRemoveRows({},i,i);records_.removeAt(i);known_.remove(key(path));cache_.remove(path);endRemoveRows();
     }
 }
 void Catalog::setStatus(const QString& path,const QString& status,const QString& error) {

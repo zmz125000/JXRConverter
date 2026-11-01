@@ -7,6 +7,9 @@
 #include <QSet>
 #include <QSortFilterProxyModel>
 #include <QThreadPool>
+#include <atomic>
+#include <functional>
+#include <memory>
 
 namespace jxrc::gui {
 struct Record {
@@ -27,7 +30,7 @@ class Catalog : public QAbstractTableModel {
     Q_OBJECT
 public:
     enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, ColumnCount };
-    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole };
+    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole };
     explicit Catalog(QObject* parent = nullptr);
     ~Catalog() override;
     int rowCount(const QModelIndex& parent = {}) const override;
@@ -39,18 +42,27 @@ public:
     void addPaths(const QStringList& paths, bool recursive = true);
     void removePaths(const QStringList& paths);
     void setStatus(const QString& path, const QString& status, const QString& error = {});
+    // Layout probes never enqueue work; views bracket actual painting instead.
+    void beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible);
+    void endThumbnailFrame();
+    int thumbnailJobCount() const { return thumbnailJobs_.size(); }
     bool scanning() const { return scanning_ > 0; }
 signals:
     void scanStateChanged(bool scanning);
     void scanError(const QString& error);
 private:
     void insertPaths(const QStringList& paths);
-    void requestThumbnail(int row);
+    void pumpThumbnails();
     int find(const QString& path) const;
     QVector<Record> records_;
     QSet<QString> known_;
     QThreadPool scans_, metadata_, thumbnails_;
     QCache<QString, QImage> cache_{65536}; // KiB; bounded independently of catalog size.
+    QStringList visibleThumbnails_;
+    QMap<QString, std::shared_ptr<std::atomic_bool>> thumbnailJobs_;
+    bool thumbnailFrame_ = false;
+    int thumbnailFrameDepth_ = 0;
+    std::function<bool(const QModelIndex&)> thumbnailVisible_;
     int scanning_ = 0;
 };
 struct Filter {

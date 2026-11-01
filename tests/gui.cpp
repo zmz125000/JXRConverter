@@ -22,6 +22,10 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QStandardPaths>
+#include <QStandardItemModel>
+#include <QScrollBar>
+#include <QPushButton>
+#include <QWheelEvent>
 #include <QTemporaryDir>
 #include <exiv2/exiv2.hpp>
 #include <atomic>
@@ -93,9 +97,44 @@ private slots:
         f={};f.today=true;f.minMaxEdge=150;proxy.setFilter(f);QCOMPARE(proxy.rowCount(),1);
         QCOMPARE(proxy.index(0,0).data(Catalog::PathRole).toString(),todayFile);
         model.removePaths({todayFile});
-        f={};proxy.setFilter(f);auto decoration=model.data(model.index(0,0),Qt::DecorationRole);Q_UNUSED(decoration);
+        f={};proxy.setFilter(f);model.beginThumbnailFrame([](const QModelIndex& i){return i.row()==0;});auto decoration=model.data(model.index(0,0),Catalog::ThumbnailRole);Q_UNUSED(decoration);model.endThumbnailFrame();
         QTRY_VERIFY(!qvariant_cast<QIcon>(model.data(model.index(0,0),Qt::DecorationRole)).isNull());
         model.removePaths({b});QCOMPARE(model.rowCount(),2);QCOMPARE(proxy.rowCount(),2);
+    }
+    void thumbnailWindowAndCancellation() {
+        const auto directory=root("thumbnail-window");
+        for(int i=0;i<40;++i)QVERIFY(!makeImage(directory,QString("%1.jpg").arg(i,2,10,QChar('0')),32,16,100).isEmpty());
+        Catalog model;model.addPaths({directory});QTRY_COMPARE(model.rowCount(),40);QTRY_VERIFY(!model.scanning()&&inspected(model));
+        // Even a layout probing the entire library must not schedule work.
+        for(int i=0;i<40;++i)model.index(i,0).data(Qt::DecorationRole);
+        QCOMPARE(model.thumbnailJobCount(),0);
+        model.beginThumbnailFrame([](const QModelIndex& i){return i.row()<20;});
+        for(int i=0;i<40;++i)model.index(i,0).data(Catalog::ThumbnailRole);
+        model.endThumbnailFrame();QCOMPARE(model.thumbnailJobCount(),8);
+        for(int i=8;i<40;++i)QVERIFY(!model.record(i).thumbnailPending);
+        // Scroll before processing completions: all old pending jobs are
+        // cancelled, and the rolling window replenishes only the new viewport.
+        model.beginThumbnailFrame([](const QModelIndex& i){return i.row()>=30;});
+        for(int i=30;i<40;++i)model.index(i,0).data(Catalog::ThumbnailRole);
+        model.endThumbnailFrame();QCOMPARE(model.thumbnailJobCount(),8);
+        auto ready=[&]{
+            if(model.thumbnailJobCount()>8)return false;
+            for(int i=30;i<40;++i)if(qvariant_cast<QIcon>(model.index(i,0).data(Qt::DecorationRole)).isNull())return false;
+            return true;
+        };
+        QTRY_VERIFY(ready());QTRY_COMPARE(model.thumbnailJobCount(),0);
+        for(int i=0;i<30;++i){QVERIFY(!model.record(i).thumbnailPending);QVERIFY(qvariant_cast<QIcon>(model.index(i,0).data(Qt::DecorationRole)).isNull());}
+    }
+    void scrollingAndCellShape() {
+        QStandardItemModel model(200,1);FileListView list;ThumbnailDelegate delegate;
+        list.setItemDelegate(&delegate);list.setModel(&model);list.resize(400,300);list.setPresentation(true,200);list.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&list));
+        const int squareHeight=list.gridSize().height();list.setPresentation(true,200,true);
+        QVERIFY(list.gridSize().height()<squareHeight);QVERIFY(delegate.wide);
+        list.setPresentation(false,100);auto* bar=list.verticalScrollBar();QTRY_VERIFY(bar->maximum()>200);bar->setSingleStep(40);bar->setValue(0);
+        auto wheel=[&]{const QPointF point(50,50);QWheelEvent event(point,list.viewport()->mapToGlobal(point.toPoint()),QPoint(),QPoint(0,-120),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(list.viewport(),&event);};
+        wheel();QCOMPARE(bar->value(),qRound(QApplication::wheelScrollLines()*40/2.0));
+        const int target=bar->value()*2;list.setSmoothScrolling(true);wheel();QVERIFY(bar->value()<target);QTRY_COMPARE(bar->value(),target);
     }
     void nativeHdrMetadata() {
         const auto file=makeImage(root("hdr"),"sdr.jpg",96,48,100);
@@ -108,7 +147,8 @@ private slots:
     void viewsSelectionAndDrop() {
         const QString directory=root("views");makeImage(directory,"one.jpg",160,80,100);makeImage(directory,"two.jpg",160,80,200);makeImage(directory,"three.jpg",160,80,300);
         MainWindow window;window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));window.addPaths({directory});QTRY_COMPARE(window.catalog()->rowCount(),3);
-        auto* list=window.findChild<FileListView*>("fileList");auto* modes=window.findChild<QButtonGroup*>("viewMode");auto* slider=window.findChild<QSlider*>("thumbnailSize");QVERIFY(list&&modes&&slider);
+        auto* list=window.findChild<FileListView*>("fileList");auto* modes=window.findChild<QButtonGroup*>("viewMode");auto* slider=window.findChild<QSlider*>("thumbnailSize");QVERIFY(list&&modes&&slider);QCOMPARE(slider->value(),200);
+        QVERIFY(window.findChild<QCheckBox*>("smoothScrolling"));QVERIFY(window.findChild<QPushButton*>("thumbnailAspect"));
         QTest::qWait(120);window.grab().save(QDir::tempPath()+"/jxrc-desktop-test.png");
         modes->button(0)->click();slider->setValue(100);QTRY_VERIFY(list->visualRect(window.filterModel()->index(2,0)).isValid());
         QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,list->visualRect(window.filterModel()->index(0,0)).center());
