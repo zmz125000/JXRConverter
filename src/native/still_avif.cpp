@@ -161,7 +161,9 @@ int encode_avif_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t g
     clli.maxCLL = static_cast<uint16_t>(std::lround(*std::max_element(peaks.begin(), peaks.end()) * kSdrWhiteNits));
     clli.maxPALL = static_cast<uint16_t>(std::lround(std::accumulate(averages.begin(), averages.end(), 0.0) / pixels * kSdrWhiteNits));
     if (pq) image->clli = clli;
-    auto base_rgb = rgb_view(image.get(), reinterpret_cast<uint8_t*>(encoded.data()), depth, 2);
+    std::vector<uint8_t> encoded8;
+    if(depth==8) {encoded8.resize(encoded.size());std::transform(encoded.begin(),encoded.end(),encoded8.begin(),[](uint16_t v){return uint8_t(v);});}
+    auto base_rgb = rgb_view(image.get(), depth==8?encoded8.data():reinterpret_cast<uint8_t*>(encoded.data()), depth, depth==8?1:2);
     if (avifImageRGBToYUV(image.get(), &base_rgb) != AVIF_RESULT_OK) return -75;
 
     if (gain_map) {
@@ -218,7 +220,8 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
     auto image=make_image(w,h,depth,gamut,pq,quality);
     if(!image)return -71;
     if(!pq&&!gain_map&&!set_sdr_profile(image.get(),gamut))return -77;
-    std::vector<uint16_t> encoded(pixels*4),hdr_codes(gain_map?pixels*4:0);
+    std::vector<uint16_t> encoded(depth>8?pixels*4:0),hdr_codes(gain_map?pixels*4:0);
+    std::vector<uint8_t> encoded8(depth==8?pixels*4:0);
     std::array<float,8> peaks{};std::array<double,8> averages{};
     const unsigned jobs=hdr_pixel_jobs(pixels);
     hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned job){
@@ -231,12 +234,14 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
                 peak=std::max(peak,v);luminance+=v/3.f;
                 const float base=gain_map&&sdr_base?sdr_base[i*4+c]:v;
                 const float code=pq?linear_to_pq_code(v):srgb_oetf(base);
-                encoded[i*4+c]=static_cast<uint16_t>(std::lround(code*maximum));
+                const unsigned packed=static_cast<unsigned>(std::lround(code*maximum));
+                if(depth==8)encoded8[i*4+c]=static_cast<uint8_t>(packed);else encoded[i*4+c]=static_cast<uint16_t>(packed);
                 if(gain_map)hdr_codes[i*4+c]=static_cast<uint16_t>(std::lround(linear_to_pq_code(v)*65535.f));
             }
             sum+=luminance;
             const float alpha=std::isfinite(rgba[i*4+3])?std::clamp(rgba[i*4+3],0.f,1.f):0.f;
-            encoded[i*4+3]=static_cast<uint16_t>(std::lround(alpha*maximum));
+            const unsigned packedAlpha=static_cast<unsigned>(std::lround(alpha*maximum));
+            if(depth==8)encoded8[i*4+3]=static_cast<uint8_t>(packedAlpha);else encoded[i*4+3]=static_cast<uint16_t>(packedAlpha);
             if(gain_map)hdr_codes[i*4+3]=static_cast<uint16_t>(std::lround(alpha*65535.f));
         }
         peaks[job]=peak;averages[job]=sum;
@@ -245,8 +250,6 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
     clli.maxCLL=static_cast<uint16_t>(std::lround(*std::max_element(peaks.begin(),peaks.end())*kSdrWhiteNits));
     clli.maxPALL=static_cast<uint16_t>(std::lround(std::accumulate(averages.begin(),averages.end(),0.0)/pixels*kSdrWhiteNits));
     if(pq)image->clli=clli;
-    std::vector<uint8_t> encoded8;
-    if(depth==8){encoded8.resize(encoded.size());std::transform(encoded.begin(),encoded.end(),encoded8.begin(),[](uint16_t v){return uint8_t(v);});}
     auto base_rgb=rgb_view(image.get(),depth==8?encoded8.data():reinterpret_cast<uint8_t*>(encoded.data()),depth,depth==8?1:2);
     if(avifImageRGBToYUV(image.get(),&base_rgb)!=AVIF_RESULT_OK)return -75;
     if(gain_map) {

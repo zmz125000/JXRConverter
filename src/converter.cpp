@@ -185,16 +185,18 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && o.target==Target::jxl && !o.exposure && !o.max_edge) {
+    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg) && !o.exposure && !o.max_edge) {
         if(format==6) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
             direct_sdr=!regular->hdr();
         } else direct_sdr=cache.integer_sdr;
     }
+    if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
+    bool source_done=false;
     if(direct_sdr || direct_jxl || (o.mode==Mode::preserve && format!=4)) {
         require(format==0||format==1||format==3||format==6,"Source preservation supports JPEG, AVIF, JXL and regular raster images; use --mode process for RAW/JXR");
         int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:2;
@@ -207,25 +209,30 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             require(info[0]>0&&info[1]>0&&uint64_t(info[0])*info[1]<=80000000,"JPEG dimensions exceed limit");
             rc=transcode_jpeg(bytes.data(),bytes.size(),path.c_str(),o.keep_exif);
             require(rc==0,"JPEG coefficient transcoding failed (codec "+std::to_string(rc)+")");
+            rc=1;
         } else {
             if(format==6) {
                 if(!regular)regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
                 rc=convert_regular_source(*regular,target,path.c_str(),q,o.keep_exif,info);
             } else rc=convert_source(bytes.data(),bytes.size(),format,target,path.c_str(),q,o.keep_exif,info);
-            require(rc>0,"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
+            require(rc>0 || (rc==0&&direct_sdr),"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
         }
-        result.width=info[0];result.height=info[1];result.gainmap=info[2];result.transfer=info[3];
-        if(direct_sdr) {
-            // Source-preserving JXL can carry orientation structurally. Report
-            // display dimensions, as the processed path does after rotation.
-            if(regular) {
-                result.width=regular->width;result.height=regular->height;
-                if(regular->orientation>=5)std::swap(result.width,result.height);
-            } else {result.width=cache.input_width;result.height=cache.input_height;}
+        if(rc>0) {
+            source_done=true;
+            result.width=info[0];result.height=info[1];result.gainmap=info[2];result.transfer=info[3];
+            if(direct_sdr) {
+                // Source-preserving exports can carry orientation structurally. Report
+                // display dimensions, as the processed path does after rotation.
+                if(regular) {
+                    result.width=regular->width;result.height=regular->height;
+                    if(regular->orientation>=5)std::swap(result.width,result.height);
+                } else {result.width=cache.input_width;result.height=cache.input_height;}
+            }
+            if(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap)require(result.gainmap,"Source has no transferable gain map; use --mode process to generate one");
+            result.encoding=direct_sdr?"sdr":direct_jxl?"linear":result.gainmap?"gainmap":result.transfer==16?"pq":result.transfer==18?"hlg":"source";
         }
-        if(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap)require(result.gainmap,"Source has no transferable gain map; use --mode process to generate one");
-        result.encoding=direct_sdr?"sdr":direct_jxl?"linear":result.gainmap?"gainmap":result.transfer==16?"pq":result.transfer==18?"hlg":"source";
-    } else {
+    }
+    if(!source_done) {
         auto& linear=cache.linear;auto& raw_sdr=cache.raw_sdr;auto& exif=cache.exif;
         auto& w=cache.w;auto& h=cache.h;auto& gamut=cache.gamut;
         if(!cache.ready || processing_key(cache.previous,format)!=processing_key(o,format)) {

@@ -141,7 +141,8 @@ Image jpeg_image(const void* bytes,size_t size, StillEncodeQuality quality, bool
     return image;
 }
 
-int jpeg_to_jxl(const void* data,size_t size,const char* path,StillEncodeQuality quality,bool keep_exif,int* info) {
+int write_rgb_jpeg(unsigned,unsigned,const void*,const StillSourceColor&,const char*,StillEncodeQuality);
+int jpeg_to_integer(const void* data,size_t size,int target,const char* path,StillEncodeQuality quality,bool keep_exif,int* info) {
     ultrahdr::JpegDecoderHelper decoder;
     if(!ok(decoder.parseImage(data,size)) || uint64_t(decoder.getDecompressedImageWidth())*decoder.getDecompressedImageHeight()>kLimit)return -94;
     if(!ok(decoder.decompressImage(data,size,ultrahdr::DECODE_STREAM)))return -94;
@@ -158,9 +159,9 @@ int jpeg_to_jxl(const void* data,size_t size,const char* path,StillEncodeQuality
     }
     color.orientation=orientation(exif.data(),exif.size());
     if(keep_exif){quality.exif=exif.data();quality.exif_size=exif.size();}
-    const int rc=encode_jxl_source(rgb.w,rgb.h,rgb.planes[0],false,color,path,quality);
+    const int rc=target==0?write_rgb_jpeg(rgb.w,rgb.h,rgb.planes[0],color,path,quality):encode_jxl_source(rgb.w,rgb.h,rgb.planes[0],false,color,path,quality);
     info[0]=rgb.w;info[1]=rgb.h;info[2]=0;info[3]=13;info[4]=0;
-    return rc==0?1:rc;
+    return target==0?rc:rc==0?1:rc;
 }
 
 Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality quality,bool keep_exif,std::vector<uint8_t>& icc,
@@ -188,7 +189,9 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
                 (info.bits_per_sample<=16?JXL_TYPE_FLOAT16:JXL_TYPE_FLOAT):info.bits_per_sample>8?JXL_TYPE_UINT16:JXL_TYPE_UINT8;
         } else if(status==JXL_DEC_COLOR_ENCODING) {
             structured=JxlDecoderGetColorAsEncodedProfile(decoder.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS;
-            if(target!=1 && info.exponent_bits_per_sample && info.intensity_target>255.f &&
+            const bool scrgb=structured && info.intensity_target==80.f && color.white_point==JXL_WHITE_POINT_D65 &&
+                color.primaries==JXL_PRIMARIES_SRGB && color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR;
+            if(target!=1 && info.exponent_bits_per_sample && (info.intensity_target>255.f || scrgb) &&
                (!structured || (color.transfer_function!=JXL_TRANSFER_FUNCTION_PQ && color.transfer_function!=JXL_TRANSFER_FUNCTION_HLG))) {
                 unsupported=true;return Image(nullptr,avifImageDestroy);
             }
@@ -252,6 +255,15 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
     // Explicit HDR rendering remains available through the existing HDR targets.
     if(info.exponent_bits_per_sample && t!=16 && t!=18 && info.intensity_target>255.f) {
         unsupported=true;return Image(nullptr,avifImageDestroy);
+    }
+    if(target==0) {
+        StillSourceColor source;source.bits=info.bits_per_sample>8?16:8;
+        source.primaries=p;source.transfer=t;source.icc=icc.data();source.icc_size=icc.size();
+        quality.exif=exif.data();quality.exif_size=exif.size();
+        encoded_result=write_rgb_jpeg(info.xsize,info.ysize,pixels.data(),source,output,quality);
+        output_info[0]=info.xsize;output_info[1]=info.ysize;output_info[2]=0;output_info[3]=t;
+        if(!encoded_result)unsupported=true;
+        return Image(nullptr,avifImageDestroy);
     }
     const bool gray=icc.size()>=20 && !std::memcmp(icc.data()+16,"GRAY",4);
     auto image=from_rgb(info.xsize,info.ysize,pixels.data(),info.bits_per_sample>8,avif_source_depth(info.bits_per_sample,quality),p,t,quality,false,gray);
@@ -343,6 +355,29 @@ int write_avif_source(avifImage* image,const char* path,StillEncodeQuality quali
     if(f){good=fwrite(bytes.data,1,bytes.size,f)==bytes.size;if(fclose(f)!=0)good=false;}
     avifRWDataFree(&bytes);return good?1:-83;
 }
+bool jpeg_encode_raw(uhdr_raw_image_t& raw,int quality,const std::vector<uint8_t>& icc,std::vector<uint8_t>& out) {
+    // The RGB helper encodes 4:4:4, never 4:2:0.
+    ultrahdr::JpegEncoderHelper enc;
+    const bool split=icc.size()>65533;
+    if(!ok(enc.compressImage(&raw,quality,split?nullptr:icc.data(),split?0:icc.size())))return false;
+    const auto bytes=enc.getCompressedImage();
+    out.assign(static_cast<const uint8_t*>(bytes.data),static_cast<const uint8_t*>(bytes.data)+bytes.data_sz);
+    if(split) {
+        constexpr size_t part_size=65519;
+        const size_t raw_size=icc.size()-14,count=(raw_size+part_size-1)/part_size;
+        if(count>255)return false;
+        std::vector<uint8_t> markers;
+        for(size_t part=0;part<count;++part) {
+            const size_t at=part*part_size,n=std::min(part_size,raw_size-at),length=n+16;
+            markers.insert(markers.end(),{255,226,static_cast<uint8_t>(length>>8),static_cast<uint8_t>(length)});
+            markers.insert(markers.end(),icc.begin(),icc.begin()+12);
+            markers.push_back(static_cast<uint8_t>(part+1));markers.push_back(static_cast<uint8_t>(count));
+            markers.insert(markers.end(),icc.begin()+14+at,icc.begin()+14+at+n);
+        }
+        out.insert(out.begin()+2,markers.begin(),markers.end());
+    }
+    return true;
+}
 bool jpeg_compress(const avifImage* image,int quality,bool base,std::vector<uint8_t>& out,const avifImage* gain_owner=nullptr) {
     std::vector<uint8_t> rgba;
     if(!rgb_pixels(image,8,rgba))return false;
@@ -374,27 +409,7 @@ bool jpeg_compress(const avifImage* image,int quality,bool base,std::vector<uint
             if(p)icc.assign(static_cast<const uint8_t*>(p->getData()),static_cast<const uint8_t*>(p->getData())+p->getLength());
         }
     }
-    // The RGB helper encodes 4:4:4, never 4:2:0.
-    ultrahdr::JpegEncoderHelper enc;
-    const bool split=icc.size()>65533;
-    if(!ok(enc.compressImage(&raw,quality,split?nullptr:icc.data(),split?0:icc.size())))return false;
-    const auto bytes=enc.getCompressedImage();
-    out.assign(static_cast<const uint8_t*>(bytes.data),static_cast<const uint8_t*>(bytes.data)+bytes.data_sz);
-    if(split) {
-        constexpr size_t part_size=65519;
-        const size_t raw_size=icc.size()-14,count=(raw_size+part_size-1)/part_size;
-        if(count>255)return false;
-        std::vector<uint8_t> markers;
-        for(size_t part=0;part<count;++part) {
-            const size_t at=part*part_size,n=std::min(part_size,raw_size-at),length=n+16;
-            markers.insert(markers.end(),{255,226,static_cast<uint8_t>(length>>8),static_cast<uint8_t>(length)});
-            markers.insert(markers.end(),icc.begin(),icc.begin()+12);
-            markers.push_back(static_cast<uint8_t>(part+1));markers.push_back(static_cast<uint8_t>(count));
-            markers.insert(markers.end(),icc.begin()+14+at,icc.begin()+14+at+n);
-        }
-        out.insert(out.begin()+2,markers.begin(),markers.end());
-    }
-    return true;
+    return jpeg_encode_raw(raw,quality,icc,out);
 }
 unsigned image_orientation(const avifImage* image) {
     const unsigned rotation[]={1,8,3,6};
@@ -446,6 +461,48 @@ bool insert_jpeg_exif(std::vector<uint8_t>& jpeg,const StillEncodeQuality& quali
     std::vector<uint8_t> marker={255,225,static_cast<uint8_t>(length>>8),static_cast<uint8_t>(length),'E','x','i','f',0,0};
     marker.insert(marker.end(),quality.exif,quality.exif+quality.exif_size);
     jpeg.insert(jpeg.begin()+2,marker.begin(),marker.end());return true;
+}
+// Integer RGB goes straight to the JPEG codec. Quantize wider samples once,
+// at the 8-bit JPEG boundary; alpha compositing requires the render path.
+int write_rgb_jpeg(unsigned w,unsigned h,const void* pixels,const StillSourceColor& color,
+                   const char* path,StillEncodeQuality quality) {
+    if(!pixels || !w || !h || uint64_t(w)*h>kLimit)return -94;
+    if(!color.icc_size && color.transfer!=13 && color.transfer!=8)return 0;
+    const bool wide=color.bits>8,alpha=color.channels==2||color.channels==4;
+    const bool gray=color.channels<=2 || (color.icc_size>=20 && !std::memcmp(color.icc+16,"GRAY",4));
+    auto sample=[&](size_t i)->unsigned {
+        if(!wide)return static_cast<const uint8_t*>(pixels)[i];
+        uint16_t value;std::memcpy(&value,static_cast<const uint8_t*>(pixels)+i*2,2);return value;
+    };
+    const unsigned maximum=wide?65535:255;
+    if(alpha)for(size_t i=0;i<size_t(w)*h;++i)if(sample(i*color.channels+color.channels-1)!=maximum)return 0;
+    const bool direct=!wide && color.channels==(gray?1u:3u);
+    std::vector<uint8_t> rgb;
+    if(!direct) {
+        rgb.resize(size_t(w)*h*(gray?1:3));
+        for(size_t i=0;i<size_t(w)*h;++i)for(unsigned c=0;c<(gray?1u:3u);++c) {
+            const unsigned value=sample(i*color.channels+(color.channels<=2?0:c));
+            rgb[i*(gray?1:3)+c]=static_cast<uint8_t>((value*255u+maximum/2)/maximum);
+        }
+    }
+    std::vector<uint8_t> icc;
+    if(color.icc_size) {
+        const uint8_t prefix[]={'I','C','C','_','P','R','O','F','I','L','E',0,1,1};
+        icc.assign(prefix,prefix+sizeof(prefix));icc.insert(icc.end(),color.icc,color.icc+color.icc_size);
+    } else if(!gray) {
+        auto profile=ultrahdr::IccHelper::writeIccProfile(color.transfer==8?UHDR_CT_LINEAR:UHDR_CT_SRGB,gamut(color.primaries));
+        if(profile)icc.assign(static_cast<const uint8_t*>(profile->getData()),static_cast<const uint8_t*>(profile->getData())+profile->getLength());
+    }
+    uhdr_raw_image_t raw{};raw.fmt=gray?UHDR_IMG_FMT_8bppYCbCr400:UHDR_IMG_FMT_24bppRGB888;
+    raw.cg=gamut(color.primaries);raw.ct=color.transfer==8?UHDR_CT_LINEAR:UHDR_CT_SRGB;
+    raw.range=UHDR_CR_FULL_RANGE;raw.w=w;raw.h=h;raw.planes[0]=direct?const_cast<void*>(pixels):rgb.data();raw.stride[0]=w;
+    std::vector<uint8_t> encoded;if(!jpeg_encode_raw(raw,quality.jpeg(),icc,encoded))return -86;
+    std::vector<uint8_t> structural;
+    if(!quality.exif_size && color.orientation!=1) {structural=orientation_exif(color.orientation);quality.exif=structural.data();quality.exif_size=structural.size();}
+    if(!insert_jpeg_exif(encoded,quality))return -87;
+    FILE* file=fopen(path,"wb");if(!file)return -83;
+    const bool wrote=fwrite(encoded.data(),1,encoded.size(),file)==encoded.size();
+    const bool closed=fclose(file)==0;return wrote&&closed?1:-83;
 }
 int write_source_jpeg(const avifImage* image,const char* path,StillEncodeQuality quality) {
     // JPEG without a gain map needs the existing render path for absolute HDR
@@ -563,9 +620,9 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         const bool gain=ok(uhdr_dec_set_image(jpeg.get(),&source)) && ok(uhdr_dec_probe(jpeg.get()));
         if(gain && target==1)return -96;
         const auto* base=gain?uhdr_dec_get_base_image(jpeg.get()):nullptr;
-        if(target==1) {
+        if(target==1 || (target==0&&!gain)) {
             int info[5]{};
-            const int rc=jpeg_to_jxl(base?base->data:data,base?base->data_sz:size,path.get(),quality,keep_exif,info);
+            const int rc=jpeg_to_integer(base?base->data:data,base?base->data_sz:size,target,path.get(),quality,keep_exif,info);
             std::copy(info,info+5,out_info);return rc;
         }
         image=jpeg_image(base?base->data:data,base?base->data_sz:size,quality,false,&icc,&exif);
@@ -654,6 +711,12 @@ int convert_regular_source(const RegularImage& raster, int target, const char* p
         color.icc=raster.icc.data();color.icc_size=raster.icc.size();
         const int rc=encode_jxl_source(raster.width,raster.height,raster.pixels.data(),raster.bits>8,color,path,quality);
         return rc==0?1:rc;
+    }
+    if(target==0) {
+        StillSourceColor color;color.bits=raster.bits;color.orientation=raster.orientation;
+        color.primaries=raster.primaries;color.transfer=raster.transfer;
+        color.icc=raster.icc.data();color.icc_size=raster.icc.size();
+        return write_rgb_jpeg(raster.width,raster.height,raster.pixels.data(),color,path,quality);
     }
     // AVIF cannot retain all 16-bit codes: use the explicitly selected 10/12-bit depth.
     auto image=from_rgb(raster.width,raster.height,raster.pixels.data(),raster.bits>8,

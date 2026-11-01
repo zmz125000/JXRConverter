@@ -12,6 +12,7 @@ namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 #include <cstring>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <stdexcept>
 #include <vector>
 
@@ -107,6 +108,13 @@ static void regular_images(const fs::path& dir) {
         const auto direct=dir/(std::string(fixture.name)+"-direct.jxl");
         jxrc::convert(input,direct,options);
         check(bytes(direct)==encoded,"Untouched SDR raster did not retain integer source samples");
+        options.target=jxrc::Target::avif;options.mode=jxrc::Mode::preserve;
+        const auto nativeAvif=dir/(std::string(fixture.name)+"-native.avif");
+        jxrc::convert(input,nativeAvif,options);options.mode=jxrc::Mode::process;
+        const auto directAvif=dir/(std::string(fixture.name)+"-direct.avif");jxrc::convert(input,directAvif,options);
+        check(bytes(directAvif)==bytes(nativeAvif),"Untouched SDR to AVIF changed integer samples/tags");
+        check(jxrc::inspect(directAvif).bits==(fixture.bits==8?8:12),"SDR AVIF output depth");
+        options.target=jxrc::Target::jxl;
         options.max_edge=2;options.exposure=1;
         const auto processed=jxrc::convert(input,dir/(std::string(fixture.name)+"-processed.jxl"),options);
         check(processed.width==2 && processed.height==1,"Raster processing resize");
@@ -147,6 +155,10 @@ static void signed_float_jxl(const fs::path& dir) {
     }
     check(complete && std::memcmp(input.data(),output.data(),input.size()*sizeof(float))==0,"Signed float32 JXL samples changed");
     check(is_scrgb_jxl(encoded.data(),encoded.size()),"scRGB JXL detection");
+    for(auto target:{jxrc::Target::jpeg,jxrc::Target::avif}) {
+        jxrc::Options preserve;preserve.target=target;
+        fails([&]{jxrc::convert(path,dir/("scrgb-preserve-"+std::to_string(int(target))),preserve);});
+    }
     jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_scrgb;options.quality.preset=jxrc::Preset::lossless;
     const auto copied=dir/"scrgb-copy.jxl";jxrc::convert(path,copied,options);
     auto copy=bytes(copied);check(is_scrgb_jxl(copy.data(),copy.size()),"Direct scRGB JXL metadata lost");
@@ -254,6 +266,61 @@ static void shared_render(const fs::path& dir) {
     check(jxrc::inspect(half).bits==16,"Half-float JXR storage choice");
 }
 
+// Preserve native AVIF YUV planes and exercise JPEG quantization/compositing.
+static void jpeg_avif_paths(const fs::path& dir) {
+    auto image=std::unique_ptr<avifImage,decltype(&avifImageDestroy)>(avifImageCreate(8,8,8,AVIF_PIXEL_FORMAT_YUV420),avifImageDestroy);
+    check(bool(image),"AVIF YUV fixture allocation");
+    image->colorPrimaries=AVIF_COLOR_PRIMARIES_BT2020;image->transferCharacteristics=AVIF_TRANSFER_CHARACTERISTICS_SRGB;
+    image->matrixCoefficients=AVIF_MATRIX_COEFFICIENTS_BT2020_NCL;image->yuvRange=AVIF_RANGE_LIMITED;
+    check(avifImageAllocatePlanes(image.get(),AVIF_PLANES_YUV)==AVIF_RESULT_OK,"AVIF fixture planes");
+    for(unsigned c=0;c<3;++c)for(unsigned y=0;y<(c?4u:8u);++y)for(unsigned x=0;x<(c?4u:8u);++x)
+        image->yuvPlanes[c][y*image->yuvRowBytes[c]+x]=uint8_t(16+(x*31+y*53+c*47)%220);
+    auto encoder=std::unique_ptr<avifEncoder,decltype(&avifEncoderDestroy)>(avifEncoderCreate(),avifEncoderDestroy);
+    encoder->codecChoice=AVIF_CODEC_CHOICE_AOM;encoder->quality=100;encoder->speed=10;encoder->maxThreads=1;
+    avifRWData compressed=AVIF_DATA_EMPTY;
+    check(avifEncoderWrite(encoder.get(),image.get(),&compressed)==AVIF_RESULT_OK,"AVIF YUV fixture encode");
+    const auto input=dir/"native-yuv.avif",output=dir/"native-yuv-copy.avif";
+    write(input,std::vector<uint8_t>(compressed.data,compressed.data+compressed.size));avifRWDataFree(&compressed);
+    jxrc::Options o;o.mode=jxrc::Mode::process;o.target=jxrc::Target::avif;o.quality.preset=jxrc::Preset::lossless;
+    jxrc::convert(input,output,o);
+    auto decoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+    const auto data=bytes(output);check(avifDecoderSetIOMemory(decoder.get(),data.data(),data.size())==AVIF_RESULT_OK && avifDecoderParse(decoder.get())==AVIF_RESULT_OK && avifDecoderNextImage(decoder.get())==AVIF_RESULT_OK,"Copied AVIF decode");
+    const auto* copied=decoder->image;
+    check(copied->yuvFormat==image->yuvFormat && copied->yuvRange==image->yuvRange && copied->matrixCoefficients==image->matrixCoefficients && copied->colorPrimaries==image->colorPrimaries,"Untouched AVIF YUV layout or color tags changed");
+    for(unsigned c=0;c<3;++c)for(unsigned y=0;y<(c?4u:8u);++y)
+        check(!std::memcmp(copied->yuvPlanes[c]+y*copied->yuvRowBytes[c],image->yuvPlanes[c]+y*image->yuvRowBytes[c],c?4:8),"Untouched AVIF YUV samples changed");
+    // Both adapter precisions must present tightly packed bytes to libavif
+    // when the source-depth cap requests an 8-bit output.
+    const float values[]={0.f,.25f,1.f,1.f,.5f,.75f,.125f,.5f,1.f,.5f,.25f,1.f,.125f,0.f,.75f,0.f};
+    StillEncodeQuality quality(0);quality.source_bits=8;
+    for(int mode=0;mode<3;++mode) {
+        std::vector<uint16_t> half(16);std::transform(values,values+16,half.begin(),float_to_half);
+        const auto f16=dir/("avif8-f16-"+std::to_string(mode)+".avif"),f32=dir/("avif8-f32-"+std::to_string(mode)+".avif");
+        check(encode_avif_f16(2,2,half.data(),UHDR_CG_BT_709,mode,f16.string().c_str(),quality,nullptr)==0,"F16 8-bit AVIF encode");
+        check(encode_avif_f32(2,2,values,UHDR_CG_BT_709,mode,f32.string().c_str(),quality,nullptr)==0,"F32 8-bit AVIF encode");
+        check(bytes(f16)==bytes(f32),"F16/F32 8-bit AVIF packing mismatch");
+    }
+    // Both source depths describe the same final 8-bit JPEG codes. An AVIF
+    // bridge would introduce an extra YUV conversion/depth quantization.
+    std::vector<uint8_t> rgb8(16*16*4);std::vector<uint16_t> rgb16(rgb8.size());
+    for(size_t i=0;i<rgb8.size();++i) {
+        rgb8[i]=i%4==3?255:uint8_t((i*37+19)%256);
+        rgb16[i]=uint16_t(rgb8[i]*257u);
+        if(i%4!=3 && rgb8[i]>0 && rgb8[i]<255)rgb16[i]+=73;
+    }
+    StillSourceColor color;
+    check(encode_jxl_source(16,16,rgb8.data(),false,color,(dir/"jpeg-source8.jxl").string().c_str(),StillEncodeQuality(0))==0,"JPEG source8 fixture");
+    color.bits=16;
+    check(encode_jxl_source(16,16,rgb16.data(),true,color,(dir/"jpeg-source16.jxl").string().c_str(),StillEncodeQuality(0))==0,"JPEG source16 fixture");
+    o.target=jxrc::Target::jpeg;o.quality.preset=jxrc::Preset::low;
+    jxrc::convert(dir/"jpeg-source8.jxl",dir/"jpeg8.jpg",o);jxrc::convert(dir/"jpeg-source16.jxl",dir/"jpeg16.jpg",o);
+    check(bytes(dir/"jpeg8.jpg")==bytes(dir/"jpeg16.jpg"),"JPEG integer source took an extra color/depth conversion");
+    write(dir/"jpeg-alpha.png",raster_png16);
+    jxrc::convert(dir/"jpeg-alpha.png",dir/"alpha-direct.jpg",o);
+    o.max_edge=64000;jxrc::convert(dir/"jpeg-alpha.png",dir/"alpha-rendered.jpg",o);
+    check(bytes(dir/"alpha-direct.jpg")==bytes(dir/"alpha-rendered.jpg"),"JPEG alpha compositing changed");
+}
+
 // Insert a valid color chunk into synthetic fixtures; no external HDR assets.
 static std::vector<uint8_t> png_chunk(std::vector<uint8_t> png,const char* type,std::vector<uint8_t> payload) {
     std::vector<uint8_t> chunk={0,0,0,uint8_t(payload.size())};
@@ -338,7 +405,7 @@ int main(int argc,char** argv) try {
     check(!is_avif_input(cr3_header.data(),8),"Truncated BMFF identified as AVIF");
     shared_render(dir);
     signed_float_jxl(dir);
-    regular_images(dir);
+    regular_images(dir);jpeg_avif_paths(dir);
     jxrc::validate({});
     { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }
 

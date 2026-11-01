@@ -104,3 +104,13 @@ JXL without exposure or resizing. Eligible JPEGs bypass RGB decoding and the JXL
 quality preset. Other source formats use normal conversion. The toggle is
 persistent; temporarily disabling it for pixel edits retains the saved choice.
 Keep EXIF enables reconstruction of the original JPEG bytes.
+
+Untouched SDR integer inputs also use source-value paths for JPEG and AVIF
+outputs. JPEG encodes integer RGB directly without temporary AVIF YUV planes;
+wider samples are quantized once to JPEG's 8-bit input. Alpha compositing and
+HDR rendering still use float32. AVIF keeps native YUV planes and color tags
+when the requested depth permits; integer raster inputs convert to destination
+YUV once. Eight-bit inputs remain eight-bit, and processed AVIF respects the
+preset/custom maximum depth.
+Preserve mode rejects scRGB HDR JXL to JPEG/AVIF conversions that would clip
+extended samples; use Process pixels to render these outputs explicitly.
