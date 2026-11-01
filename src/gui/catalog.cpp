@@ -180,6 +180,9 @@ void Catalog::pumpThumbnails() {
         if(cache_.contains(path)||record.thumbnailFailed||thumbnailJobs_.contains(path))continue;
         record.thumbnailPending=true;
         auto token=std::make_shared<std::atomic_bool>(true);thumbnailJobs_.insert(path,token);
+        // Capture only the path and cancellation token. Opening the file and
+        // constructing its decoder happen inside readThumbnail, after this
+        // runnable starts and checks cancellation.
         thumbnails_.start([this,path,token] {
             QImage image;QString error;
             if(token->load()) {

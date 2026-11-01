@@ -268,8 +268,10 @@ QWidget* MainWindow::buildControls() {
     acceptSdr_->setToolTip("For HDR targets, include SDR-source filenames using the SDR output equivalent. The scRGB HDR target converts them to scRGB. Like LocalViewer, JXL, JXR and RAW filenames are in the HDR group; JPEG, AVIF, PNG, WebP, TIFF, BMP and GIF are in the SDR group regardless of their contents.");
     connect(acceptSdr_,&QCheckBox::toggled,this,[](bool on){appSettings().setValue("conversion/acceptSdr",on);});
     targetActions->addWidget(acceptSdr_);targetActions->addStretch();
-    auto* clearTargets=new QPushButton("Clear targets");clearTargets->setObjectName("clearTargets");targetActions->addWidget(clearTargets);
+    auto* clearTargets=new QPushButton("None");clearTargets->setObjectName("clearTargets");clearTargets->setToolTip("Deselect all output formats.");targetActions->addWidget(clearTargets);
+    auto* allTargets=new QPushButton("All");allTargets->setObjectName("allTargets");allTargets->setToolTip("Select all output formats available in the current conversion mode.");targetActions->addWidget(allTargets);
     connect(clearTargets,&QPushButton::clicked,this,[this]{const QSignalBlocker blocker(targets_);for(int i=0;i<targets_->count();++i)targets_->item(i)->setCheckState(Qt::Unchecked);updateMode();});
+    connect(allTargets,&QPushButton::clicked,this,[this]{const QSignalBlocker blocker(targets_);for(int i=0;i<targets_->count();++i){auto* item=targets_->item(i);if(item->flags()&Qt::ItemIsEnabled)item->setCheckState(Qt::Checked);}updateMode();});
     outputFormatsLayout->addLayout(targetActions);layout->addWidget(outputFormats);
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
