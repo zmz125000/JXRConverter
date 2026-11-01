@@ -18,12 +18,15 @@ ImageInfo inspect(const std::filesystem::path& input) {
     auto length=stream.tellg();if(length<=0||length>512LL*1024*1024)throw std::runtime_error("Input exceeds inspection limit");
     std::vector<uint8_t> bytes(static_cast<size_t>(length));stream.seekg(0);
     if(!stream.read(reinterpret_cast<char*>(bytes.data()),bytes.size()))throw std::runtime_error("Cannot read image");
+    return inspect_bytes(bytes);
+}
+ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
     ImageInfo out;
     if(bytes.size()>2&&bytes[0]==255&&bytes[1]==216) {
         ultrahdr::JpegDecoderHelper jpeg;
         if(jpeg.parseImage(bytes.data(),bytes.size()).error_code!=UHDR_CODEC_OK)throw std::runtime_error("Invalid JPEG");
         out.width=jpeg.getDecompressedImageWidth();out.height=jpeg.getDecompressedImageHeight();out.bits=8;out.format="JPEG";
-        out.gainmap=is_uhdr_image(bytes.data(),static_cast<int>(bytes.size()))==1;out.transfer="sRGB";
+        out.gainmap=is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))==1;out.transfer="sRGB";
         if(out.gainmap)out.transfer="Gain map";
         out.hdr=out.gainmap;
         auto icc=source_jpeg_icc(bytes.data(),bytes.size());out.primaries=icc.empty()?"sRGB":"ICC";

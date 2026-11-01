@@ -29,3 +29,5 @@ int decode_raw_f32(const uint8_t*,size_t,const jxrc::RawControls&,bool,unsigned,
 // Full-range, straight-alpha integer RGB to the same HDR working values as AVIF.
 void cicp_rgb_to_linear(const uint8_t*,size_t,unsigned,unsigned,unsigned,std::vector<float>&,uhdr_color_gamut_t&);
 void cicp_rgb_to_linear(const uint8_t*,size_t,unsigned,unsigned,unsigned,std::vector<uint16_t>&,uhdr_color_gamut_t&);
+
+namespace jxrc { ImageInfo inspect_bytes(const std::vector<uint8_t>&); }

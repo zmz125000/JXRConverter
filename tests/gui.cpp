@@ -185,6 +185,11 @@ private slots:
         const auto jobs=makeJobs({a,b},destination,o);QCOMPARE(jobs.size(),2);QVERIFY(jobs[0].output!=jobs[1].output);
         ConversionQueue queue;QSignalSpy done(&queue,&ConversionQueue::batchFinished);queue.start(jobs,2,2);QTRY_COMPARE(done.count(),1);
         QCOMPARE(done[0][0].toInt(),2);QCOMPARE(done[0][1].toInt(),0);for(const auto& job:jobs)QVERIFY(QFileInfo(job.output).size()>0);
+        QVector<Job> multiple;o.mode=jxrc::Mode::process;QDir().mkpath(root("jobs/multiple"));
+        for(auto target:{jxrc::Target::avif,jxrc::Target::jxl,jxrc::Target::jxl_pq}){o.target=target;multiple+=makeJobs({a,b},root("jobs/multiple"),o);}
+        queue.start(multiple,2,2);QTRY_COMPARE(done.count(),2);
+        QCOMPARE(done[1][0].toInt(),6);QCOMPARE(done[1][1].toInt(),0);
+        for(const auto& job:multiple)QVERIFY(QFileInfo(job.output).size()>0);
     }
 };
 QTEST_MAIN(GuiTests)

@@ -23,7 +23,7 @@ class ConversionQueue : public QObject {
     Q_OBJECT
 public:
     using Convert = std::function<Result(const std::filesystem::path&, const std::filesystem::path&, const Options&)>;
-    explicit ConversionQueue(QObject* parent = nullptr, Convert converter = jxrc::convert);
+    explicit ConversionQueue(QObject* parent = nullptr, Convert converter = {});
     ~ConversionQueue() override;
     void start(QVector<Job> jobs, int parallelism, int cores = coreCount());
     void cancelPending();
@@ -40,6 +40,8 @@ private:
     int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, limit_ = 1;
     QThreadPool pool_;
     Convert converter_;
+    QSet<QString> activeInputs_;
+    QHash<QString,std::shared_ptr<ConversionSession>> sessions_;
     QHash<QString, int> remaining_, fileCancelled_;
     QHash<QString, QString> fileErrors_;
 };

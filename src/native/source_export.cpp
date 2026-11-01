@@ -51,7 +51,7 @@ uhdr_color_gamut_t gamut(int p) { return p == 9 ? UHDR_CG_BT_2100 : p == 12 ? UH
 int primary(uhdr_color_gamut_t p) { return p == UHDR_CG_BT_2100 ? 9 : p == UHDR_CG_DISPLAY_P3 ? 12 : 1; }
 // AV1 stores 8/10/12-bit samples; only wider sources fall back to the configured AVIF depth.
 unsigned avif_source_depth(unsigned bits, const StillEncodeQuality& quality) {
-    return bits <= 8 ? 8 : bits <= 10 ? 10 : bits <= 12 ? 12 : quality.avif_depth();
+    return std::min(bits <= 8 ? 8u : bits <= 10 ? 10u : 12u,quality.avif_depth());
 }
 
 Image from_rgb(unsigned w, unsigned h, const void* pixels, bool sixteen, unsigned depth,

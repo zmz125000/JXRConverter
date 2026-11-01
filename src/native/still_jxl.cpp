@@ -225,6 +225,14 @@ int encode_jxl_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg
         }
     });
     const float intensity=pq?kMaxNits:hdr?peak*kSdrWhiteNits:kSdrWhiteNits;
+    if(pq || (hdr && quality.jxl_half)) {
+        std::vector<uint16_t> packed(encoded.size());
+        std::transform(encoded.begin(),encoded.end(),packed.begin(),[&](float v){
+            return pq?static_cast<uint16_t>(std::lround(std::clamp(v,0.f,1.f)*65535.f)):float_to_half(v);
+        });
+        return encode_jxl_pixels(w,h,packed.data(),cg,path,quality,pq?JXL_TYPE_UINT16:JXL_TYPE_FLOAT16,
+            pq?JXL_TRANSFER_FUNCTION_PQ:JXL_TRANSFER_FUNCTION_LINEAR,intensity);
+    }
     return encode_jxl_pixels(w,h,encoded.data(),cg,path,quality,JXL_TYPE_FLOAT,
         pq?JXL_TRANSFER_FUNCTION_PQ:JXL_TRANSFER_FUNCTION_LINEAR,intensity);
 }

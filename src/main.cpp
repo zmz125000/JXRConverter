@@ -14,7 +14,7 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-pq, avif, avif-pq, avif-gainma
   --preset lossless|high|medium|low|custom    Default: high
   --quality 1..100              Custom JPEG/AVIF quality (selects custom preset)
   --jxl-distance 0..3           Custom JXL distance (selects custom preset)
-  --avif-depth 10|12            Custom AVIF depth (selects custom preset)
+  --avif-depth 10|12            Custom AVIF maximum depth (selects custom preset)
   --downsize-gainmap            Halve gain-map size (selects custom preset)
   --jpeg-transcoding           Preserve JPEG coefficients in JXL (preserve mode only)
   --threads 0..65535            Per-conversion CPU budget; 0 = automatic

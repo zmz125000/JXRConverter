@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <string>
+#include <memory>
 #include <vector>
 
 namespace jxrc {
@@ -14,7 +15,7 @@ struct Quality {
     Preset preset = Preset::high;
     float jxl_distance = 0.5f;
     int codec_quality = 90;
-    int avif_depth = 10;
+    int avif_depth = 10; // Custom maximum depth; sources of 8 bits or less stay 8-bit.
     bool downsize_gainmap = false;
 };
 enum class RawHdrMode { source, boost, custom };
@@ -52,6 +53,19 @@ struct Result {
 // Throws std::invalid_argument for invalid controls, std::runtime_error for codec/I/O errors.
 // Options are captured per call. Output is staged beside the destination before publication.
 JXRC_API Result convert(const std::filesystem::path& input, const std::filesystem::path& output, const Options& options = {});
+// A batch-scoped, thread-confined source. Compatible outputs share immutable
+// float32 pixels; changed processing controls invalidate the prepared render.
+class JXRC_API ConversionSession {
+public:
+    explicit ConversionSession(const std::filesystem::path& input);
+    ~ConversionSession();
+    ConversionSession(const ConversionSession&) = delete;
+    ConversionSession& operator=(const ConversionSession&) = delete;
+    Result convert(const std::filesystem::path& output, const Options& options = {});
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
 struct ImageInfo {
     unsigned width = 0, height = 0, bits = 0;
     bool raw = false, gainmap = false, hdr = false;

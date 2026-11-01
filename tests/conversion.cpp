@@ -135,6 +135,31 @@ static void signed_float_jxl(const fs::path& dir) {
     check(complete && std::memcmp(input.data(),output.data(),input.size()*sizeof(float))==0,"Signed float32 JXL samples changed");
 }
 
+static void shared_render(const fs::path& dir) {
+    const auto source=dir/"session.png";write(source,raster_png8);
+    jxrc::ConversionSession session(source);
+    jxrc::Options o;o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl;o.quality.preset=jxrc::Preset::lossless;
+    session.convert(dir/"session.jxl",o);
+    o.target=jxrc::Target::avif;
+    session.convert(dir/"session.avif",o);
+    jxrc::convert(source,dir/"single.avif",o);
+    check(bytes(dir/"session.avif")==bytes(dir/"single.avif"),"Shared render changed AVIF pixels");
+    check(jxrc::inspect(dir/"session.avif").bits==8,"AVIF maximum depth promoted an 8-bit source");
+    o.target=jxrc::Target::jxl_pq;
+    session.convert(dir/"session-pq.jxl",o);
+    check(jxrc::inspect(dir/"session-pq.jxl").bits==16,"PQ JXL must store 16-bit integer codes");
+    o.target=jxrc::Target::jxl;o.exposure=1;o.max_edge=2;
+    session.convert(dir/"changed.jxl",o);jxrc::convert(source,dir/"single.jxl",o);
+    check(bytes(dir/"changed.jxl")==bytes(dir/"single.jxl"),"Shared render failed to invalidate changed controls");
+    o.target=jxrc::Target::avif;o.quality.preset=jxrc::Preset::custom;o.quality.avif_depth=10;
+    write(source,raster_png16);jxrc::convert(source,dir/"max10.avif",o);
+    check(jxrc::inspect(dir/"max10.avif").bits==10,"Custom AVIF max depth");
+    const float hdr[]={-0.125f,2.f,0.5f,0.5f};StillEncodeQuality quality(0);quality.jxl_half=true;
+    const auto half=dir/"half-linear.jxl";
+    check(encode_jxl_f32(1,1,hdr,UHDR_CG_BT_709,true,half.string().c_str(),quality,false)==0,"Half-float linear JXL encode");
+    check(jxrc::inspect(half).bits==16,"Half-float JXR storage choice");
+}
+
 // Insert a valid color chunk into synthetic fixtures; no external HDR assets.
 static std::vector<uint8_t> png_chunk(std::vector<uint8_t> png,const char* type,std::vector<uint8_t> payload) {
     std::vector<uint8_t> chunk={0,0,0,uint8_t(payload.size())};
@@ -217,6 +242,7 @@ int main(int argc,char** argv) try {
     std::memcpy(avif_header.data()+8,"mif1",4);
     check(is_avif_input(avif_header.data(),avif_header.size()),"AVIF compatible brand rejected");
     check(!is_avif_input(cr3_header.data(),8),"Truncated BMFF identified as AVIF");
+    shared_render(dir);
     signed_float_jxl(dir);
     regular_images(dir);
     jxrc::validate({});

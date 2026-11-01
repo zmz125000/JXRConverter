@@ -205,3 +205,19 @@ Before `cpack`, run `python tools/prepare_release_sources.py build`. Release CI
 also publishes `JXRConverter-<version>-source.tar.gz` with native dependency sources
 and the matching Qt/ICU source archives. See [redistribution](docs/redistribution.md)
 and the [package audit](docs/release-audit.md).
+
+Multiple outputs share one float32 render per source in Process pixels mode.
+The queue runs different source files in parallel and encodes each source's targets
+in sequence, keeping prepared-image memory bounded by the worker count. RAW SDR,
+HDR and HDR with a separate SDR base require different renders; targets within
+each family share their render. The native `ConversionSession` API exposes the
+same reuse to library callers and snapshots a source for the session's lifetime.
+Changed processing controls invalidate the prepared pixels.
+
+Processing remains float32 until encoding. PQ JXL stores 16-bit integer codes.
+Linear HDR JXL from 16-bit HDR JXR stores half-float samples; other linear JXL
+processing uses float32. This chooses output storage precision and does not bypass
+orientation, exposure, color conversion or the HDR luminance normalization.
+AVIF depth is a maximum: 8-bit sources remain 8-bit, with higher-depth sources
+capped by the preset or custom 10/12-bit choice. AVIF supports 8/10/12-bit files;
+its uint16 RGB encoder input buffer does not imply a 16-bit AVIF file.
