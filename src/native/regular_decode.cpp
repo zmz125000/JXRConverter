@@ -94,16 +94,19 @@ RegularImage decode_png(const uint8_t* data,size_t size) {
     image.width=png_get_image_width(png,info);image.height=png_get_image_height(png,info);dimensions(image.width,image.height);
     const int color=png_get_color_type(png,info),depth=png_get_bit_depth(png,info);
     image.bits=depth==16?16:8;
-    // HDR PNG requires CICP-aware processing; fail rather than silently treating it as SDR.
+    bool cicp=false;
+    // cICP takes precedence over ICC/sRGB/gAMA/cHRM. Keep source codes intact.
 #ifdef PNG_cICP_SUPPORTED
     png_byte cp=0,tc=0,mc=0,full=0;
-    if(png_get_cICP(png,info,&cp,&tc,&mc,&full))
-        check(cp==1 && (tc==13 || tc==1) && mc==0 && full==1,"Unsupported PNG CICP encoding");
-    check(!tc || tc==13,"PNG BT.709 transfer requires an explicit profile");
+    if(png_get_cICP(png,info,&cp,&tc,&mc,&full)) {
+        check((cp==1 || cp==9 || cp==12) && (tc==16 || tc==18 || (cp==1 && tc==13)) && mc==0 && full==1,
+              "Unsupported PNG CICP encoding (requires supported primaries and full-range RGB)");
+        image.primaries=cp;image.transfer=tc;cicp=true;
+    }
 #endif
     png_charp name=nullptr;int compression=0;png_bytep profile=nullptr;png_uint_32 profile_size=0;
-    if(png_get_iCCP(png,info,&name,&compression,&profile,&profile_size))copy_metadata(image.icc,profile,profile_size);
-    else {
+    if(!cicp && png_get_iCCP(png,info,&name,&compression,&profile,&profile_size))copy_metadata(image.icc,profile,profile_size);
+    else if(!cicp) {
         int intent=0;double gamma=0,wx=0.3127,wy=0.3290,rx=0.64,ry=0.33,gx=0.30,gy=0.60,bx=0.15,by=0.06;
         if(!png_get_sRGB(png,info,&intent)) {
             const bool has_gamma=png_get_gAMA(png,info,&gamma)!=0;
@@ -295,6 +298,10 @@ RegularImage decode_regular(const uint8_t* data,size_t size) {
     throw std::runtime_error("Unsupported regular image format");
 }
 void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,uhdr_color_gamut_t& gamut) {
+    if(image.hdr()) {
+        cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
+                           image.primaries,image.transfer,pixels,gamut);return;
+    }
     skcms_ICCProfile source=*skcms_sRGB_profile(),destination;
     if(!image.icc.empty())check(skcms_Parse(image.icc.data(),image.icc.size(),&source),"Invalid raster ICC profile");
     check(make_linear_bt2020_profile(&destination),"Cannot build working profile");
@@ -304,6 +311,10 @@ void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,u
     gamut=UHDR_CG_BT_2100;
 }
 void regular_to_linear(const RegularImage& image,std::vector<float>& pixels,uhdr_color_gamut_t& gamut) {
+    if(image.hdr()) {
+        cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
+                           image.primaries,image.transfer,pixels,gamut);return;
+    }
     skcms_ICCProfile source=*skcms_sRGB_profile(),destination;
     if(!image.icc.empty())check(skcms_Parse(image.icc.data(),image.icc.size(),&source),"Invalid raster ICC profile");
     check(make_linear_bt2020_profile(&destination),"Cannot build working profile");

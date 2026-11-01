@@ -21,3 +21,7 @@ The optional Qt desktop links Qt 6 Widgets (LGPL/GPL/commercial licensing) and
 Exiv2 (GPL and accompanying dependency notices). The pinned Ultra HDR CPU-count
 helper is adapted in a generated build-tree copy to honor per-conversion thread
 budgets; its original licenses and notices are retained.
+
+HDR PNG source support follows LocalViewer commit
+bbbeba5db374936c624951e491cc7b828397d673, adapted for the portable libpng
+decoder, float32 processing and source-preserving JXL/AVIF exports.

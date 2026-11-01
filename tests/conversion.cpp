@@ -105,10 +105,80 @@ static void regular_images(const fs::path& dir) {
     }
 }
 
+// Insert a valid color chunk into synthetic fixtures; no external HDR assets.
+static std::vector<uint8_t> png_chunk(std::vector<uint8_t> png,const char* type,std::vector<uint8_t> payload) {
+    std::vector<uint8_t> chunk={0,0,0,uint8_t(payload.size())};
+    chunk.insert(chunk.end(),type,type+4);chunk.insert(chunk.end(),payload.begin(),payload.end());
+    uint32_t crc=~0u;
+    for(size_t i=4;i<chunk.size();++i){crc^=chunk[i];for(int b=0;b<8;++b)crc=(crc>>1)^((crc&1)?0xedb88320u:0);}
+    crc=~crc;for(int i=3;i>=0;--i)chunk.push_back(uint8_t(crc>>(8*i)));
+    png.insert(png.begin()+33,chunk.begin(),chunk.end());return png;
+}
+static void hdr_png(const fs::path& dir) {
+    for(unsigned depth:{8u,16u})for(unsigned cp:{1u,9u,12u})for(unsigned tc:{16u,18u}) {
+        const auto name=std::to_string(depth)+"-"+std::to_string(cp)+"-"+std::to_string(tc);
+        auto png=png_chunk(depth==16?raster_png16:raster_png8,"cICP",{uint8_t(cp),uint8_t(tc),0,1});
+        // A lower-priority gamma chunk must never change the HDR interpretation.
+        png=png_chunk(png,"gAMA",{0,0,177,143});
+        const auto input=dir/(name+".png");write(input,png);
+        const auto source=decode_regular(png.data(),png.size());
+        check(source.hdr() && source.transfer==tc && source.primaries==cp && source.icc.empty(),"HDR PNG cICP priority");
+        const auto info=jxrc::inspect(input);
+        check(info.hdr && info.bits==depth && info.transfer==(tc==16?"PQ":"HLG"),"HDR PNG inspection");
+        std::vector<float> linear;uhdr_color_gamut_t gamut;regular_to_linear(source,linear,gamut);
+        check(gamut==(cp==9?UHDR_CG_BT_2100:cp==12?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709),"HDR PNG primaries");
+        const auto& codes=depth==16?expected_png16:expected_png8;const double max=depth==16?65535:255;
+        for(size_t i=0;i<6;++i) {
+            double rgb[3];
+            for(unsigned c=0;c<3;++c) {
+                const double v=codes[i*4+c]/max;
+                if(tc==16){const double n=std::pow(v,32./2523.);rgb[c]=10000./203.*std::pow(std::max(n-3424./4096.,0.)/(2413./128.-2392./128.*n),16384./2610.);}
+                else rgb[c]=v<=.5?v*v/3.:(std::exp((v-.55991073)/.17883277)+.28466892)/12.;
+            }
+            if(tc==18) {
+                const double yr=cp==9?.2627:cp==12?.2289746:.2126,yb=cp==9?.0593:cp==12?.0792869:.0722;
+                const double scale=std::pow(yr*rgb[0]+(1-yr-yb)*rgb[1]+yb*rgb[2],.2)*1000./203.;
+                for(auto& c:rgb)c*=scale;
+            }
+            for(unsigned c=0;c<3;++c)check(std::abs(linear[i*4+c]-rgb[c])<std::max(1e-6,std::abs(rgb[c])*.0003),"HDR PNG transfer/OOTF");
+            check(std::abs(linear[i*4+3]-codes[i*4+3]/max)<1e-7,"HDR PNG straight alpha");
+        }
+        const auto thumb=jxrc::preview(input,2);check(thumb.width==2 && thumb.height==1,"HDR PNG preview");
+        jxrc::Options options;options.target=jxrc::Target::jxl;options.quality.preset=jxrc::Preset::lossless;
+        const auto output=dir/(name+".jxl");const auto result=jxrc::convert(input,output,options);
+        check(result.transfer==int(tc),"Preserved PNG transfer result");
+        const auto encoded=bytes(output);auto dec=JxlDecoderMake(nullptr);
+        JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING|JXL_DEC_FULL_IMAGE);
+        JxlDecoderSetInput(dec.get(),encoded.data(),encoded.size());JxlDecoderCloseInput(dec.get());
+        std::vector<uint16_t> samples(24);const JxlPixelFormat format{4,JXL_TYPE_UINT16,JXL_NATIVE_ENDIAN,0};bool complete=false;
+        for(;;) {
+            const auto status=JxlDecoderProcessInput(dec.get());
+            if(status==JXL_DEC_COLOR_ENCODING){JxlColorEncoding color{};check(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS,"PNG JXL color profile");check(int(color.transfer_function)==int(tc) && int(color.primaries)==int(cp==12?JXL_PRIMARIES_P3:cp),"PNG JXL cICP preservation");}
+            else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER)check(JxlDecoderSetImageOutBuffer(dec.get(),&format,samples.data(),samples.size()*2)==JXL_DEC_SUCCESS,"PNG JXL pixel buffer");
+            else if(status==JXL_DEC_FULL_IMAGE){complete=true;break;}
+            else if(status==JXL_DEC_SUCCESS)break;
+            else check(status!=JXL_DEC_ERROR && status!=JXL_DEC_NEED_MORE_INPUT,"PNG JXL decode");
+        }
+        check(complete,"PNG JXL missing pixels");
+        for(size_t i=0;i<24;++i)check(samples[i]==codes[i]*(depth==16?1:257),"HDR PNG source code changed");
+        options.target=jxrc::Target::avif;
+        const auto avif=dir/(name+".avif");check(jxrc::convert(input,avif,options).transfer==int(tc),"PNG AVIF transfer preservation");
+        const auto avif_info=jxrc::inspect(avif);check(avif_info.hdr && avif_info.transfer==info.transfer && avif_info.primaries==info.primaries,"PNG AVIF color metadata");
+        options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;
+        check(jxrc::convert(input,dir/(name+"-linear.jxl"),options).width==3,"HDR PNG processing");
+    }
+    for(auto tags:std::vector<std::vector<uint8_t>>{{9,16,0,0},{9,16,1,1},{2,16,0,1}}) {
+        auto bad=png_chunk(raster_png16,"cICP",tags);fails([&]{decode_regular(bad.data(),bad.size());});
+    }
+    auto bad=png_chunk(raster_png16,"cICP",{9,16,0,1});bad[45]^=1;
+    fails([&]{decode_regular(bad.data(),bad.size());}); // CRC, not just chunk contents.
+}
+
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
     // BMFF is a container, not an AVIF signature. Canon CR3 must reach LibRaw.
     const std::vector<uint8_t> cr3_header={0,0,0,24,'f','t','y','p','c','r','x',' ',0,0,0,1,'c','r','x',' ','i','s','o','m'};
     check(!is_avif_input(cr3_header.data(),cr3_header.size()),"CR3 routed to AVIF decoder");

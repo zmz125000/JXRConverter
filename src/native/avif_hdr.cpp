@@ -38,6 +38,15 @@
 #define ALOGE(...) ((void)0)
 #define ALOGI(...) ((void)0)
 
+// BT.2100 reference display OOTF: scene-linear HLG to 203-nit-relative RGB.
+static void hlg_display_rgb(float& r,float& g,float& b,uhdr_color_gamut_t cg) {
+    const float yr=cg==UHDR_CG_DISPLAY_P3?0.2289746f:cg==UHDR_CG_BT_2100?0.2627f:0.2126f;
+    const float yb=cg==UHDR_CG_DISPLAY_P3?0.0792869f:cg==UHDR_CG_BT_2100?0.0593f:0.0722f;
+    const float scene_y=(yr*r+(1.f-yr-yb)*g+yb*b)/12.f;
+    const float scale=std::pow(std::max(scene_y,0.f),0.2f)*(1000.f/(12.f*kSdrWhiteNits));
+    r*=scale;g*=scale;b*=scale;
+}
+
 // Parse container metadata only, independently of platform AV1/profile support.
 namespace {
 
@@ -552,18 +561,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
                 float an = p[3] / 65535.f;
                 float rl = linear[p[0]], gl = linear[p[1]], bl = linear[p[2]];
 
-                if (is_hlg) {
-                    // LUT values are 12 * scene RGB. BT.2100's reference
-                    // 1000-nit display needs the luminance-dependent OOTF,
-                    // gamma 1.2, before our 203-nit-relative working space.
-                    const float yr = cg == UHDR_CG_DISPLAY_P3 ? 0.2289746f : cg == UHDR_CG_BT_2100 ? 0.2627f : 0.2126f;
-                    const float yb = cg == UHDR_CG_DISPLAY_P3 ? 0.0792869f : cg == UHDR_CG_BT_2100 ? 0.0593f : 0.0722f;
-                    const float scene_y = (yr * rl + (1.f - yr - yb) * gl + yb * bl) / 12.f;
-                    const float scale = std::pow(std::max(scene_y, 0.f), 0.2f) * (1000.f / (12.f * kSdrWhiteNits));
-                    rl *= scale;
-                    gl *= scale;
-                    bl *= scale;
-                }
+                if (is_hlg) hlg_display_rgb(rl,gl,bl,cg);
 
                 // Policy B only: values must match the BT.709 tag. Preserve path never rematrixes.
                 if (need_bt2020_to_709) {
@@ -635,4 +633,33 @@ int decode_avif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16
 int decode_avif_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,
     int* gain,int* transfer,uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif) {
     return decode_avif_impl(data,size,rgba,w,h,gain,transfer,gamut,0,exif);
+}
+
+// PNG samples have already been expanded by libpng, without gamma conversion.
+template<class Sample> static void cicp_rgb_to_linear_impl(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,
+                        std::vector<Sample>& rgba,uhdr_color_gamut_t& gamut) {
+    gamut=primaries==9?UHDR_CG_BT_2100:primaries==12?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
+    const auto& lut=avif_linear_lut(static_cast<avifTransferCharacteristics>(transfer));
+    rgba.resize(count*4);
+    hdr_parallel_pixels(count,hdr_pixel_jobs(count),[&](size_t begin,size_t end,unsigned) {
+        for(size_t i=begin;i<end;++i) {
+            uint16_t p[4];
+            if(bits==16)std::memcpy(p,codes+i*8,8);
+            else for(unsigned c=0;c<4;++c)p[c]=uint16_t(codes[i*4+c])*257;
+            float r=lut[p[0]],g=lut[p[1]],b=lut[p[2]];
+            if(transfer==18)hlg_display_rgb(r,g,b,gamut);
+            rgba[i*4]=store_working<Sample>(r);rgba[i*4+1]=store_working<Sample>(g);
+            rgba[i*4+2]=store_working<Sample>(b);rgba[i*4+3]=store_working<Sample>(p[3]/65535.f);
+        }
+    });
+}
+
+void cicp_rgb_to_linear(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,
+                        std::vector<float>& rgba,uhdr_color_gamut_t& gamut) {
+    cicp_rgb_to_linear_impl(codes,count,bits,primaries,transfer,rgba,gamut);
+}
+
+void cicp_rgb_to_linear(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,
+                        std::vector<uint16_t>& rgba,uhdr_color_gamut_t& gamut) {
+    cicp_rgb_to_linear_impl(codes,count,bits,primaries,transfer,rgba,gamut);
 }

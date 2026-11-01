@@ -60,6 +60,13 @@ Finite signed and extended-range values remain available for exposure and gamut
 conversion. SDR/PQ bounds are applied at output; linear HDR JXL keeps extended
 range. These processing conversions are not promises of source-code identity. ICC profiles are retained for preservation
 and used for processing; PNG gAMA/cHRM produce an equivalent matrix/TRC profile.
+HDR PNG uses explicit cICP PQ/HLG with BT.709, BT.2020 or Display P3 primaries,
+RGB matrix and full-range codes. cICP takes precedence over embedded ICC and older
+PNG color chunks. Integer codes and straight alpha remain intact for preservation;
+JXL can retain every 16-bit code and AVIF uses its selected 10/12-bit depth.
+Processing decodes directly to float32 in the source gamut: PQ uses 203-nit white,
+and HLG uses the same BT.2100 1000-nit reference-display OOTF as AVIF. Inspection,
+filter metadata and native thumbnails recognize these HDR inputs.
 PNG/WebP EXIF and raster orientation are supported. Untagged rasters assume sRGB.
 
 TIFF supports unsigned 8/16-bit RGB and black/white grayscale, contiguous or planar,
@@ -107,3 +114,20 @@ Canon CR3 is identified separately from AVIF by ISO BMFF file-type brands.
 Both EOS R6 Mark III RAW and CRAW samples were opened, thumbnail-unpacked,
 sensor-unpacked and processed successfully with the pinned LibRaw 0.22.3.
 This checks decoder execution, not color accuracy or camera-look parity.
+
+HDR PNG port validation
+-----------------------
+
+The `hdr_png` CTest covers 8/16-bit PQ/HLG in BT.709, BT.2020 and Display P3,
+independent numeric transfer/OOTF checks, straight alpha, metadata priority,
+inspection, thumbnails, exact lossless JXL samples, preserved JXL/AVIF color tags,
+float32 processing, and invalid cICP/CRC rejection. The Linux native build and this
+focused test passed.
+
+The existing `conversion` test fails at input mode 0 / target 3 (JPEG to lossless
+linear JXL), with encoder error `-67`. The identical failure was reproduced using
+the previous 0.1.6 packaged engine and the unchanged pre-port test source; it is
+not introduced by HDR PNG support. Windows/macOS were not run locally.
+
+A LocalViewer HLG inconsistency found during the port is documented in
+[the port finding](localviewer-hdr-png-note.md).

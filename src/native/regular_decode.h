@@ -6,6 +6,8 @@
 struct RegularImage {
     unsigned width = 0, height = 0, bits = 8, orientation = 1;
     std::string format;
+    unsigned primaries = 1, transfer = 13;
+    bool hdr() const { return transfer == 16 || transfer == 18; }
     std::vector<uint8_t> pixels, icc, exif;
 };
 bool is_regular_image(const uint8_t* data, size_t size);

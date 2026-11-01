@@ -54,7 +54,9 @@ ImageInfo inspect(const std::filesystem::path& input) {
     } else if(is_regular_image(bytes.data(),bytes.size())) {
         const auto raster=decode_regular(bytes.data(),bytes.size());
         out.width=raster.width;out.height=raster.height;out.bits=raster.bits;out.format=raster.format;
-        out.transfer=raster.icc.empty()?"sRGB":"ICC";out.primaries=raster.icc.empty()?"BT.709":"ICC";
+        out.hdr=raster.hdr();
+        out.transfer=raster.hdr()?(raster.transfer==16?"PQ":"HLG"):raster.icc.empty()?"sRGB":"ICC";
+        out.primaries=raster.hdr()?(raster.primaries==9?"BT.2020":raster.primaries==12?"Display P3":"BT.709"):raster.icc.empty()?"BT.709":"ICC";
         if(raster.orientation>=5)std::swap(out.width,out.height);
     } else {
         auto storage=std::make_unique<LibRaw>();

@@ -54,7 +54,10 @@ and macOS/Windows GUI execution still need validation.
 
 Native inputs include JPEG, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and
 LibRaw camera formats. Regular raster decoding is independent of OS/Qt decoders.
-PNG/TIFF retain 16-bit integer samples for preservation; lossless JXL can preserve
+HDR PNG input supports full-range cICP PQ/HLG with BT.709, BT.2020 or Display P3
+primaries, including 8/16-bit samples. Processing uses float32; source-preserving
+JXL/AVIF exports retain the transfer and primaries (AVIF quantizes to its selected
+bit depth). PNG/TIFF retain 16-bit integer samples for preservation; lossless JXL can preserve
 those codes exactly. AVIF is limited to 12 bits and JPEG remains lossy. See
 [supported raster layouts](docs/port-status.md) for restrictions.
 
