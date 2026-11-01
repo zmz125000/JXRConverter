@@ -26,6 +26,7 @@
 #include <exiv2/exiv2.hpp>
 #include <atomic>
 #include "window.hpp"
+#include "settings.hpp"
 #include "style.hpp"
 #include "views.hpp"
 using namespace jxrc::gui;
@@ -51,7 +52,7 @@ class GuiTests : public QObject {
 private slots:
     void initTestCase() {
         applyDesktopStyle();
-        QVERIFY(temp_.isValid());QStandardPaths::setTestModeEnabled(true);QCoreApplication::setOrganizationName("JxrcTests");QCoreApplication::setApplicationName("DesktopTests");QSettings().clear();
+        QVERIFY(temp_.isValid());QStandardPaths::setTestModeEnabled(true);QCoreApplication::setOrganizationName("JxrcTests");QCoreApplication::setApplicationName("DesktopTests");appSettings().clear();
     }
     void metadataAndThumbnails() {
         const auto file=makeImage(root("metadata"),"orange.jpg",128,64,400);QVERIFY(!file.isEmpty());

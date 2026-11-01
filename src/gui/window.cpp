@@ -2,6 +2,7 @@
 #include "views.hpp"
 #include "style.hpp"
 #include "updater.hpp"
+#include "settings.hpp"
 #include <QStyleHints>
 #include <QMenu>
 #include <QClipboard>
@@ -10,7 +11,6 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSaveFile>
-#include <QStandardPaths>
 #include <QToolButton>
 #include <QFile>
 #include <QMouseEvent>
@@ -137,8 +137,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(updater_,&Updater::statusChanged,updateButton,&QPushButton::setText);
     connect(updater_,&Updater::busyChanged,this,[this,updateButton](bool busy){updateButton->setEnabled(!busy);updateCounts();});
     auto* theme=combo({"Auto","Light","Dark"},"theme");toolbar->addWidget(theme);
-    theme->setCurrentIndex(QSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
-    connect(theme,&QComboBox::currentIndexChanged,this,[theme]{QSettings().setValue("appearance/theme",theme->currentIndex());applyDesktopStyle(theme->currentIndex());});
+    theme->setCurrentIndex(appSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
+    connect(theme,&QComboBox::currentIndexChanged,this,[theme]{appSettings().setValue("appearance/theme",theme->currentIndex());applyDesktopStyle(theme->currentIndex());});
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(qApp->styleHints(),&QStyleHints::colorSchemeChanged,this,[theme]{if(theme->currentIndex()==0)applyDesktopStyle(0);});
 #endif
@@ -197,7 +197,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     }
     for(auto* control:findChildren<QComboBox*>())control->installEventFilter(this);
     for(auto* control:findChildren<QAbstractSpinBox*>())control->installEventFilter(this);
-    QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",100).toInt());
+    auto settings=appSettings();restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",100).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
     restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
@@ -206,7 +206,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
 }
 MainWindow::~MainWindow() {
     saveSettings();
-    QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("conversion/output",output_->text());
+    auto settings=appSettings();settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("conversion/output",output_->text());
 }
 namespace {
 const char* settingProperty(QWidget* widget) {
@@ -225,7 +225,7 @@ QList<QWidget*> MainWindow::persistentControls() const {
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
 void MainWindow::restoreSettings() {
-    QSettings settings;
+    auto settings=appSettings();
     for(auto* widget:persistentControls()) {
         if(!widget)continue;
         const auto key="controls/"+widget->objectName();
@@ -240,7 +240,7 @@ void MainWindow::restoreSettings() {
     findChild<QSlider*>("rawShoulderSlider")->setValue(qRound(shoulder_->value()*100));
 }
 void MainWindow::saveSettings() const {
-    QSettings settings;
+    auto settings=appSettings();
     for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
     settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
@@ -256,9 +256,9 @@ QWidget* MainWindow::buildControls() {
     targets_->viewport()->installEventFilter(this);
     outputFormatsLayout->addWidget(targets_);
     auto* targetActions=new QHBoxLayout;
-    acceptSdr_=check("Accept SDR formats","acceptSdr",QSettings().value("conversion/acceptSdr",false).toBool());
+    acceptSdr_=check("Accept SDR formats","acceptSdr",appSettings().value("conversion/acceptSdr",false).toBool());
     acceptSdr_->setToolTip("For HDR targets, include SDR-source filenames using the SDR output equivalent. Like LocalViewer, JXL, JXR and RAW filenames are in the HDR group; JPEG, AVIF, PNG, WebP, TIFF, BMP and GIF are in the SDR group regardless of their contents.");
-    connect(acceptSdr_,&QCheckBox::toggled,this,[](bool on){QSettings().setValue("conversion/acceptSdr",on);});
+    connect(acceptSdr_,&QCheckBox::toggled,this,[](bool on){appSettings().setValue("conversion/acceptSdr",on);});
     targetActions->addWidget(acceptSdr_);targetActions->addStretch();
     auto* clearTargets=new QPushButton("Clear targets");clearTargets->setObjectName("clearTargets");targetActions->addWidget(clearTargets);
     connect(clearTargets,&QPushButton::clicked,this,[this]{const QSignalBlocker blocker(targets_);for(int i=0;i<targets_->count();++i)targets_->item(i)->setCheckState(Qt::Unchecked);updateMode();});
@@ -367,14 +367,14 @@ Options MainWindow::optionsForTarget(Target target) const {
 }
 void MainWindow::applySearch() {appliedSearch_=search_->text();updateFilter();}
 void MainWindow::loadHistory() {
-    QFile file(QStandardPaths::writableLocation(QStandardPaths::AppDataLocation)+"/history.json");
+    QFile file(configDirectory()+"/history.json");
     if(!file.open(QIODevice::ReadOnly))return;
     const auto object=QJsonDocument::fromJson(file.readAll()).object();
     auto strings=[](const QJsonValue& value){QStringList result;for(const auto& entry:value.toArray())if(entry.isString()&&!entry.toString().isEmpty())result.append(entry.toString());return result;};
     recentFolders_=strings(object.value("folders"));recentFiles_=strings(object.value("files"));lastFiles_=strings(object.value("lastFiles"));
 }
 void MainWindow::saveHistory() {
-    const auto directory=QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    const auto directory=configDirectory();
     QDir().mkpath(directory);QSaveFile file(directory+"/history.json");
     QJsonObject object;object.insert("version",1);object.insert("folders",QJsonArray::fromStringList(recentFolders_));object.insert("files",QJsonArray::fromStringList(recentFiles_));object.insert("lastFiles",QJsonArray::fromStringList(lastFiles_));
     if(!file.open(QIODevice::WriteOnly)){statusBar()->showMessage("Cannot save recent history",5000);return;}

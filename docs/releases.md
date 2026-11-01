@@ -19,6 +19,9 @@ git push origin v0.1.1
 
 The output panel can create format subfolders (`avif/`, `jxl/`, `jpg/`), save
 beside each original image, and rename conflicting outputs with a number.
+Settings are stored in `config/settings.ini` and recent-file/folder history in
+`config/history.json` beside the executable (beside the `.app` on macOS).
+Keep the app folder writable; updates preserve this folder.
 These settings are persistent. Rename disables replacement of existing files.
 RAW outputs rendered with Boost highlights or Custom include `_hdr_boost` or
 `_hdr_custom` before the target suffix. RAW thumbnails prefer the camera's
