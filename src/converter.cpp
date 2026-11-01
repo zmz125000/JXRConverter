@@ -115,8 +115,8 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
         const auto* decoded=uhdr_get_decoded_image(dec.get());require(decoded,"Missing Ultra HDR pixels");
         auto reduced=*decoded;const auto* image=&reduced;
         w=image->w;h=image->h;gamut=image->cg;hdr=true;
-        auto small=reduce_preview<uint16_t,true>(static_cast<const uint16_t*>(image->planes[0]),w,h,size_t(image->stride[0])*4,4,thumbnail_edge);
-        if(!small.empty()){reduced.w=w;reduced.h=h;reduced.planes[0]=small.data();reduced.stride[0]=w;}
+        auto preview_pixels=reduce_preview<uint16_t,true>(static_cast<const uint16_t*>(image->planes[0]),w,h,size_t(image->stride[0])*4,4,thumbnail_edge);
+        if(!preview_pixels.empty()){reduced.w=w;reduced.h=h;reduced.planes[0]=preview_pixels.data();reduced.stride[0]=w;}
         pixels.resize(size_t(w)*h*4);
         for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w*4;++x)
             pixels[size_t(y)*w*4+x]=store_working<Sample>(half_to_float(static_cast<const uint16_t*>(image->planes[0])[size_t(y)*image->stride[0]*4+x]));
@@ -130,8 +130,8 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
     require(w&&h,"Empty JPEG");
     const unsigned channels=image.fmt==UHDR_IMG_FMT_8bppYCbCr400?1:image.fmt==UHDR_IMG_FMT_24bppRGB888?3:image.fmt==UHDR_IMG_FMT_32bppRGBA8888?4:0;
     require(channels!=0,"Unsupported JPEG pixel layout");
-    auto small=reduce_preview(static_cast<const uint8_t*>(image.planes[0]),w,h,size_t(image.stride[0])*channels,channels,thumbnail_edge);
-    if(!small.empty()){image.w=w;image.h=h;image.planes[0]=small.data();image.stride[0]=w;}
+    auto preview_pixels=reduce_preview(static_cast<const uint8_t*>(image.planes[0]),w,h,size_t(image.stride[0])*channels,channels,thumbnail_edge);
+    if(!preview_pixels.empty()){image.w=w;image.h=h;image.planes[0]=preview_pixels.data();image.stride[0]=w;}
     skcms_ICCProfile source=*skcms_sRGB_profile(),destination;
     const auto icc=source_jpeg_icc(bytes.data(),bytes.size());
     if(!icc.empty())require(skcms_Parse(icc.data(),icc.size(),&source),"Invalid JPEG ICC profile");
@@ -378,11 +378,11 @@ Preview preview(const std::filesystem::path& input,unsigned edge) {
         auto raster=decode_regular(bytes.data(),bytes.size());
         w=raster.width;h=raster.height;raster_orientation=raster.orientation;
         if(raster.bits>8) {
-            const auto small=reduce_preview(reinterpret_cast<const uint16_t*>(raster.pixels.data()),w,h,size_t(w)*4,4,edge);
-            if(!small.empty()){std::vector<uint8_t> reduced(small.size()*2);std::memcpy(reduced.data(),small.data(),reduced.size());raster.pixels=std::move(reduced);}
+            const auto preview_pixels=reduce_preview(reinterpret_cast<const uint16_t*>(raster.pixels.data()),w,h,size_t(w)*4,4,edge);
+            if(!preview_pixels.empty()){std::vector<uint8_t> reduced(preview_pixels.size()*2);std::memcpy(reduced.data(),preview_pixels.data(),reduced.size());raster.pixels=std::move(reduced);}
         } else {
-            auto small=reduce_preview(raster.pixels.data(),w,h,size_t(w)*4,4,edge);
-            if(!small.empty())raster.pixels=std::move(small);
+            auto preview_pixels=reduce_preview(raster.pixels.data(),w,h,size_t(w)*4,4,edge);
+            if(!preview_pixels.empty())raster.pixels=std::move(preview_pixels);
         }
         raster.width=w;raster.height=h;regular_to_linear(raster,linear,gamut);
     }
