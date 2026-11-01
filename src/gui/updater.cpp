@@ -44,7 +44,7 @@ Updater::Updater(QWidget* parent):QObject(parent),window_(parent),network_(new Q
     root_=QDir(root_).absoluteFilePath("../../..");root_=QDir::cleanPath(root_);
     relativeGui_="jxrconverter.app/Contents/MacOS/jxrconverter";
     helperRelative_="jxrconverter.app/Contents/Helpers/"+helperName();
-    if(!QFileInfo::exists(root_+"/"+manifestRelative_)) {
+    if(!QFileInfo(root_+"/jxrconvert").isFile()) {
         appOnly_=true;root_=QDir::cleanPath(QCoreApplication::applicationDirPath()+"/../..");
         relativeGui_="Contents/MacOS/jxrconverter";helperRelative_="Contents/Helpers/"+helperName();
         manifestRelative_="Contents/Resources/share/JXRConverter/package-files.txt";
@@ -97,8 +97,8 @@ void Updater::fetch(const QUrl& url,const QString& destination,qint64 limit,std:
 }
 void Updater::start() {
     if(busy_)return;
-    if(!QFileInfo::exists(root_+"/"+manifestRelative_)||!QFileInfo::exists(root_+"/"+helperRelative_)) {
-        fail("Automatic updates are available in extracted release packages. Download a release package from GitHub first.");return;
+    if(!QFileInfo(root_+"/"+helperRelative_).isFile()) {
+        fail("The update helper is missing. Extract the complete release package before updating.");return;
     }
     QTemporaryDir writable(root_+"/.jxrc-write-check-XXXXXX");
     if(!writable.isValid()){fail("The application folder is not writable. Move the extracted package to a folder you own before updating.");return;}
@@ -191,12 +191,12 @@ void Updater::install() {
     if(directories.size()!=1){fail("The update package has an unexpected layout.");return;}
     QString source=extract_+"/"+directories.first();
     if(appOnly_)source+="/jxrconverter.app";
-    if(!QFileInfo::exists(source+"/"+relativeGui_)||!QFileInfo::exists(source+"/"+helperRelative_)||!QFileInfo::exists(source+"/"+manifestRelative_)) {
+    if(!QFileInfo::exists(source+"/"+relativeGui_)||!QFileInfo::exists(source+"/"+helperRelative_)) {
         fail("The update package is missing application files.");return;
     }
     const QString helper=temp_->path()+"/"+helperName();
-    if(!QFile::copy(root_+"/"+helperRelative_,helper)){fail("Cannot prepare the update helper.");return;}
-    QFile::setPermissions(helper,QFileInfo(root_+"/"+helperRelative_).permissions());
+    if(!QFile::copy(source+"/"+helperRelative_,helper)){fail("Cannot prepare the update helper.");return;}
+    QFile::setPermissions(helper,QFileInfo(source+"/"+helperRelative_).permissions());
     temp_->setAutoRemove(false);
     if(!QProcess::startDetached(helper,{QString::number(QCoreApplication::applicationPid()),root_,source,relativeGui_,temp_->path(),manifestRelative_},root_)) {
         temp_->setAutoRemove(true);fail("Cannot start the update helper.");return;

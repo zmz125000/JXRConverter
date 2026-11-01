@@ -82,10 +82,15 @@ int apply(unsigned long pid,const fs::path& root,const fs::path& source,const fs
         std::set<fs::path> incoming,obsolete;
         for(const auto& entry:fs::recursive_directory_iterator(source))
             if(!entry.is_directory()||entry.is_symlink())incoming.insert(entry.path().lexically_relative(source));
-        std::ifstream manifest(root/manifestPath);std::string line;
-        while(std::getline(manifest,line)) {
-            const fs::path relative=fs::u8path(line);
-            if(local(relative)&&!incoming.count(relative))obsolete.insert(relative);
+        {
+            // Close the inventory before replacing files. Windows cannot rename
+            // package-files.txt while this stream still holds it open.
+            std::ifstream manifest(root/manifestPath);std::string line;
+            while(std::getline(manifest,line)) {
+                if(!line.empty() && line.back()=='\r')line.pop_back();
+                const fs::path relative=fs::u8path(line);
+                if(local(relative)&&!incoming.count(relative))obsolete.insert(relative);
+            }
         }
         // Older portable releases predate the package manifest.
         for(const char* name:{"vc_redist.x64.exe","vc_redist.arm64.exe","vc_redist.x86.exe","dxcompiler.dll","dxil.dll","d3dcompiler_47.dll"})
