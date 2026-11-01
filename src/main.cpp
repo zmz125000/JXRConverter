@@ -16,7 +16,7 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
   --jxl-distance 0..3           Custom JXL distance (selects custom preset)
   --avif-depth 10|12            Custom AVIF maximum depth (selects custom preset)
   --downsize-gainmap            Halve gain-map size (selects custom preset)
-  --jpeg-transcoding           Preserve JPEG coefficients in JXL (preserve mode only)
+  --jpeg-transcoding           Lossless JPEG coefficients to SDR JXL (no exposure/resize)
   --threads 0..65535            Per-conversion CPU budget; 0 = automatic
   --keep-exif                   Keep source EXIF where supported
   --overwrite                   Replace existing output after successful encoding

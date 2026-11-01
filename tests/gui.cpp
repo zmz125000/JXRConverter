@@ -147,6 +147,22 @@ private slots:
         mode->setCurrentIndex(0);const auto preserved=window.options();QCOMPARE(preserved.mode,jxrc::Mode::preserve);QCOMPARE(preserved.raw.exposure,0.f);QCOMPARE(preserved.raw.hdr_mode,jxrc::RawHdrMode::source);
         QVERIFY(!window.findChild<QDoubleSpinBox*>("rawExposure")->isEnabled());
     }
+    void jpegTranscodingControls() {
+        MainWindow window;
+        auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==2?Qt::Checked:Qt::Unchecked);
+        auto* exposure=window.findChild<QDoubleSpinBox*>("exposure");exposure->setValue(0);
+        auto* edge=window.findChild<QSpinBox*>("maxEdge");edge->setValue(0);
+        auto* transcode=window.findChild<QCheckBox*>("jpegTranscoding");QVERIFY(transcode);
+        QVERIFY(transcode->isEnabled());transcode->setChecked(true);QVERIFY(window.options().jpeg_transcoding);
+        exposure->setValue(1);QVERIFY(!transcode->isEnabled());QVERIFY(!window.options().jpeg_transcoding);
+        exposure->setValue(0);QVERIFY(transcode->isEnabled());QVERIFY(transcode->isChecked());
+        edge->setValue(32);QVERIFY(!transcode->isEnabled());QVERIFY(!window.options().jpeg_transcoding);
+        edge->setValue(0);QVERIFY(transcode->isEnabled());QVERIFY(window.options().jpeg_transcoding);
+        mode->setCurrentIndex(0);QVERIFY(transcode->isEnabled());QVERIFY(window.options().jpeg_transcoding);
+        transcode->setChecked(false);
+    }
     void queueParallelismFailureAndCancel() {
         std::atomic<int> active{0},peak{0},invalidBudget{0};
         ConversionQueue queue(nullptr,[&](const std::filesystem::path& input,const std::filesystem::path&,const jxrc::Options& o) {

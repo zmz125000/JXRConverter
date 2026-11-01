@@ -87,8 +87,10 @@ build/jxrconvert input.jpg output.jxl --target jxl --jpeg-transcoding --keep-exi
 
 Preservation avoids linearization, tone mapping, and HDR reconstruction. Codec
 quantization, RGB/YUV conversion, and bit-depth conversion can still change
-sample values. JPEG remains lossy even with the `lossless` preset. The explicit
-JPEG transcoding option stores JPEG coefficients in JXL; retaining EXIF allows
+sample values. JPEG remains lossy even with the `lossless` preset. The **JXL lossless JPEG transcoding** toggle (`--jpeg-transcoding`) works in
+both modes when exporting SDR JXL without exposure or resizing. It passes
+compressed SDR JPEG data directly to libjxl and bypasses quality presets; other
+source formats retain their normal conversion paths. The option stores JPEG coefficients in JXL; retaining EXIF allows
 reconstruction of the original JPEG bytes. Gain-map sources are rejected for
 JXL preservation because that path cannot carry the gain map.
 

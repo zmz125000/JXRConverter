@@ -268,7 +268,8 @@ QWidget* MainWindow::buildControls() {
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
     custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
     customForm->addRow("JPEG / AVIF",quality_);customForm->addRow("JXL distance",distance_);avifDepth_->setToolTip("Maximum AVIF depth. 8-bit sources remain 8-bit; AVIF supports up to 12 bits per channel.");customForm->addRow("AVIF max depth",avifDepth_);customForm->addRow(downsize_);qualityLayout->addRow(custom_);layout->addWidget(qualityGroup);
-    exif_=check("Keep EXIF","keepExif");exif_->setToolTip("Processed RAW and JXR EXIF retention is not supported by the library yet.");transcode_=check("JPEG coefficients → JXL","jpegTranscoding");
+    exif_=check("Keep EXIF","keepExif");exif_->setToolTip("Processed RAW and JXR EXIF retention is not supported by the library yet.");transcode_=check("JXL lossless JPEG transcoding","jpegTranscoding");
+    transcode_->setToolTip("Store eligible SDR JPEG coefficients directly in JXL without RGB decoding or additional image loss. Ignores the quality preset for these JPEGs; other inputs use their normal conversion path. Exposure or resizing disables transcoding. Enable Keep EXIF to allow original JPEG byte reconstruction.");
     layout->addWidget(exif_);layout->addWidget(transcode_);
     processing_=new QGroupBox("Pixel processing");auto* processingForm=new QFormLayout(processing_);exposure_=real(-3,3,0,0.1,"exposure");exposure_->setSuffix(" EV");
     exposure_->setToolTip("0 EV leaves exposure unchanged. −3 EV multiplies linear RGB by 1/8; +3 EV multiplies it by 8. For RAW gain-map output, use Custom RAW exposure instead.");
@@ -323,6 +324,7 @@ QWidget* MainWindow::buildControls() {
     auto* startButtons=new QHBoxLayout;startButtons->addWidget(visible_,1);startButtons->addWidget(selected_,1);queueLayout->insertLayout(0,startButtons);
     queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
     connect(mode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(targets_,&QListWidget::itemChanged,this,&MainWindow::updateMode);connect(preset_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(rawMode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(wb_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
+    connect(exposure_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateMode);connect(maxEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateMode);
     connect(selected_,&QPushButton::clicked,this,[this]{convertFiles(true);});connect(visible_,&QPushButton::clicked,this,[this]{convertFiles(false);});connect(cancel_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);
     return panel;
 }
@@ -338,8 +340,7 @@ void MainWindow::updateMode() {
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
-    custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(!process&&selectedTargets().contains(Target::jxl));
-    if(!transcode_->isEnabled())transcode_->setChecked(false);
+    custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(selectedTargets().contains(Target::jxl)&&(!process||(!exposure_->value()&&!maxEdge_->value())));
     updateOutputSettings();updateCounts();
 }
 void MainWindow::updateOutputSettings() {

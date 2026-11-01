@@ -34,3 +34,5 @@ namespace jxrc { ImageInfo inspect_bytes(const std::vector<uint8_t>&); }
 
 bool decode_jxr_scrgb(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,bool&);
 bool is_scrgb_jxl(const uint8_t*,size_t);
+
+bool is_integer_jxl(const uint8_t*,size_t);

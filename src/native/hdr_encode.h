@@ -338,7 +338,7 @@ int pack_linear_f16_for_direct(std::vector<uint16_t>& rgba, unsigned w, unsigned
 /** Straight-alpha linear F16 → JXL. PQ uses uint16 codes, linear uses F16. Mutates RGBA. */
 int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality = 1, bool pq = false);
-/** Straight-alpha linear F32 → JXL: PQ stores uint16; linear stores float32 or requested half. */
+/** Straight-alpha linear F32 → JXL: SDR stores uint8/uint16; PQ uint16; HDR linear float32 or requested half. */
 int encode_jxl_f32(unsigned w, unsigned h, const float* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality, bool pq);
 

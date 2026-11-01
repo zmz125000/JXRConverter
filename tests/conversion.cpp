@@ -98,9 +98,22 @@ static void regular_images(const fs::path& dir) {
         }
         check(complete,"Missing raster JXL image");
         for(size_t i=0;i<24;++i){uint16_t value=pixels[i];if(fixture.bits==16)std::memcpy(&value,pixels.data()+2*i,2);check(value==fixture.expected[i],"Preserve changed a raster sample");}
-        options.mode=jxrc::Mode::process;options.max_edge=2;options.exposure=1;
+        const auto copied=dir/(std::string(fixture.name)+"-integer-copy.jxl");
+        options.mode=jxrc::Mode::process;jxrc::convert(output,copied,options);
+        const auto copiedBytes=bytes(copied);
+        check(is_integer_jxl(copiedBytes.data(),copiedBytes.size()),"Integer JXL source became floating point");
+        check(jxrc::inspect(copied).bits==fixture.bits,"Integer JXL source depth changed");
+        options.mode=jxrc::Mode::process;
+        const auto direct=dir/(std::string(fixture.name)+"-direct.jxl");
+        jxrc::convert(input,direct,options);
+        check(bytes(direct)==encoded,"Untouched SDR raster did not retain integer source samples");
+        options.max_edge=2;options.exposure=1;
         const auto processed=jxrc::convert(input,dir/(std::string(fixture.name)+"-processed.jxl"),options);
         check(processed.width==2 && processed.height==1,"Raster processing resize");
+        const auto processedInfo=jxrc::inspect(dir/(std::string(fixture.name)+"-processed.jxl"));
+        check(processedInfo.bits==fixture.bits && processedInfo.transfer=="SDR","Processed SDR raster JXL depth/transfer");
+        const auto processedBytes=bytes(dir/(std::string(fixture.name)+"-processed.jxl"));
+        check(is_integer_jxl(processedBytes.data(),processedBytes.size()),"Processed SDR raster JXL is floating point");
         const auto thumb=jxrc::preview(input,2);check(thumb.width==2 && thumb.height==1,"Raster native thumbnail");
     }
 }
@@ -228,6 +241,13 @@ static void shared_render(const fs::path& dir) {
     o.target=jxrc::Target::avif;o.quality.preset=jxrc::Preset::custom;o.quality.avif_depth=10;
     write(source,raster_png16);jxrc::convert(source,dir/"max10.avif",o);
     check(jxrc::inspect(dir/"max10.avif").bits==10,"Custom AVIF max depth");
+    jxrc::Options avifJxl;avifJxl.mode=jxrc::Mode::process;avifJxl.target=jxrc::Target::jxl;avifJxl.quality.preset=jxrc::Preset::lossless;
+    jxrc::convert(dir/"max10.avif",dir/"integer-avif.jxl",avifJxl);
+    auto integerAvif=bytes(dir/"integer-avif.jxl");
+    check(jxrc::inspect(dir/"integer-avif.jxl").bits==10 && is_integer_jxl(integerAvif.data(),integerAvif.size()),"Untouched AVIF source depth lost");
+    avifJxl.exposure=.25f;jxrc::convert(dir/"max10.avif",dir/"edited-avif.jxl",avifJxl);
+    auto editedAvif=bytes(dir/"edited-avif.jxl");
+    check(jxrc::inspect(dir/"edited-avif.jxl").bits==16 && is_integer_jxl(editedAvif.data(),editedAvif.size()),"Processed AVIF did not use 16-bit integer SDR JXL");
     const float hdr[]={-0.125f,2.f,0.5f,0.5f};StillEncodeQuality quality(0);quality.jxl_half=true;
     const auto half=dir/"half-linear.jxl";
     check(encode_jxl_f32(1,1,hdr,UHDR_CG_BT_709,true,half.string().c_str(),quality,false)==0,"Half-float linear JXL encode");
@@ -375,6 +395,8 @@ int main(int argc,char** argv) try {
         o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl;
         auto oriented=jxrc::convert(preserved,dir/("oriented-process-"+std::to_string(int(target))),o);
         check(oriented.width==48&&oriented.height==64,"Orientation applied incorrectly");
+        const auto orientedInfo=jxrc::inspect(dir/("oriented-process-"+std::to_string(int(target))));
+        check(orientedInfo.width==48&&orientedInfo.height==64,"Direct integer output orientation lost");
     }
     o={};o.mode=jxrc::Mode::preserve;o.target=jxrc::Target::jxl;o.jpeg_transcoding=true;o.keep_exif=true;
     jxrc::convert(jpeg,dir/"transcoded.jxl",o);
@@ -383,9 +405,24 @@ int main(int argc,char** argv) try {
     JxlDecoderSetInput(dec.get(),jxl.data(),jxl.size());JxlDecoderCloseInput(dec.get());std::vector<uint8_t> reconstructed(65536);bool set=false;
     for(;;){auto status=JxlDecoderProcessInput(dec.get());if(status==JXL_DEC_JPEG_RECONSTRUCTION){check(JxlDecoderSetJPEGBuffer(dec.get(),reconstructed.data(),reconstructed.size())==JXL_DEC_SUCCESS,"Set reconstruction buffer");set=true;}else if(status==JXL_DEC_FULL_IMAGE||status==JXL_DEC_SUCCESS)break;else check(status!=JXL_DEC_ERROR&&status!=JXL_DEC_NEED_MORE_INPUT,"JPEG reconstruction failed");}
     check(set,"Missing JPEG reconstruction");reconstructed.resize(reconstructed.size()-JxlDecoderReleaseJPEGBuffer(dec.get()));check(reconstructed==bytes(jpeg),"JPEG byte reconstruction changed");
+    o.mode=jxrc::Mode::process;o.quality.preset=jxrc::Preset::low;
+    jxrc::convert(jpeg,dir/"transcoded-process.jxl",o);
+    check(bytes(dir/"transcoded-process.jxl")==jxl,"Process-mode JPEG transcoding decoded/recompressed pixels or applied quality preset");
+    o.exposure=1;fails([&]{jxrc::validate(o);});o.exposure=0;
+    o.max_edge=32;fails([&]{jxrc::validate(o);});o.max_edge=0;
+    write(dir/"transcode-mixed.png",raster_png16);
+    jxrc::convert(dir/"transcode-mixed.png",dir/"transcode-mixed.jxl",o);
+    o.jpeg_transcoding=false;jxrc::convert(dir/"transcode-mixed.png",dir/"transcode-mixed-reference.jxl",o);
+    check(bytes(dir/"transcode-mixed.jxl")==bytes(dir/"transcode-mixed-reference.jxl"),"JPEG transcoding toggle affected a regular raster");
     std::cout<<"Gain-map, PQ, linear HDR and JPEG reconstruction passed\n";
+    o={};o.target=jxrc::Target::jxl;o.quality.preset=jxrc::Preset::lossless;
+    jxrc::convert(jpeg,dir/"jpeg-preserved.jxl",o);
+    o.mode=jxrc::Mode::process;jxrc::convert(jpeg,dir/"jpeg-direct.jxl",o);
+    check(bytes(dir/"jpeg-direct.jxl")==bytes(dir/"jpeg-preserved.jxl"),"JPEG SDR direct pixels changed");
     o={};o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl;o.max_edge=20;o.exposure=1;
     r=jxrc::convert(jpeg,dir/"resized.jxl",o);check(r.width==20&&r.height==15,"Resize dimensions");
+    const auto resizedBytes=bytes(dir/"resized.jxl");
+    check(jxrc::inspect(dir/"resized.jxl").bits==8 && is_integer_jxl(resizedBytes.data(),resizedBytes.size()),"Processed JPEG SDR JXL is not 8-bit integer");
     const auto previous=bytes(dir/"resized.jxl");
     check(jxrc::convert(jpeg,dir/"resized.jxl",o).skipped,"Existing output was not skipped");
     write(dir/"invalid-source",{1,2,3});

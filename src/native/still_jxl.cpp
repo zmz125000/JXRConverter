@@ -9,6 +9,7 @@
 #include <cstring>
 #include <memory>
 #include <thread>
+#include <type_traits>
 #include <jxl/encode_cxx.h>
 #include <avif/avif.h>
 #include <jxl/thread_parallel_runner_cxx.h>
@@ -146,12 +147,37 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
     return write_jxl_output(encoder.get(), path);
 }
 
+// SDR output is transfer-encoded integer RGB, independent of working precision.
+static int encode_jxl_sdr_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg,
+                              const char* path,StillEncodeQuality quality) {
+    const size_t samples=size_t(w)*h*4;
+    const bool sixteen=quality.source_bits>8;
+    auto pack=[&](auto& output,unsigned maximum) {
+        for(size_t i=0;i<samples;++i) {
+            float value=rgba[i];if(!std::isfinite(value))value=0.f;
+            value=i%4==3?std::clamp(value,0.f,1.f):srgb_oetf(value);
+            output[i]=static_cast<typename std::decay_t<decltype(output)>::value_type>(std::lround(value*maximum));
+        }
+    };
+    if(sixteen) {
+        std::vector<uint16_t> encoded(samples);pack(encoded,65535);
+        return encode_jxl_pixels(w,h,encoded.data(),cg,path,quality,JXL_TYPE_UINT16,JXL_TRANSFER_FUNCTION_SRGB,kSdrWhiteNits);
+    }
+    std::vector<uint8_t> encoded(samples);pack(encoded,255);
+    return encode_jxl_pixels(w,h,encoded.data(),cg,path,quality,JXL_TYPE_UINT8,JXL_TRANSFER_FUNCTION_SRGB,kSdrWhiteNits);
+}
+
 // The caller owns straight-alpha linear half samples. Normalize HDR to its
 // declared luminance for linear JXL; PQ retains the absolute 10000-nit reference.
 int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality, bool pq) {
     const size_t pixels = static_cast<size_t>(w) * h;
     if (!rgba || !path || !pixels) return -60;
+    if(!hdr&&!pq) {
+        std::vector<float> linear(pixels*4);
+        std::transform(rgba,rgba+linear.size(),linear.begin(),half_to_float);
+        return encode_jxl_sdr_f32(w,h,linear.data(),cg,path,quality);
+    }
     float peak = pq ? kMaxLinear : 1.f;
     if (hdr && !pq) {
         std::array<float, 8> peaks{};
@@ -198,6 +224,7 @@ int encode_jxl_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg
                    bool hdr,const char* path,StillEncodeQuality quality,bool pq) {
     const size_t pixels=static_cast<size_t>(w)*h;
     if(!rgba||!path||!pixels)return -60;
+    if(!hdr&&!pq)return encode_jxl_sdr_f32(w,h,rgba,cg,path,quality);
     float peak=pq?kMaxLinear:1.f;
     if(hdr&&!pq) {
         float found=1.f;

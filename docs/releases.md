@@ -91,3 +91,16 @@ its uint16 RGB encoder input buffer does not imply a 16-bit AVIF file.
 Existing output files are skipped before decoding or encoding when replacement
 is disabled. The queue reports skipped outputs separately. Rename-if-conflict
 chooses a new name as before; replacement still requires the overwrite toggle.
+
+SDR JXL uses integer samples: untouched SDR JPEG, regular raster, AVIF and integer
+JXL inputs use the source-preserving integer path even in Process pixels mode.
+When exposure, resizing or HDR-to-SDR conversion requires processing, the working
+buffer stays float32 and the encoder writes sRGB-transfer integer pixels: 8-bit
+for sources of 8 bits or less, otherwise 16-bit. Primaries match the encoded RGB.
+Linear HDR/scRGB and PQ targets retain their separate encoding contracts.
+
+**JXL lossless JPEG transcoding** is available in both conversion modes for SDR
+JXL without exposure or resizing. Eligible JPEGs bypass RGB decoding and the JXL
+quality preset. Other source formats use normal conversion. The toggle is
+persistent; temporarily disabling it for pixel edits retains the saved choice.
+Keep EXIF enables reconstruction of the original JPEG bytes.

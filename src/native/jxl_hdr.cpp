@@ -511,3 +511,16 @@ bool is_scrgb_jxl(const uint8_t* data,size_t size) {
         } else if(status==JXL_DEC_ERROR || status==JXL_DEC_NEED_MORE_INPUT || status==JXL_DEC_SUCCESS)return false;
     }
 }
+
+// Header-only probe for direct integer SDR exports; never decode image pixels.
+bool is_integer_jxl(const uint8_t* data,size_t size) {
+    auto dec=JxlDecoderMake(nullptr);JxlBasicInfo info{};
+    if(!dec || JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO)!=JXL_DEC_SUCCESS)return false;
+    JxlDecoderSetInput(dec.get(),data,size);JxlDecoderCloseInput(dec.get());
+    for(;;) {
+        const auto status=JxlDecoderProcessInput(dec.get());
+        if(status==JXL_DEC_BASIC_INFO)return JxlDecoderGetBasicInfo(dec.get(),&info)==JXL_DEC_SUCCESS &&
+            !info.exponent_bits_per_sample && info.bits_per_sample<=16;
+        if(status==JXL_DEC_ERROR || status==JXL_DEC_NEED_MORE_INPUT || status==JXL_DEC_SUCCESS)return false;
+    }
+}

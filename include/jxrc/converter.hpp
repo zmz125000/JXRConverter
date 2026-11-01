@@ -39,7 +39,7 @@ struct Options {
     float exposure = 0; // Process-mode linear-light exposure, in stops.
     unsigned max_edge = 0;
     unsigned threads = 0; // Per-conversion codec budget; 0 uses automatic defaults.
-    bool jpeg_transcoding = false; // JPEG coefficients to JXL; gain-map JPEG is rejected.
+    bool jpeg_transcoding = false; // Eligible SDR JPEG coefficients to JXL, without exposure/resizing.
     bool keep_exif = false;
     bool overwrite = false;
     bool extended_bt2020 = true;
