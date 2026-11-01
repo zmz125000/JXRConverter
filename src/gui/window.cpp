@@ -39,7 +39,6 @@
 #include <QMimeData>
 #include <QPlainTextEdit>
 #include <QProgressBar>
-#include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
@@ -57,6 +56,7 @@
 #include <QWheelEvent>
 #include <QUrl>
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 namespace jxrc::gui {
@@ -91,6 +91,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* browser=new QWidget;auto* layout=new QVBoxLayout(browser);layout->setContentsMargins(16,16,16,10);layout->setSpacing(10);
     auto* searchRow=new QHBoxLayout;search_=new QLineEdit;search_->setObjectName("search");search_->setPlaceholderText("Search files and metadata · press Enter");search_->setClearButtonEnabled(true);auto* searchButton=new QPushButton("Search");searchRow->addWidget(search_,1);searchRow->addWidget(searchButton);layout->addLayout(searchRow);
     connect(search_,&QLineEdit::returnPressed,this,&MainWindow::applySearch);connect(searchButton,&QPushButton::clicked,this,&MainWindow::applySearch);
+    connect(search_,&QLineEdit::textChanged,this,[this](const QString& text){if(text.isEmpty())applySearch();});
     auto* filters=new QHBoxLayout;instant_=new QLineEdit;instant_->setObjectName("instantFilter");instant_->setPlaceholderText("Instant filter within search results…");instant_->setClearButtonEnabled(true);filters->addWidget(instant_,1);
     metadataFilters_=check("Filters","metadataFilters");filters->addWidget(metadataFilters_);
     today_=check("Today","todayFilter");today_->setToolTip("Captured today; uses file modification date when no capture date is available.");filters->addWidget(today_);
@@ -103,7 +104,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     minImageEdge_=spin(0,100000,0,"minImageEdge");minImageEdge_->setPrefix("Max edge ≥ ");minImageEdge_->setSuffix(" px");minImageEdge_->setSpecialValueText("Any max edge");
     minImageEdge_->setToolTip("Minimum longest edge, independent of portrait/landscape. Combined with the minimum MP filter; both must match.");
     megapixels_=real(0,1000,0,1,"minMegapixels");megapixels_->setSuffix(" MP+");megapixels_->setSpecialValueText("Any MP");
-    for(auto* w:QList<QWidget*>{minImageEdge_,megapixels_})imageLimits->addWidget(w);
+    for(auto* w:QList<QWidget*>{minImageEdge_,megapixels_}){w->ensurePolished();w->setMinimumWidth(w->sizeHint().width());imageLimits->addWidget(w);}
     auto* filterScroll=new QScrollArea;filterScroll->setWidgetResizable(true);filterScroll->setFrameShape(QFrame::NoFrame);filterScroll->setWidget(advanced);filterScroll->setFixedHeight(90);layout->addWidget(filterScroll);filterScroll->hide();
     auto* dates=new QHBoxLayout;advancedLayout->addLayout(dates);dateEnabled_=check("Capture date","dateFilter");dateFrom_=new QDateEdit(QDate::currentDate().addDays(-1));dateTo_=new QDateEdit(QDate::currentDate());dateFrom_->setObjectName("dateFrom");dateTo_->setObjectName("dateTo");
     for(auto* date:{dateFrom_,dateTo_}){date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setEnabled(false);}
@@ -117,6 +118,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     smoothScrolling_->setToolTip("Animate scrolling in the image grid, list and details views.");viewBar->addWidget(smoothScrolling_);
     thumbnailAspect_=new QPushButton;thumbnailAspect_->setObjectName("thumbnailAspect");thumbnailAspect_->setCheckable(true);
     thumbnailAspect_->setToolTip("Toggle thumbnail cells between square and 16:9. Images retain their original proportions.");viewBar->addWidget(thumbnailAspect_);
+    thumbnailFit_=new QPushButton("Fit");thumbnailFit_->setObjectName("thumbnailFit");thumbnailFit_->setCheckable(true);
+    thumbnailFit_->setToolTip("Fit shows the whole image. Fill crops the image to fill its thumbnail cell. Click to switch.");viewBar->addWidget(thumbnailFit_);
     viewBar->addWidget(new QLabel("Minimum size"));
     size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(100,500);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(200);size_->setFixedWidth(140);
     size_->setToolTip("Minimum grid cell width in dp (100–500). Columns grow to fill the available width.");viewBar->addWidget(size_);
@@ -187,10 +190,16 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
     connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(column);direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
     connect(smoothScrolling_,&QCheckBox::toggled,this,&MainWindow::updatePresentation);connect(thumbnailAspect_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
+    connect(thumbnailFit_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
     connect(viewMode_,&QButtonGroup::idClicked,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
     connect(selection_,&QItemSelectionModel::selectionChanged,this,[this]{updateCounts();showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,&MainWindow::updateCounts);connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
-    connect(catalog_,&QAbstractItemModel::dataChanged,this,[this]{updateCounts();showMetadata();});
+    connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this](const QModelIndex&,int first,int last){
+        for(int row=first;row<=last;++row){const auto ext=QFileInfo(catalog_->record(row).path).suffix().toLower();if(ext=="jxr"||ext=="wdp"||ext=="hdp"){thumbnailAspect_->setChecked(true);break;}}
+        updateAutoThumbnailAspect();
+    });
+    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())thumbnailAspectSampleChecked_=false;});
+    connect(catalog_,&QAbstractItemModel::dataChanged,this,[this]{updateCounts();showMetadata();updateAutoThumbnailAspect();});
     connect(catalog_,&Catalog::scanStateChanged,this,[this](bool scanning){statusBar()->showMessage(scanning?"Scanning folders…":"Folder scan complete",scanning?0:4000);updateCounts();});
     connect(catalog_,&Catalog::scanError,this,[this](const QString& error){statusBar()->showMessage(error,6000);});
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
@@ -226,7 +235,7 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {smoothScrolling_,thumbnailAspect_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
+    return {smoothScrolling_,thumbnailAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
         formatFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
@@ -426,11 +435,25 @@ void MainWindow::updatePresentation() {
     const bool details=viewMode_->checkedId()==2,grid=viewMode_->checkedId()==0;
     views_->setCurrentWidget(details?static_cast<QWidget*>(table_):list_);list_->setPresentation(grid,size_->value(),thumbnailAspect_->isChecked());
     list_->setSmoothScrolling(smoothScrolling_->isChecked());table_->setSmoothScrolling(smoothScrolling_->isChecked());
-    const bool wide=thumbnailAspect_->isChecked();thumbnailAspect_->setText(wide?"16:9":"Square");
-    QPixmap aspectIcon(24,24);aspectIcon.fill(Qt::transparent);
-    {QPainter painter(&aspectIcon);painter.setPen(QPen(thumbnailAspect_->palette().buttonText().color(),1.5));painter.drawRect(wide?QRect(2,6,20,11):QRect(4,4,16,16));}
-    thumbnailAspect_->setIcon(QIcon(aspectIcon));
+    const bool wide=thumbnailAspect_->isChecked();thumbnailAspect_->setText(wide?"16:9":"1:1");
+    thumbnailAspect_->setMinimumWidth(thumbnailAspect_->sizeHint().width());
+    const bool fill=thumbnailFit_->isChecked();thumbnailFit_->setText(fill?"Fill":"Fit");delegate_->fill=fill;table_->setFillThumbnails(fill);
     table_->setIconSize(QSize(size_->value()/2,size_->value()/2));table_->verticalHeader()->setDefaultSectionSize(std::max(32,size_->value()/2+8));
+}
+void MainWindow::updateAutoThumbnailAspect() {
+    if(thumbnailAspectSampleChecked_||catalog_->rowCount()<3)return;
+    bool wide=true;
+    for(int row=0;row<3;++row) {
+        const auto& record=catalog_->record(row);
+        if(!record.inspected)return;
+        // Allow rounded pixel dimensions, without mistaking other landscape
+        // ratios for 16:9. Read the display dimensions, including orientation.
+        wide=wide&&record.height>0&&std::abs(double(record.width)/record.height-16.0/9)<0.02;
+    }
+    // Sample once per library so later metadata/thumbnail completions cannot
+    // undo a manual choice of cell aspect ratio.
+    thumbnailAspectSampleChecked_=true;
+    if(wide)thumbnailAspect_->setChecked(true);
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& index:selection_->selectedRows(0))out<<index.data(Catalog::PathRole).toString();return out;}
 void MainWindow::updateCounts() {

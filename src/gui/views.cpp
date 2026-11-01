@@ -15,13 +15,42 @@
 
 namespace jxrc::gui {
 namespace {
+void paintThumbnail(QPainter* painter,const QRect& rect,const QIcon& icon,bool fill) {
+    const auto pixmap=icon.pixmap(icon.availableSizes().value(0,QSize(384,384)));
+    if(pixmap.isNull()||rect.isEmpty())return;
+    QRectF source(pixmap.rect()),target(rect);
+    if(fill) {
+        const double ratio=double(rect.width())/rect.height();
+        if(source.width()/source.height()>ratio){const double width=source.height()*ratio;source.setLeft((source.width()-width)/2);source.setWidth(width);}
+        else{const double height=source.width()/ratio;source.setTop((source.height()-height)/2);source.setHeight(height);}
+    } else {
+        const auto size=source.size().scaled(target.size(),Qt::KeepAspectRatio);
+        target=QRectF(QPointF(target.center().x()-size.width()/2,target.center().y()-size.height()/2),size);
+    }
+    painter->save();painter->setRenderHint(QPainter::SmoothPixmapTransform);painter->drawPixmap(target,pixmap,source);painter->restore();
+}
 // Only decoration lookups made while painting can request thumbnails. Keep
 // previously painted cells during partial repaints, pruning them by geometry.
 class TableThumbnailDelegate : public QStyledItemDelegate {
 public:
     using QStyledItemDelegate::QStyledItemDelegate;
+    bool fill = false;
     void paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const override {
         if(index.column()==Catalog::Name)index.data(Catalog::ThumbnailRole);
+        if(fill&&index.column()==Catalog::Name) {
+            QStyleOptionViewItem styled(option);initStyleOption(&styled,index);
+            const auto icon=styled.icon;
+            if(!icon.isNull()) {
+                if(option.decorationSize.isValid())styled.decorationSize=option.decorationSize;
+                auto* style=styled.widget?styled.widget->style():QApplication::style();
+                const auto rect=style->subElementRect(QStyle::SE_ItemViewItemDecoration,&styled,styled.widget);
+                // Retain decoration layout and text spacing while painting
+                // the actual thumbnail ourselves with a centered crop.
+                QPixmap placeholder(styled.decorationSize);placeholder.fill(Qt::transparent);styled.icon=QIcon(placeholder);
+                style->drawControl(QStyle::CE_ItemViewItem,&styled,painter,styled.widget);
+                paintThumbnail(painter,rect,icon,true);return;
+            }
+        }
         QStyledItemDelegate::paint(painter,option,index);
     }
 };
@@ -110,6 +139,7 @@ FileTableView::FileTableView(QWidget* parent):QTableView(parent) {
     connect(verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{ThumbnailFrame frame(this);});
 }
 void FileTableView::setSmoothScrolling(bool enabled){smooth_=enabled;if(!enabled&&scrollAnimation_)scrollAnimation_->stop();}
+void FileTableView::setFillThumbnails(bool fill){static_cast<TableThumbnailDelegate*>(itemDelegate())->fill=fill;viewport()->update();}
 void FileTableView::wheelEvent(QWheelEvent* e){if(!scrollWheel(this,e,smooth_,scrollAnimation_,wheelRemainder_))QTableView::wheelEvent(e);}
 void FileTableView::paintEvent(QPaintEvent* e){ThumbnailFrame frame(this);QTableView::paintEvent(e);}
 void FileTableView::hideEvent(QHideEvent* e){QTableView::hideEvent(e);ThumbnailFrame frame(this,true);if(scrollAnimation_)scrollAnimation_->stop();}
@@ -127,7 +157,7 @@ void ThumbnailDelegate::paint(QPainter* painter,const QStyleOptionViewItem& opti
     QRect thumb=grid?QRect(tile.left()+10,tile.top()+8,tile.width()-20,thumbnailHeight()):QRect(tile.left()+8,tile.top()+6,thumbEdge,thumbEdge);
     painter->fillRect(thumb,option.palette.alternateBase().color());
     const auto icon=qvariant_cast<QIcon>(index.data(Catalog::ThumbnailRole));
-    if(!icon.isNull())icon.paint(painter,thumb,Qt::AlignCenter);
+    if(!icon.isNull())paintThumbnail(painter,thumb,icon,fill);
     else{painter->setPen(QColor("#88958f"));painter->drawText(thumb,Qt::AlignCenter,index.siblingAtColumn(Catalog::Format).data().toString());}
     QRect text=grid?QRect(tile.left()+10,thumb.bottom()+8,tile.width()-20,20):QRect(thumb.right()+14,tile.top()+8,tile.width()-thumb.width()-32,20);
     painter->setPen(option.palette.text().color());QFont font=option.font;font.setBold(true);painter->setFont(font);

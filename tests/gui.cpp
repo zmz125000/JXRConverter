@@ -167,6 +167,35 @@ private slots:
         // Keep a screenshot artifact for visual inspection without requiring a display server.
         window.grab().save(QDir::tempPath()+"/jxrc-desktop-test.png");
     }
+    void libraryAspectAndSearchReset() {
+        const auto directory=root("wide-library");
+        QStringList files;
+        for(const auto& name:{"alpha.jpg","beta.jpg","gamma.jpg"})files<<makeImage(directory,name,160,90,100);
+        MainWindow window;window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto* aspect=window.findChild<QPushButton*>("thumbnailAspect");QVERIFY(aspect);aspect->setChecked(false);QCOMPARE(aspect->text(),QString("1:1"));
+        window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),3);QTRY_VERIFY(inspected(*window.catalog()));
+        QTRY_VERIFY(aspect->isChecked());QCOMPARE(aspect->text(),QString("16:9"));
+        aspect->setChecked(false);window.catalog()->setStatus(files.first(),"Ready");QVERIFY(!aspect->isChecked());
+
+        auto* search=window.findChild<QLineEdit*>("search");auto* instant=window.findChild<QLineEdit*>("instantFilter");QVERIFY(search&&instant);
+        search->setText("alpha");QTest::keyClick(search,Qt::Key_Return);QCOMPARE(window.filterModel()->rowCount(),1);
+        instant->setText("beta");QCOMPARE(window.filterModel()->rowCount(),0);
+        auto* clearSearch=search->findChild<QAbstractButton*>();QVERIFY(clearSearch);QTest::mouseClick(clearSearch,Qt::LeftButton);
+        QVERIFY(search->text().isEmpty());QCOMPARE(window.filterModel()->rowCount(),1);
+        QVERIFY(window.filterModel()->index(0,0).data().toString().contains("beta"));
+        instant->clear();QCOMPARE(window.filterModel()->rowCount(),3);
+
+        // Extension-based JXR detection applies to subsequent imports too.
+        const auto alias=directory+"/added.JXR";QVERIFY(QFile::copy(files.first(),alias));window.addPaths({alias});QTRY_VERIFY(aspect->isChecked());
+        window.findChild<QCheckBox*>("metadataFilters")->setChecked(true);QTest::qWait(30);
+        for(const auto& name:{"minImageEdge","minMegapixels"}) {
+            auto* input=window.findChild<QAbstractSpinBox*>(name);QVERIFY(input);
+            auto* editor=input->findChild<QLineEdit*>();QVERIFY(editor);
+            QVERIFY2(editor->width()>=editor->fontMetrics().horizontalAdvance(editor->text()),name);
+        }
+        window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
+        window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
+    }
     void controlsSnapshot() {
         MainWindow window;
         auto* keep=window.findChild<QCheckBox*>("convertGamut");QVERIFY(keep);QVERIFY(keep->isChecked());

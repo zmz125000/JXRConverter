@@ -53,6 +53,7 @@ private:
     void updateOutputSettings();
     void updateFilter();
     void updatePresentation();
+    void updateAutoThumbnailAspect();
     void updateCounts();
     void showMetadata();
     void convertFiles(bool selected);
@@ -79,13 +80,14 @@ private:
     QCheckBox *smoothScrolling_, *loadFolder_, *loadFiles_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
-    QPushButton *thumbnailAspect_, *selected_, *visible_, *cancel_, *remove_, *clear_;
+    QPushButton *thumbnailAspect_, *thumbnailFit_, *selected_, *visible_, *cancel_, *remove_, *clear_;
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit* inspector_;
     QProgressBar* progress_;
     QStringList recentFolders_, recentFiles_, lastFiles_;
     QString appliedSearch_;
     bool closeWhenIdle_ = false;
+    bool thumbnailAspectSampleChecked_ = false;
     Qt::SortOrder sortOrder_ = Qt::AscendingOrder;
 };
 }

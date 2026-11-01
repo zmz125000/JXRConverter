@@ -34,6 +34,7 @@ class FileTableView : public QTableView {
 public:
     explicit FileTableView(QWidget* parent = nullptr);
     void setSmoothScrolling(bool enabled);
+    void setFillThumbnails(bool fill);
 signals:
     void pathsDropped(const QStringList& paths);
 protected:
@@ -54,6 +55,7 @@ public:
     bool grid = true;
     int edge = 200;
     bool wide = false;
+    bool fill = false;
     int thumbnailHeight() const { return wide ? qRound(edge*9.0/16) : edge; }
     void paint(QPainter*, const QStyleOptionViewItem&, const QModelIndex&) const override;
     QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override;
