@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(JXRConverter VERSION 0.2.3 LANGUAGES C CXX)
+project(JXRConverter VERSION 0.2.4 LANGUAGES C CXX)
 option(JXRC_DEPLOY_QT "Bundle Qt runtime dependencies when installing the GUI" OFF)
 if(JXRC_DEPLOY_QT)
     # Portable desktop archives launch directly from the extracted root.

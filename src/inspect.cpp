@@ -4,6 +4,7 @@
 #include "regular_decode.h"
 #include "ultrahdr/jpegdecoderhelper.h"
 #include <avif/avif.h>
+#include <algorithm>
 #include <jxl/decode_cxx.h>
 #include <libraw/libraw.h>
 #include <fstream>
@@ -13,11 +14,21 @@
 
 namespace jxrc {
 ImageInfo inspect(const std::filesystem::path& input) {
+    return inspect(input,{});
+}
+ImageInfo inspect(const std::filesystem::path& input,const std::function<bool()>& cancelled) {
+    if(cancelled&&cancelled())throw std::runtime_error("Inspection cancelled");
     std::ifstream stream(input,std::ios::binary|std::ios::ate);
     if(!stream)throw std::runtime_error("Cannot open image");
     auto length=stream.tellg();if(length<=0||length>512LL*1024*1024)throw std::runtime_error("Input exceeds inspection limit");
     std::vector<uint8_t> bytes(static_cast<size_t>(length));stream.seekg(0);
-    if(!stream.read(reinterpret_cast<char*>(bytes.data()),bytes.size()))throw std::runtime_error("Cannot read image");
+    for(size_t offset=0;offset<bytes.size();) {
+        if(cancelled&&cancelled())throw std::runtime_error("Inspection cancelled");
+        const size_t count=cancelled?std::min<size_t>(256*1024,bytes.size()-offset):bytes.size()-offset;
+        if(!stream.read(reinterpret_cast<char*>(bytes.data()+offset),count))throw std::runtime_error("Cannot read image");offset+=count;
+    }
+    stream.close();
+    if(cancelled&&cancelled())throw std::runtime_error("Inspection cancelled");
     return inspect_bytes(bytes);
 }
 ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {

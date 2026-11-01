@@ -110,15 +110,15 @@ private slots:
         QCOMPARE(model.thumbnailJobCount(),0);
         model.beginThumbnailFrame([](const QModelIndex& i){return i.row()<20;});
         for(int i=0;i<40;++i)model.index(i,0).data(Catalog::ThumbnailRole);
-        model.endThumbnailFrame();QCOMPARE(model.thumbnailJobCount(),8);
-        for(int i=8;i<40;++i)QVERIFY(!model.record(i).thumbnailPending);
+        model.endThumbnailFrame();QCOMPARE(model.thumbnailJobCount(),6);
+        for(int i=6;i<40;++i)QVERIFY(!model.record(i).thumbnailPending);
         // Scroll before processing completions: all old pending jobs are
         // cancelled, and the rolling window replenishes only the new viewport.
         model.beginThumbnailFrame([](const QModelIndex& i){return i.row()>=30;});
         for(int i=30;i<40;++i)model.index(i,0).data(Catalog::ThumbnailRole);
-        model.endThumbnailFrame();QCOMPARE(model.thumbnailJobCount(),8);
+        model.endThumbnailFrame();QCOMPARE(model.thumbnailJobCount(),6);
         auto ready=[&]{
-            if(model.thumbnailJobCount()>8)return false;
+            if(model.thumbnailJobCount()>6)return false;
             for(int i=30;i<40;++i)if(qvariant_cast<QIcon>(model.index(i,0).data(Qt::DecorationRole)).isNull())return false;
             return true;
         };
@@ -148,6 +148,40 @@ private slots:
             if(!raster.save(path))continue; // Qt plugin availability varies by platform.
             QCOMPARE(readThumbnail(path,1024).size(),QSize(512,768));
         }
+    }
+    void lazyMetadataAndClearCancellation() {
+        const auto directory=root("lazy-io");
+        QStringList files;
+        for(int i=0;i<40;++i)files<<makeImage(directory,QString("%1.jpg").arg(i,2,10,QChar('0')),96,48,100);
+        Catalog model;model.setBackgroundMetadata(false);model.addPaths({directory});
+        QTRY_COMPARE(model.rowCount(),40);QTRY_VERIFY(!model.scanning());
+        QTRY_VERIFY(model.record(0).inspected&&model.record(1).inspected&&model.record(2).inspected);
+        QTRY_COMPARE(model.metadataJobCount(),0);
+        for(int i=3;i<40;++i)QVERIFY(!model.record(i).inspected);
+        model.beginThumbnailFrame([](const QModelIndex& i){return i.row()>=20&&i.row()<26;});
+        for(int i=20;i<26;++i)model.index(i,0).data(Catalog::ThumbnailRole);
+        model.endThumbnailFrame();QVERIFY(model.thumbnailJobCount()<=6);
+        auto visibleReady=[&]{for(int i=20;i<26;++i)if(!model.record(i).inspected||qvariant_cast<QIcon>(model.index(i,0).data(Qt::DecorationRole)).isNull())return false;return true;};
+        QTRY_VERIFY(visibleReady());QTRY_COMPARE(model.metadataJobCount(),0);
+        for(int i=3;i<20;++i)QVERIFY(!model.record(i).inspected);
+        model.beginThumbnailFrame([](const QModelIndex& i){return i.row()>=30;});
+        for(int i=30;i<40;++i)model.index(i,0).data(Catalog::ThumbnailRole);
+        model.endThumbnailFrame();model.clear();
+        QCOMPARE(model.rowCount(),0);QTRY_COMPARE(model.thumbnailJobCount(),0);QTRY_COMPARE(model.metadataJobCount(),0);
+        // Stale enumeration batches must never repopulate a cleared library.
+        model.addPaths({directory});model.clear();
+        model.addPaths({files.first()});QTRY_COMPARE(model.rowCount(),1);QTRY_VERIFY(inspected(model)&&!model.scanning());
+        QTest::qWait(30);QCOMPARE(model.rowCount(),1);
+    }
+    void cancellableImageReads() {
+        const auto path=root("cancel-read.bin");QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));QVERIFY(file.resize(8*1024*1024));file.close();
+        const auto input=std::filesystem::u8path(path.toStdString());
+        int checks=0;bool cancelled=false;
+        try{jxrc::preview(input,384,[&]{return ++checks>=4;});}catch(const std::exception& e){cancelled=QString::fromUtf8(e.what()).contains("cancelled");}
+        QVERIFY(cancelled);QCOMPARE(checks,4);
+        checks=0;cancelled=false;
+        try{jxrc::inspect(input,[&]{return ++checks>=4;});}catch(const std::exception& e){cancelled=QString::fromUtf8(e.what()).contains("cancelled");}
+        QVERIFY(cancelled);QCOMPARE(checks,4);
     }
     void scrollingAndCellShape() {
         QStandardItemModel model(200,1);FileListView list;ThumbnailDelegate delegate;

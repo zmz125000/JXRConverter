@@ -24,8 +24,8 @@ struct Record {
     QMap<QString, QString> exif;
 };
 bool supportedFile(const QString& path);
-Record readMetadata(const QString& path);
-QImage readThumbnail(const QString& path, int edge = 384);
+Record readMetadata(const QString& path, const std::function<bool()>& cancelled = {});
+QImage readThumbnail(const QString& path, int edge = 384, const std::function<bool()>& cancelled = {});
 
 class Catalog : public QAbstractTableModel {
     Q_OBJECT
@@ -42,12 +42,15 @@ public:
     QStringList paths() const;
     void addPaths(const QStringList& paths, bool recursive = true);
     void removePaths(const QStringList& paths);
+    void clear();
+    void setBackgroundMetadata(bool enabled);
     void setStatus(const QString& path, const QString& status, const QString& error = {});
     // Layout probes never enqueue work; views bracket actual painting instead.
     void beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible);
     void endThumbnailFrame();
     int thumbnailJobCount() const { return thumbnailJobs_.size(); }
     int thumbnailCacheCost() const { return cache_.totalCost(); }
+    int metadataJobCount() const { return metadataTask_?1:0; }
     bool scanning() const { return scanning_ > 0; }
 signals:
     void scanStateChanged(bool scanning);
@@ -57,10 +60,20 @@ private:
     void pumpThumbnails();
     void cancelThumbnail(const QString& path);
     void fitThumbnailCache();
+    void pumpMetadata();
+    void cancelMetadata();
+    bool metadataWanted(const QString& path) const;
     int find(const QString& path) const;
     QVector<Record> records_;
     QSet<QString> known_;
-    QThreadPool scans_, metadata_, thumbnails_;
+    QThreadPool scans_, io_;
+    static constexpr int ThumbnailBudget = 6;
+    std::shared_ptr<std::atomic_bool> epoch_ = std::make_shared<std::atomic_bool>(true);
+    std::shared_ptr<std::atomic_bool> metadataToken_;
+    QStringList metadataQueue_;
+    QString metadataPath_;
+    QRunnable* metadataTask_ = nullptr;
+    bool backgroundMetadata_ = true;
     QCache<QString, QImage> cache_{65536}; // KiB; bounded independently of catalog size.
     QStringList visibleThumbnails_;
     QMap<QString, std::shared_ptr<std::atomic_bool>> thumbnailJobs_;

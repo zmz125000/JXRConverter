@@ -70,6 +70,7 @@ QStringList urlPaths(const QMimeData* mime) {QStringList out;for(const auto& url
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog(this)),proxy_(new CatalogFilter(this)),queue_(new ConversionQueue(this)) {
     setWindowTitle("JXRConverter " + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
     proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);selection_=new QItemSelectionModel(proxy_,this);
+    catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
     auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open image folder");if(!path.isEmpty())addPaths({path});});
@@ -84,7 +85,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* selectAll=toolbar->addAction("Select all");connect(selectAll,&QAction::triggered,this,[this]{if(views_->currentWidget()==table_)table_->selectAll();else list_->selectAll();});
     remove_=new QPushButton("Remove selected");remove_->setObjectName("removeSelected");toolbar->addWidget(remove_);
     connect(remove_,&QPushButton::clicked,this,[this]{catalog_->removePaths(selectedPaths());});
-    clear_=new QPushButton("Clear");toolbar->addWidget(clear_);connect(clear_,&QPushButton::clicked,this,[this]{catalog_->removePaths(catalog_->paths());});
+    clear_=new QPushButton("Clear");toolbar->addWidget(clear_);connect(clear_,&QPushButton::clicked,catalog_,&Catalog::clear);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
     wheelChanges_->setToolTip("Allow the mouse wheel to change dropdowns and numeric inputs. Off lets you scroll past controls without changing conversion settings.");toolbar->addWidget(wheelChanges_);
     auto* splitter=new QSplitter;setCentralWidget(splitter);
@@ -186,7 +187,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(reset,&QPushButton::clicked,this,[this]{instant_->clear();format_->clear();range_->setCurrentIndex(0);minImageEdge_->setValue(0);megapixels_->setValue(0);dateEnabled_->setChecked(false);today_->setChecked(false);dateFrom_->setDate(QDate::currentDate().addDays(-1));dateTo_->setDate(QDate::currentDate());});
     // Refresh Today across local midnight, including when the application stays open.
     auto* dateRefresh=new QTimer(this);dateRefresh->setInterval(30000);connect(dateRefresh,&QTimer::timeout,this,[this]{if(today_->isChecked())updateFilter();});dateRefresh->start();
-    connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
+    connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);updateBackgroundMetadata();});
     connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
     connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(column);direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
     connect(smoothScrolling_,&QCheckBox::toggled,this,&MainWindow::updatePresentation);connect(thumbnailAspect_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
@@ -199,6 +200,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         updateAutoThumbnailAspect();
     });
     connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())thumbnailAspectSampleChecked_=false;});
+    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;updateCounts();showMetadata();});
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this]{updateCounts();showMetadata();updateAutoThumbnailAspect();});
     connect(catalog_,&Catalog::scanStateChanged,this,[this](bool scanning){statusBar()->showMessage(scanning?"Scanning folders…":"Folder scan complete",scanning?0:4000);updateCounts();});
     connect(catalog_,&Catalog::scanError,this,[this](const QString& error){statusBar()->showMessage(error,6000);});
@@ -429,7 +431,13 @@ void MainWindow::updateFilter() {
     }
     const bool dates=metadataFilters_->isChecked()&&dateEnabled_->isChecked()&&!f.today;
     dateEnabled_->setEnabled(!f.today);dateFrom_->setEnabled(dates);dateTo_->setEnabled(dates);
-    proxy_->setFilter(f);updateCounts();
+    proxy_->setFilter(f);updateBackgroundMetadata();updateCounts();
+}
+void MainWindow::updateBackgroundMetadata() {
+    const int sort=sort_->currentData().toInt();
+    const bool metadataSort=sort!=Catalog::Name&&sort!=Catalog::Format&&sort!=Catalog::Status;
+    const bool metadataFilter=metadataFilters_->isChecked()&&(!format_->text().trimmed().isEmpty()||range_->currentIndex()!=0||minImageEdge_->value()>0||megapixels_->value()>0||dateEnabled_->isChecked());
+    catalog_->setBackgroundMetadata(metadataSort||metadataFilter||today_->isChecked()||!appliedSearch_.trimmed().isEmpty()||!instant_->text().trimmed().isEmpty());
 }
 void MainWindow::updatePresentation() {
     const bool details=viewMode_->checkedId()==2,grid=viewMode_->checkedId()==0;
@@ -460,7 +468,7 @@ void MainWindow::updateCounts() {
     const int selected=selection_->selectedRows(0).size();const bool busy=queue_->busy()||(updater_&&updater_->busy()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy);
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
-    selected_->setEnabled(selected>0&&hasTargets&&!busy);visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(busy);remove_->setEnabled(selected>0&&!busy);clear_->setEnabled(catalog_->rowCount()>0&&!busy&&!catalog_->scanning());workers_->setEnabled(!busy);
+    selected_->setEnabled(selected>0&&hasTargets&&!busy);visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(busy);remove_->setEnabled(selected>0&&!busy);clear_->setEnabled(!busy&&(catalog_->rowCount()>0||catalog_->scanning()));workers_->setEnabled(!busy);
 }
 void MainWindow::showMetadata() {
     const auto selected=selection_->selectedRows(0);if(selected.isEmpty()){inspector_->clear();return;}

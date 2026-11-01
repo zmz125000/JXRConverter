@@ -52,6 +52,7 @@ private:
     void updateMode();
     void updateOutputSettings();
     void updateFilter();
+    void updateBackgroundMetadata();
     void updatePresentation();
     void updateAutoThumbnailAspect();
     void updateCounts();

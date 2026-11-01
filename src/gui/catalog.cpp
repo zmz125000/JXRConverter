@@ -22,8 +22,8 @@ std::filesystem::path nativePath(const QString& path) {
 #endif
 }
 QString key(const QString& path) {
-    QString canonical = QFileInfo(path).canonicalFilePath();
-    if (canonical.isEmpty()) canonical = QFileInfo(path).absoluteFilePath();
+    // Imports are already canonical. Do not stat SMB files again for model keys.
+    QString canonical = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 #ifdef _WIN32
     canonical = canonical.toCaseFolded();
 #endif
@@ -46,13 +46,15 @@ bool supportedFile(const QString& path) {
     static const QSet<QString> extensions = {"png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     return extensions.contains(QFileInfo(path).suffix().toLower());
 }
-Record readMetadata(const QString& path) {
-    Record r; r.path = path; QFileInfo file(path);
+Record readMetadata(const QString& path,const std::function<bool()>& cancelled) {
+    Record r;if(cancelled&&cancelled())return r; r.path = path; QFileInfo file(path);
     r.name = file.fileName(); r.bytes = file.size(); r.modified = file.lastModified();
     r.format = file.suffix().toUpper();
     try {
+        if(cancelled&&cancelled())return r;
         auto image = Exiv2::ImageFactory::open(nativePath(path).u8string());
         if (image.get() != nullptr) {
+            if(cancelled&&cancelled())return r;
             image->readMetadata(); r.width = image->pixelWidth(); r.height = image->pixelHeight();
             const auto& exif = image->exifData();
             for (const auto& tag : exif) r.exif.insert(QString::fromStdString(tag.key()), QString::fromStdString(tag.toString()));
@@ -68,7 +70,8 @@ Record readMetadata(const QString& path) {
         }
     } catch (const std::exception& e) { r.metadataWarning = QString::fromUtf8(e.what()); }
     try {
-        const auto info = inspect(nativePath(path));
+        if(cancelled&&cancelled())return r;
+        const auto info = inspect(nativePath(path),cancelled);
         r.width = info.width; r.height = info.height; r.bits = info.bits;
         r.format = QString::fromStdString(info.format); r.raw = info.raw; r.gainmap = info.gainmap; r.hdr = info.hdr;
         r.transfer = QString::fromStdString(info.transfer); r.primaries = QString::fromStdString(info.primaries);
@@ -78,18 +81,19 @@ Record readMetadata(const QString& path) {
     }
     r.inspected = true; return r;
 }
-QImage readThumbnail(const QString& path, int edge) {
-    auto p = preview(nativePath(path), std::min(edge,768));
+QImage readThumbnail(const QString& path, int edge,const std::function<bool()>& cancelled) {
+    auto p = preview(nativePath(path), std::min(edge,768),cancelled);
     return QImage(p.rgba.data(),int(p.width),int(p.height),int(p.width)*4,QImage::Format_RGBA8888).copy();
 }
 Catalog::Catalog(QObject* parent, int thumbnailCacheKiB) : QAbstractTableModel(parent) {
     cache_.setMaxCost(std::max(1,thumbnailCacheKiB));
-    scans_.setMaxThreadCount(1); metadata_.setMaxThreadCount(2); thumbnails_.setMaxThreadCount(2);
+    scans_.setMaxThreadCount(1);io_.setMaxThreadCount(1); // One sequential content reader for HDD/SMB.
 }
 Catalog::~Catalog() {
-    scans_.clear(); metadata_.clear(); thumbnails_.clear();
-    scans_.waitForDone(); metadata_.waitForDone(); thumbnails_.waitForDone();
-    qDeleteAll(thumbnailTasks_);
+    epoch_->store(false);if(metadataToken_)metadataToken_->store(false);
+    for(const auto& token:thumbnailJobs_)token->store(false);
+    scans_.clear();io_.clear();scans_.waitForDone();io_.waitForDone();
+    delete metadataTask_;qDeleteAll(thumbnailTasks_);
 }
 int Catalog::rowCount(const QModelIndex& parent) const { return parent.isValid()?0:records_.size(); }
 int Catalog::columnCount(const QModelIndex& parent) const { return parent.isValid()?0:ColumnCount; }
@@ -126,35 +130,99 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
 QStringList Catalog::paths() const { QStringList out; for(const auto& r:records_)out<<r.path; return out; }
 int Catalog::find(const QString& path) const { for(int i=0;i<records_.size();++i)if(records_[i].path==path)return i;return -1; }
 void Catalog::addPaths(const QStringList& paths, bool recursive) {
-    ++scanning_; emit scanStateChanged(true);
-    scans_.start([this,paths,recursive] {
+    const auto epoch=epoch_;
+    ++scanning_;emit scanStateChanged(true);
+    scans_.start([this,paths,recursive,epoch] {
         QStringList batch;
-        auto send = [&] { if(batch.isEmpty())return; const auto ready=batch; batch.clear(); QMetaObject::invokeMethod(this,[this,ready]{insertPaths(ready);},Qt::QueuedConnection); };
+        auto send=[&] {
+            if(batch.isEmpty()||!epoch->load())return;
+            const auto ready=batch;batch.clear();
+            QMetaObject::invokeMethod(this,[this,ready,epoch]{if(epoch->load())insertPaths(ready);},Qt::QueuedConnection);
+        };
         for(const auto& path:paths) {
+            if(!epoch->load())break;
             QFileInfo info(path);
             if(info.isDir()) {
-                QDirIterator it(path,QDir::Files|QDir::Readable|QDir::NoSymLinks,recursive?QDirIterator::Subdirectories:QDirIterator::NoIteratorFlags);
-                while(it.hasNext()){const auto file=it.next();if(supportedFile(file))batch<<QFileInfo(file).canonicalFilePath();if(batch.size()>=64)send();}
-            } else if(info.isFile()&&supportedFile(path)) batch<<info.canonicalFilePath();
-            else QMetaObject::invokeMethod(this,[this,path]{emit scanError("Skipped unsupported or missing file: "+path);},Qt::QueuedConnection);
+                // Canonicalize the root once. NoSymLinks makes per-file
+                // canonicalFilePath()/remote stat calls unnecessary.
+                const auto root=info.canonicalFilePath();if(root.isEmpty())continue;
+                QDirIterator it(root,QDir::Files|QDir::Readable|QDir::NoSymLinks,recursive?QDirIterator::Subdirectories:QDirIterator::NoIteratorFlags);
+                while(epoch->load()&&it.hasNext()) {
+                    const auto file=it.next();if(!epoch->load())break;
+                    if(supportedFile(file))batch<<file;
+                    if(batch.size()>=64)send();
+                }
+            } else if(info.isFile()&&supportedFile(path))batch<<info.canonicalFilePath();
+            else QMetaObject::invokeMethod(this,[this,path,epoch]{if(epoch->load())emit scanError("Skipped unsupported or missing file: "+path);},Qt::QueuedConnection);
         }
-        send(); QMetaObject::invokeMethod(this,[this]{--scanning_;emit scanStateChanged(scanning_>0);},Qt::QueuedConnection);
+        send();QMetaObject::invokeMethod(this,[this,epoch]{if(epoch->load()){--scanning_;emit scanStateChanged(scanning_>0);}},Qt::QueuedConnection);
     });
 }
 void Catalog::insertPaths(const QStringList& paths) {
+    const auto epoch=epoch_;
     for(const auto& path:paths) {
+        if(!epoch->load())break;
         const auto id=key(path);if(id.isEmpty()||known_.contains(id))continue;
-        known_.insert(id);Record r;r.path=path;r.name=QFileInfo(path).fileName();r.bytes=QFileInfo(path).size();r.format=QFileInfo(path).suffix().toUpper();
+        known_.insert(id);Record r;r.path=path;r.name=QFileInfo(path).fileName();r.format=QFileInfo(path).suffix().toUpper();
+        if(r.format=="JPG"||r.format=="JPE")r.format="JPEG";
+        r.raw=!QSet<QString>{"PNG","WEBP","TIF","TIFF","BMP","GIF","JPEG","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
+        metadataQueue_.append(path);
         beginInsertRows({},records_.size(),records_.size());records_.append(r);endInsertRows();
-        metadata_.start([this,path] {
-            Record result=readMetadata(path);
-            QMetaObject::invokeMethod(this,[this,path,result=std::move(result)]() mutable {
-                const int row=find(path);if(row<0)return;
+    }
+    pumpMetadata();
+}
+bool Catalog::metadataWanted(const QString& path) const {
+    if(backgroundMetadata_||visibleThumbnails_.contains(path))return true;
+    // The first three images are used by automatic grid aspect detection.
+    for(int row=0;row<std::min(3,int(records_.size()));++row)if(records_[row].path==path)return true;
+    return false;
+}
+void Catalog::setBackgroundMetadata(bool enabled) {
+    backgroundMetadata_=enabled;
+    if(metadataTask_&&!metadataWanted(metadataPath_))cancelMetadata();
+    pumpMetadata();
+}
+void Catalog::cancelMetadata() {
+    if(metadataToken_)metadataToken_->store(false);
+    if(metadataTask_&&io_.tryTake(metadataTask_)) {
+        delete metadataTask_;metadataTask_=nullptr;metadataToken_.reset();metadataPath_.clear();
+    }
+}
+void Catalog::pumpMetadata() {
+    if(metadataTask_||!epoch_->load())return;
+    QString path;
+    for(const auto& candidate:visibleThumbnails_) {
+        const int row=find(candidate);if(row>=0&&!records_[row].inspected){path=candidate;break;}
+    }
+    if(path.isEmpty())for(int row=0;row<std::min(3,int(records_.size()));++row)if(!records_[row].inspected){path=records_[row].path;break;}
+    if(path.isEmpty()&&backgroundMetadata_)while(!metadataQueue_.isEmpty()) {
+        const auto candidate=metadataQueue_.takeFirst();const int row=find(candidate);
+        if(row>=0&&!records_[row].inspected){path=candidate;break;}
+    }
+    if(path.isEmpty())return;
+    const auto epoch=epoch_;auto token=std::make_shared<std::atomic_bool>(true);
+    metadataToken_=token;metadataPath_=path;
+    metadataTask_=QRunnable::create([this,path,epoch,token] {
+        const auto cancelled=[epoch,token]{return !epoch->load()||!token->load();};
+        Record result;if(!cancelled())result=readMetadata(path,cancelled);
+        QMetaObject::invokeMethod(this,[this,path,epoch,token,result=std::move(result)]() mutable {
+            delete metadataTask_;metadataTask_=nullptr;metadataToken_.reset();metadataPath_.clear();
+            const int row=find(path);
+            if(epoch->load()&&token->load()&&row>=0) {
                 auto& old=records_[row];result.status=old.status;result.error=old.error;result.thumbnailPending=old.thumbnailPending;result.thumbnailFailed=old.thumbnailFailed;
                 old=std::move(result);emit dataChanged(index(row,0),index(row,ColumnCount-1));
-            },Qt::QueuedConnection);
-        });
-    }
+            }
+            pumpMetadata();
+        },Qt::QueuedConnection);
+    });
+    metadataTask_->setAutoDelete(false);io_.start(metadataTask_,0);
+}
+void Catalog::clear() {
+    epoch_->store(false);epoch_=std::make_shared<std::atomic_bool>(true);
+    scans_.clear();scanning_=0;metadataQueue_.clear();visibleThumbnails_.clear();cancelMetadata();
+    for(const auto& path:thumbnailJobs_.keys())cancelThumbnail(path);
+    beginResetModel();records_.clear();known_.clear();cache_.clear();endResetModel();
+    emit scanStateChanged(false);
 }
 void Catalog::beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible) {
     if(thumbnailFrameDepth_++==0){thumbnailVisible_=visible;thumbnailFrame_=true;}
@@ -171,12 +239,14 @@ void Catalog::endThumbnailFrame() {
             visibleThumbnails_.removeAt(i);
         }
     }
-    thumbnailVisible_={};thumbnailFrameDepth_=0;fitThumbnailCache();pumpThumbnails();
+    thumbnailVisible_={};thumbnailFrameDepth_=0;
+    if(metadataTask_&&!metadataWanted(metadataPath_))cancelMetadata();
+    fitThumbnailCache();pumpThumbnails();pumpMetadata();
 }
 void Catalog::cancelThumbnail(const QString& path) {
     if(auto token=thumbnailJobs_.value(path))token->store(false);
     auto* task=thumbnailTasks_.value(path);
-    if(task&&thumbnails_.tryTake(task)) {
+    if(task&&io_.tryTake(task)) {
         delete task;thumbnailTasks_.remove(path);thumbnailJobs_.remove(path);
         const int row=find(path);if(row>=0)records_[row].thumbnailPending=false;
     }
@@ -184,8 +254,8 @@ void Catalog::cancelThumbnail(const QString& path) {
 void Catalog::fitThumbnailCache() {
     // All visible images must coexist in the cache. Otherwise completion of
     // later cells evicts early ones, and pumpThumbnails re-decodes them forever.
-    // Include eight in-flight images and rounded-up KiB costs in the budget.
-    const qint64 count=std::max<qint64>(1,visibleThumbnails_.size()+8);
+    // Include six in-flight images and rounded-up KiB costs in the budget.
+    const qint64 count=std::max<qint64>(1,visibleThumbnails_.size()+ThumbnailBudget);
     const qint64 bytesPerImage=qint64(cache_.maxCost())*1024/count;
     thumbnailEdge_=std::clamp(int(std::sqrt(std::max<qint64>(4,bytesPerImage-1023)/4.0)),1,384);
     bool shrink=false;
@@ -203,10 +273,10 @@ void Catalog::fitThumbnailCache() {
         cache_.insert(it.key(),new QImage(it.value()),std::max<qint64>(1,(it.value().sizeInBytes()+1023)/1024));
 }
 void Catalog::pumpThumbnails() {
-    // Eight submitted jobs total, including the two currently decoding. Queued
+    // Six submitted thumbnail jobs total; content reads are serialized. Queued
     // jobs carry cancellation tokens so scrolling never decodes stale cells.
     for(const auto& path:visibleThumbnails_) {
-        if(thumbnailJobs_.size()>=8)break;
+        if(thumbnailJobs_.size()>=ThumbnailBudget)break;
         const int row=find(path);if(row<0)continue;
         auto& record=records_[row];
         if(cache_.contains(path)||record.thumbnailFailed||thumbnailJobs_.contains(path))continue;
@@ -219,7 +289,7 @@ void Catalog::pumpThumbnails() {
         auto* task=QRunnable::create([this,path,token,edge] {
             QImage image;QString error;
             if(token->load()) {
-                try {image=readThumbnail(path,edge);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
+                try {image=readThumbnail(path,edge,[token]{return !token->load();});}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
             }
             QMetaObject::invokeMethod(this,[this,path,token,image,error] {
                 thumbnailJobs_.remove(path);
@@ -243,16 +313,19 @@ void Catalog::pumpThumbnails() {
         });
         // Own the runnable until completion, avoiding tryTake's documented
         // pointer-reuse race with automatically deleted runnables.
-        task->setAutoDelete(false);thumbnailTasks_.insert(path,task);thumbnails_.start(task);
+        task->setAutoDelete(false);thumbnailTasks_.insert(path,task);io_.start(task,1);
     }
 }
 void Catalog::removePaths(const QStringList& paths) {
     const QSet<QString> removal(paths.begin(),paths.end());
+    if(!records_.isEmpty()&&std::all_of(records_.cbegin(),records_.cend(),[&](const Record& r){return removal.contains(r.path);})) {clear();return;}
+    if(removal.contains(metadataPath_))cancelMetadata();
     for(int i=records_.size()-1;i>=0;--i)if(removal.contains(records_[i].path)) {
         const auto path=records_[i].path;
         visibleThumbnails_.removeAll(path);cancelThumbnail(path);
         beginRemoveRows({},i,i);records_.removeAt(i);known_.remove(key(path));cache_.remove(path);endRemoveRows();
     }
+    pumpMetadata();
 }
 void Catalog::setStatus(const QString& path,const QString& status,const QString& error) {
     const int row=find(path);if(row<0)return;records_[row].status=status;records_[row].error=error;

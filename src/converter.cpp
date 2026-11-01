@@ -37,12 +37,19 @@ void range(double value,double low,double high,const char* name) {
 }
 bool linear_jxl(Target t) {return t==Target::jxl_linear||t==Target::jxl_scrgb;}
 bool hdr_target(Target t) {return t==Target::jpeg_gainmap||linear_jxl(t)||t==Target::avif_pq||t==Target::avif_gainmap||t==Target::jxl_pq;}
-std::vector<uint8_t> read(const std::filesystem::path& path) {
+std::vector<uint8_t> read(const std::filesystem::path& path,const std::function<bool()>& cancelled={}) {
+    if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
     std::ifstream f(path,std::ios::binary|std::ios::ate);
     require(bool(f),"Cannot open input: "+path.u8string());
     const auto n=f.tellg();require(n>0&&n<=512LL*1024*1024,"Input must be 1 byte to 512 MiB");
     std::vector<uint8_t> bytes(static_cast<size_t>(n));f.seekg(0);
-    require(bool(f.read(reinterpret_cast<char*>(bytes.data()),bytes.size())),"Cannot read input");return bytes;
+    for(size_t offset=0;offset<bytes.size();) {
+        if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
+        const size_t count=cancelled?std::min<size_t>(256*1024,bytes.size()-offset):bytes.size()-offset;
+        require(bool(f.read(reinterpret_cast<char*>(bytes.data()+offset),count)),"Cannot read input");offset+=count;
+    }
+    if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
+    return bytes;
 }
 struct Staging {
     std::filesystem::path directory, file;
@@ -364,10 +371,13 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     require(std::filesystem::file_size(stage.file)>0,"Encoder produced no output");stage.publish(output,o.overwrite);return result;
 }
 Preview preview(const std::filesystem::path& input,unsigned edge) {
+    return preview(input,edge,{});
+}
+Preview preview(const std::filesystem::path& input,unsigned edge,const std::function<bool()>& cancelled) {
     require(edge>0&&edge<=1024,"Preview edge must be 1..1024");
     edge=std::min(edge,768u);
     JxrcThreadBudget budget(1);
-    auto bytes=read(input);const int format=kind(bytes);
+    auto bytes=read(input,cancelled);const int format=kind(bytes);
     std::vector<uint16_t> linear;std::vector<uint8_t> raw_pixels;
     unsigned w=0,h=0,raster_orientation=1;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;bool hdr=false;int gain=0,transfer=0,rc=0;
     if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,edge);
@@ -403,6 +413,7 @@ Preview preview(const std::filesystem::path& input,unsigned edge) {
         }
     }
     require(rc==0&&w&&h&&linear.size()==size_t(w)*h*4,"Thumbnail decode failed");
+    if(cancelled&&cancelled())throw std::runtime_error("Preview cancelled");
     scale_rgba_f16_max_edge(linear,w,h,edge);
     const int orient=(format==6||format==5)?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,nullptr);
     require(orient>=1&&orient<=8,"Unsupported thumbnail orientation/crop");

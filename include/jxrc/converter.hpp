@@ -2,6 +2,7 @@
 #include "export.hpp"
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <memory>
 #include <vector>
@@ -78,8 +79,12 @@ struct Preview {
     std::vector<uint8_t> rgba; // sRGB display thumbnail, straight alpha; not an export intermediate.
 };
 JXRC_API ImageInfo inspect(const std::filesystem::path& input);
+// Returning true cancels before opening the file or between 256 KiB reads.
+JXRC_API ImageInfo inspect(const std::filesystem::path& input, const std::function<bool()>& cancelled);
 // Display previews are capped at 768 px even when a larger edge is requested.
 JXRC_API Preview preview(const std::filesystem::path& input, unsigned max_edge = 384);
+// As above; codec calls already running finish before cancellation is checked.
+JXRC_API Preview preview(const std::filesystem::path& input, unsigned max_edge, const std::function<bool()>& cancelled);
 JXRC_API void validate(const Options& options);
 JXRC_API std::string version();
 } // namespace jxrc
