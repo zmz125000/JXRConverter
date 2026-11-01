@@ -54,7 +54,7 @@ private:
     int scanning_ = 0;
 };
 struct Filter {
-    QString text, format, range;
+    QString search, text, format, range;
     int minWidth = 0, minHeight = 0, minMaxEdge = 0;
     double minMegapixels = 0;
     bool literalText = false, today = false;

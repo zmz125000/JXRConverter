@@ -40,6 +40,10 @@ protected:
     void dropEvent(QDropEvent*) override;
 private:
     QWidget* buildControls();
+    void addDroppedPaths(const QStringList& paths);
+    void loadHistory();
+    void saveHistory();
+    void applySearch();
     QList<QWidget*> persistentControls() const;
     void restoreSettings();
     void saveSettings() const;
@@ -60,20 +64,22 @@ private:
     FileTableView* table_;
     ThumbnailDelegate* delegate_;
     QStackedWidget* views_;
-    QComboBox *viewMode_, *sort_, *mode_, *preset_, *avifDepth_, *rawMode_, *wb_;
+    QComboBox *viewMode_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *rawMode_, *wb_;
     QListWidget* targets_;
-    QLineEdit *search_, *format_, *output_;
+    QLineEdit *search_, *instant_, *format_, *output_;
     QSlider* size_;
     QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_;
     QDoubleSpinBox *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
-    QCheckBox *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *overwrite_, *bt2020_, *cameraLook_, *linearHdr_;
+    QCheckBox *loadFolder_, *loadFiles_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *overwrite_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
     QPushButton *selected_, *visible_, *cancel_, *remove_, *clear_;
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit* inspector_;
     QProgressBar* progress_;
+    QStringList recentFolders_, recentFiles_, lastFiles_;
+    QString appliedSearch_;
     bool closeWhenIdle_ = false;
     Qt::SortOrder sortOrder_ = Qt::AscendingOrder;
 };

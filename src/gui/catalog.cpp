@@ -201,6 +201,17 @@ void CatalogFilter::setFilter(const Filter& filter) {
 }
 bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     const auto& r=static_cast<Catalog*>(sourceModel())->record(row);const auto& f=filter_;
+    const QString haystack=r.path+" "+r.format+" "+dimensions(r)+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+QString::number(r.bits)+" bit "+r.exif.keys().join(' ')+" "+r.exif.values().join(' ');
+    static const QRegularExpression terms(R"((?:(camera|format|bits):)?("[^"]*"|[^\s]+))");
+    auto matches=terms.globalMatch(f.search);
+    while(matches.hasNext()) {
+        const auto match=matches.next();const auto field=match.captured(1);auto value=match.captured(2);
+        if(value.startsWith('"')&&value.endsWith('"'))value=value.mid(1,value.size()-2);
+        if(field=="camera"){if(r.camera.compare(value,Qt::CaseInsensitive)!=0)return false;}
+        else if(field=="format"){if(r.format.compare(value,Qt::CaseInsensitive)!=0)return false;}
+        else if(field=="bits"){if(QString::number(r.bits)!=value)return false;}
+        else if(!haystack.contains(value,Qt::CaseInsensitive))return false;
+    }
     if(!f.format.isEmpty()) {
         bool matched=false;
         const auto formats=f.format.toLower().split(QRegularExpression("[,;\\s]+"),Qt::SkipEmptyParts);
@@ -223,7 +234,6 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
         const auto date=r.captured.isValid()?r.captured.date():r.modified.date();
         if(date!=QDate::currentDate())return false;
     }
-    const QString haystack=r.path+" "+r.format+" "+dimensions(r)+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+r.exif.keys().join(' ')+" "+r.exif.values().join(' ');
     if(f.literalText)return haystack.contains(f.text.trimmed(),Qt::CaseInsensitive);
     for(const auto& word:f.text.split(' ',Qt::SkipEmptyParts))if(!haystack.contains(word,Qt::CaseInsensitive))return false;
     return true;
