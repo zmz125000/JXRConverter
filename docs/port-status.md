@@ -124,10 +124,16 @@ inspection, thumbnails, exact lossless JXL samples, preserved JXL/AVIF color tag
 float32 processing, and invalid cICP/CRC rejection. The Linux native build and this
 focused test passed.
 
-The existing `conversion` test fails at input mode 0 / target 3 (JPEG to lossless
-linear JXL), with encoder error `-67`. The identical failure was reproduced using
-the previous 0.1.6 packaged engine and the unchanged pre-port test source; it is
-not introduced by HDR PNG support. Windows/macOS were not run locally.
+The previous `-67` failure for JPEG to lossless linear JXL is fixed. libjxl 0.12's
+weighted predictor could overflow signed residuals while coding float32 bit
+patterns. Lossless float32 output now uses effort 4 (effort 3 forces a weighted DC
+tree), an explicit zero predictor and no MA tree learning. This preserves full
+float32 precision and signed/extended samples; compression may be less efficient.
+Other bit depths and lossy presets retain their encoder settings.
+
+The Linux `conversion` and `hdr_png` tests pass, including all 64 processing
+combinations and a new bit-exact signed float32 JXL round trip with transparency.
+Windows/macOS were not run locally.
 
 A LocalViewer HLG inconsistency found during the port is documented in
 [the port finding](localviewer-hdr-png-note.md).

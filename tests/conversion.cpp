@@ -105,6 +105,36 @@ static void regular_images(const fs::path& dir) {
     }
 }
 
+// Signed float32 bit patterns used to overflow libjxl's weighted predictor.
+static void signed_float_jxl(const fs::path& dir) {
+    constexpr unsigned w=64,h=48;
+    const float values[]={-1.f,0.125123f,-0.0000123f,2.f,0.f,1.000123f,-0.25f,6.f};
+    std::vector<float> input(w*h*4);
+    for(size_t i=0;i<w*h;++i) {
+        for(unsigned c=0;c<3;++c)input[i*4+c]=values[(i+c)%8];
+        input[i*4+3]=(i%3)*0.5f;
+    }
+    StillSourceColor color;color.bits=32;color.exponent_bits=8;color.transfer=8;
+    const auto path=dir/"signed-float32.jxl";
+    const int rc=encode_jxl_source(w,h,input.data(),true,color,path.string().c_str(),StillEncodeQuality(0));
+    if(rc)throw std::runtime_error("Signed float32 JXL encode: "+std::to_string(rc));
+    auto encoded=bytes(path);auto dec=JxlDecoderMake(nullptr);
+    check(JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_FULL_IMAGE)==JXL_DEC_SUCCESS,"Float32 JXL events");
+    JxlDecoderSetInput(dec.get(),encoded.data(),encoded.size());JxlDecoderCloseInput(dec.get());
+    std::vector<float> output(input.size());const JxlPixelFormat format{4,JXL_TYPE_FLOAT,JXL_NATIVE_ENDIAN,0};bool complete=false;
+    for(;;) {
+        const auto status=JxlDecoderProcessInput(dec.get());
+        if(status==JXL_DEC_BASIC_INFO) {
+            JxlBasicInfo info{};check(JxlDecoderGetBasicInfo(dec.get(),&info)==JXL_DEC_SUCCESS,"Float32 JXL basic info");
+            check(info.bits_per_sample==32 && info.exponent_bits_per_sample==8,"Float32 JXL precision reduced");
+        } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER)check(JxlDecoderSetImageOutBuffer(dec.get(),&format,output.data(),output.size()*sizeof(float))==JXL_DEC_SUCCESS,"Float32 JXL output buffer");
+        else if(status==JXL_DEC_FULL_IMAGE){complete=true;break;}
+        else if(status==JXL_DEC_SUCCESS)break;
+        else check(status!=JXL_DEC_ERROR && status!=JXL_DEC_NEED_MORE_INPUT,"Float32 JXL decode");
+    }
+    check(complete && std::memcmp(input.data(),output.data(),input.size()*sizeof(float))==0,"Signed float32 JXL samples changed");
+}
+
 // Insert a valid color chunk into synthetic fixtures; no external HDR assets.
 static std::vector<uint8_t> png_chunk(std::vector<uint8_t> png,const char* type,std::vector<uint8_t> payload) {
     std::vector<uint8_t> chunk={0,0,0,uint8_t(payload.size())};
@@ -187,6 +217,7 @@ int main(int argc,char** argv) try {
     std::memcpy(avif_header.data()+8,"mif1",4);
     check(is_avif_input(avif_header.data(),avif_header.size()),"AVIF compatible brand rejected");
     check(!is_avif_input(cr3_header.data(),8),"Truncated BMFF identified as AVIF");
+    signed_float_jxl(dir);
     regular_images(dir);
     jxrc::validate({});
     { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }

@@ -110,6 +110,15 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
         (alpha && JxlEncoderSetExtraChannelDistance(frame, 0, 0.f) != JXL_ENC_SUCCESS) ||
         JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_EFFORT, compression ? 5 : 3) != JXL_ENC_SUCCESS ||
         JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_DECODING_SPEED, compression ? 0 : 2) != JXL_ENC_SUCCESS) return -63;
+    // libjxl 0.12's weighted predictor can overflow its signed residual when
+    // lossless float32 bit patterns cross zero. A zero predictor with no MA
+    // learning stores those patterns exactly without reducing pixel precision.
+    if (!compression && info.bits_per_sample == 32 && info.exponent_bits_per_sample == 8) {
+        // Effort 3 forces a weighted DC tree even with an explicit predictor.
+        if (JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_EFFORT, 4) != JXL_ENC_SUCCESS ||
+            JxlEncoderFrameSettingsSetOption(frame, JXL_ENC_FRAME_SETTING_MODULAR_PREDICTOR, 0) != JXL_ENC_SUCCESS ||
+            JxlEncoderFrameSettingsSetFloatOption(frame, JXL_ENC_FRAME_SETTING_MODULAR_MA_TREE_LEARNING_PERCENT, 0.f) != JXL_ENC_SUCCESS) return -63;
+    }
     const unsigned output_channels = (gray ? 1u : 3u) + (alpha ? 1u : 0u);
     const JxlPixelFormat format{output_channels, type, JXL_NATIVE_ENDIAN, 0};
     std::vector<uint8_t> gray_alpha;
