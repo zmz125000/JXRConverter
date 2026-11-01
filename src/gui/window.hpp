@@ -40,6 +40,9 @@ protected:
     void dropEvent(QDropEvent*) override;
 private:
     QWidget* buildControls();
+    QList<QWidget*> persistentControls() const;
+    void restoreSettings();
+    void saveSettings() const;
     void updateMode();
     void updateFilter();
     void updatePresentation();
@@ -57,7 +60,7 @@ private:
     FileTableView* table_;
     ThumbnailDelegate* delegate_;
     QStackedWidget* views_;
-    QComboBox *viewMode_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *rawMode_, *wb_;
+    QComboBox *viewMode_, *sort_, *mode_, *preset_, *avifDepth_, *rawMode_, *wb_;
     QListWidget* targets_;
     QLineEdit *search_, *format_, *output_;
     QSlider* size_;

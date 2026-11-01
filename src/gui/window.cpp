@@ -3,6 +3,7 @@
 #include "style.hpp"
 #include <QStyleHints>
 #include <QMenu>
+#include <QClipboard>
 #include <QMouseEvent>
 #include <QAction>
 #include <QApplication>
@@ -76,15 +77,15 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     today_=check("Today","todayFilter");today_->setToolTip("Captured today; uses file modification date when no capture date is available.");filters->addWidget(today_);
     format_=new QLineEdit;format_->setObjectName("formatFilter");format_->setPlaceholderText("e.g. jpg, avif, raw");format_->setClearButtonEnabled(true);
     format_->setToolTip("Enter one or more formats/extensions separated by commas or spaces. JPEG/JPG and RAW camera extensions are supported.");
-    range_=combo({"All ranges","SDR","HDR","RAW"},"rangeFilter");layout->addLayout(filters);
-    auto* advanced=new QGroupBox("Filters");auto* advancedLayout=new QVBoxLayout(advanced);
-    auto* types=new QHBoxLayout;types->addWidget(new QLabel("Format"));types->addWidget(format_);types->addWidget(new QLabel("Range"));types->addWidget(range_);types->addStretch();advancedLayout->addLayout(types);
+    layout->addLayout(filters);
+    auto* advanced=new QGroupBox("Filters");auto* advancedLayout=new QHBoxLayout(advanced);advancedLayout->setSizeConstraint(QLayout::SetMinimumSize);
+    auto* types=new QHBoxLayout;types->addWidget(new QLabel("Format"));types->addWidget(format_);advancedLayout->addLayout(types);
     auto* imageLimits=new QHBoxLayout;advancedLayout->addLayout(imageLimits);
     minImageEdge_=spin(0,100000,0,"minImageEdge");minImageEdge_->setPrefix("Max edge ≥ ");minImageEdge_->setSuffix(" px");minImageEdge_->setSpecialValueText("Any max edge");
     minImageEdge_->setToolTip("Minimum longest edge, independent of portrait/landscape. Combined with the minimum MP filter; both must match.");
     megapixels_=real(0,1000,0,1,"minMegapixels");megapixels_->setSuffix(" MP+");megapixels_->setSpecialValueText("Any MP");
     for(auto* w:QList<QWidget*>{minImageEdge_,megapixels_})imageLimits->addWidget(w);
-    layout->addWidget(advanced);advanced->hide();
+    auto* filterScroll=new QScrollArea;filterScroll->setWidgetResizable(true);filterScroll->setFrameShape(QFrame::NoFrame);filterScroll->setWidget(advanced);filterScroll->setFixedHeight(90);layout->addWidget(filterScroll);filterScroll->hide();
     auto* dates=new QHBoxLayout;advancedLayout->addLayout(dates);dateEnabled_=check("Capture date","dateFilter");dateFrom_=new QDateEdit(QDate::currentDate().addDays(-1));dateTo_=new QDateEdit(QDate::currentDate());dateFrom_->setObjectName("dateFrom");dateTo_->setObjectName("dateTo");
     for(auto* date:{dateFrom_,dateTo_}){date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setEnabled(false);}
     dates->addWidget(dateEnabled_);dates->addWidget(dateFrom_);dates->addWidget(new QLabel("to"));dates->addWidget(dateTo_);
@@ -101,7 +102,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
     views_->addWidget(list_);views_->addWidget(table_);layout->addWidget(views_,1);
     counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");layout->addWidget(counts_);
-    auto* sidebar=new QTabWidget;sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
+    auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
     auto* scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
     sidebar->addTab(scroll,"Conversion");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
@@ -125,22 +126,28 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         connect(view,&QWidget::customContextMenuRequested,this,[this,view,openImage](const QPoint& point){
             auto index=view->indexAt(point);if(!index.isValid())return;index=index.siblingAtColumn(0);
             if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
-            QMenu menu;auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
+            QMenu menu;auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
+            const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.captured.date();start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
+            auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
-            if(action==open)openImage(index);else if(action==folder)QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(index.data(Catalog::PathRole).toString()).absolutePath()));else if(action==remove)catalog_->removePaths(selectedPaths());
+            if(action==start||action==end){
+                if(action==start){dateFrom_->setDate(captured);if(dateTo_->date()<captured)dateTo_->setDate(captured);}
+                else{dateTo_->setDate(captured);if(dateFrom_->date()>captured)dateFrom_->setDate(captured);}
+                today_->setChecked(false);metadataFilters_->setChecked(true);dateEnabled_->setChecked(true);updateFilter();
+            }else if(action==open)openImage(index);else if(action==folder)QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(index.data(Catalog::PathRole).toString()).absolutePath()));else if(action==remove)catalog_->removePaths(selectedPaths());
         });
     }
     connect(list_,&FileListView::pathsDropped,this,&MainWindow::addPaths);connect(table_,&FileTableView::pathsDropped,this,&MainWindow::addPaths);
     connect(search_,&QLineEdit::textChanged,this,&MainWindow::updateFilter);
     connect(format_,&QLineEdit::textChanged,this,&MainWindow::updateFilter);
-    connect(range_,&QComboBox::currentIndexChanged,this,&MainWindow::updateFilter);
+
     connect(minImageEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateFilter);
     connect(megapixels_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateFilter);
     connect(dateEnabled_,&QCheckBox::toggled,this,[this](bool on){dateFrom_->setEnabled(on);dateTo_->setEnabled(on);updateFilter();});
     for(auto* d:{dateFrom_,dateTo_})connect(d,&QDateEdit::dateChanged,this,&MainWindow::updateFilter);
     connect(today_,&QCheckBox::toggled,this,&MainWindow::updateFilter);
-    connect(metadataFilters_,&QCheckBox::toggled,this,[this,advanced](bool on){advanced->setVisible(on);search_->setPlaceholderText(on?"Search filenames, camera, lens, EXIF tags or values…":"Instant filter · e.g. sunset");updateFilter();});
-    connect(reset,&QPushButton::clicked,this,[this]{search_->clear();format_->clear();range_->setCurrentIndex(0);minImageEdge_->setValue(0);megapixels_->setValue(0);dateEnabled_->setChecked(false);today_->setChecked(false);dateFrom_->setDate(QDate::currentDate().addDays(-1));dateTo_->setDate(QDate::currentDate());});
+    connect(metadataFilters_,&QCheckBox::toggled,this,[this,filterScroll](bool on){filterScroll->setVisible(on);search_->setPlaceholderText(on?"Search filenames, camera, lens, EXIF tags or values…":"Instant filter · e.g. sunset");updateFilter();});
+    connect(reset,&QPushButton::clicked,this,[this]{search_->clear();format_->clear();minImageEdge_->setValue(0);megapixels_->setValue(0);dateEnabled_->setChecked(false);today_->setChecked(false);dateFrom_->setDate(QDate::currentDate().addDays(-1));dateTo_->setDate(QDate::currentDate());});
     // Refresh Today across local midnight, including when the application stays open.
     auto* dateRefresh=new QTimer(this);dateRefresh->setInterval(30000);connect(dateRefresh,&QTimer::timeout,this,[this]{if(today_->isChecked())updateFilter();});dateRefresh->start();
     connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
@@ -157,19 +164,62 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){queueState_->setText(QString("%1 done · %2 failed · %3 cancelled").arg(success).arg(failed).arg(cancelled));updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
     auto* deleteShortcut=new QShortcut(QKeySequence::Delete,this);connect(deleteShortcut,&QShortcut::activated,this,[this]{if(!queue_->busy()&&(list_->hasFocus()||table_->hasFocus()))catalog_->removePaths(selectedPaths());});
     auto* allShortcut=new QShortcut(QKeySequence::SelectAll,this);connect(allShortcut,&QShortcut::activated,this,[this]{if(list_->hasFocus())list_->selectAll();else if(table_->hasFocus())table_->selectAll();});
+    for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
+        auto* copy=new QShortcut(QKeySequence::Copy,view);copy->setContext(Qt::WidgetWithChildrenShortcut);
+        connect(copy,&QShortcut::activated,this,[this]{QList<QUrl> urls;for(const auto& path:selectedPaths())urls.append(QUrl::fromLocalFile(path));if(urls.isEmpty())return;auto* mime=new QMimeData;mime->setUrls(urls);mime->setData("application/x-kde-cutselection","0");qApp->clipboard()->setMimeData(mime);});
+    }
     for(auto* control:findChildren<QComboBox*>())control->installEventFilter(this);
     for(auto* control:findChildren<QAbstractSpinBox*>())control->installEventFilter(this);
     QSettings settings;restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->setCurrentIndex(settings.value("browser/view",0).toInt());size_->setValue(settings.value("browser/minCellDp",100).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
+    restoreSettings();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output & queue":"▸ Output & queue");
     updateMode();updateFilter();updatePresentation();updateCounts();
 }
 MainWindow::~MainWindow() {
+    saveSettings();
     QSettings settings;settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->currentIndex());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("conversion/output",output_->text());
+}
+namespace {
+const char* settingProperty(QWidget* widget) {
+    if(qobject_cast<QComboBox*>(widget))return "currentIndex";
+    if(qobject_cast<QDateEdit*>(widget))return "date";
+    if(qobject_cast<QCheckBox*>(widget)||qobject_cast<QPushButton*>(widget))return "checked";
+    if(qobject_cast<QLineEdit*>(widget))return "text";
+    if(qobject_cast<QTabWidget*>(widget))return "currentIndex";
+    return "value";
+}
+}
+QList<QWidget*> MainWindow::persistentControls() const {
+    return {mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
+        exposure_,maxEdge_,bt2020_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
+        overwrite_,workers_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,format_,minImageEdge_,megapixels_,sort_,
+        findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
+}
+void MainWindow::restoreSettings() {
+    QSettings settings;
+    for(auto* widget:persistentControls()) {
+        if(!widget)continue;
+        const auto key="controls/"+widget->objectName();
+        if(settings.contains(key)){const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),settings.value(key));}
+    }
+    if(settings.contains("conversion/targets")) {
+        const auto saved=settings.value("conversion/targets").toStringList();const QSignalBlocker blocker(targets_);
+        for(int i=0;i<targets_->count();++i){auto* item=targets_->item(i);item->setCheckState(saved.contains(item->data(Qt::UserRole).toString())?Qt::Checked:Qt::Unchecked);}
+    }
+    sortOrder_=settings.value("browser/descending",false).toBool()?Qt::DescendingOrder:Qt::AscendingOrder;
+    findChild<QSlider*>("rawTargetNitsSlider")->setValue(nits_->value());
+    findChild<QSlider*>("rawShoulderSlider")->setValue(qRound(shoulder_->value()*100));
+}
+void MainWindow::saveSettings() const {
+    QSettings settings;
+    for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget->property(settingProperty(widget)));
+    QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
+    settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
 }
 QWidget* MainWindow::buildControls() {
     auto* panel=new QWidget;auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(14,16,14,16);layout->setSpacing(14);
-    auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");general->addRow("Mode",mode_);layout->addLayout(general);
+    auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");mode_->setCurrentIndex(1);general->addRow("Mode",mode_);layout->addLayout(general);
     auto* outputFormats=new QGroupBox("Output formats · select one or more");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new QListWidget;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setMinimumHeight(155);targets_->setMaximumHeight(210);
     const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ"};
@@ -270,7 +320,7 @@ void MainWindow::addPaths(const QStringList& paths) {if(!paths.isEmpty())catalog
 void MainWindow::updateFilter() {
     Filter f;f.text=search_->text();f.literalText=!metadataFilters_->isChecked();f.today=today_->isChecked();
     if(metadataFilters_->isChecked()) {
-        f.format=format_->text().trimmed();if(range_->currentIndex())f.range=range_->currentText();
+        f.format=format_->text().trimmed();
         f.minMaxEdge=minImageEdge_->value();f.minMegapixels=megapixels_->value();
         if(dateEnabled_->isChecked()&&!f.today){f.from=dateFrom_->date();f.to=dateTo_->date();}
     }
