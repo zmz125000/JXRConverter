@@ -64,11 +64,12 @@ same reuse to library callers and snapshots a source for the session's lifetime.
 Changed processing controls invalidate the prepared pixels.
 
 Processing remains float32 until encoding. PQ JXL stores 16-bit integer codes.
-"Use scRGB for JXL linear HDR" (CLI `--scrgb-jxl`) overrides the gamut toggle for
-linear HDR JXL only. Unchanged scRGB sources take the direct path; other sources
-and edited pixels are converted to linear BT.709 at 80 nits per unit, retaining
-signed values and HDR headroom in float32. The toggle defaults to off and is
-saved with the other settings. Other output targets still follow the gamut toggle.
+The **JXL · scRGB HDR** output target (CLI `--target jxl-scrgb`) uses
+linear BT.709 primaries and the scRGB 80-nit unit. Unchanged scRGB sources take
+the direct path; other sources and edited pixels convert to scRGB in float32,
+retaining signed values and HDR headroom. It can be selected alongside regular
+linear HDR JXL; the outputs use distinct `_scrgb.jxl` and `_linear.jxl` names.
+The scRGB-to-BT.2020 toggle defaults to on and still controls other outputs.
 For scRGB JXR or scRGB JXL to linear HDR JXL, zero exposure, original size and
 "Convert scRGB gamut to BT.2020" disabled select a direct sample-preserving path. Half-float
 JXR stays half-float, float32 stays float32, and fixed-point expands exactly to

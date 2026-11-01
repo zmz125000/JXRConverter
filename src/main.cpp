@@ -9,7 +9,7 @@ void help() {
     std::cout << "jxrconvert " << jxrc::version() << R"( - LocalViewer image conversion library/CLI
 Usage: jxrconvert INPUT OUTPUT --target TARGET [OPTIONS]
 Inputs: JPEG, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and LibRaw formats
-Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-pq, avif, avif-pq, avif-gainmap
+Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, avif-gainmap
   --mode preserve|process       Default: preserve; no automatic processing fallback
   --preset lossless|high|medium|low|custom    Default: high
   --quality 1..100              Custom JPEG/AVIF quality (selects custom preset)
@@ -24,7 +24,6 @@ Processing controls:
   --exposure -3..3              Linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing
   --no-convert-gamut           Keep scRGB / BT.709 primaries (conversion defaults on)
-  --scrgb-jxl                  Use scRGB for linear HDR JXL (overrides gamut toggle)
   --no-extended-bt2020          Disable extended BT.2020 working conversion for JXL
 RAW controls (process mode):
   --raw-mode source|boost|custom  Source headroom, default boost, or custom controls
@@ -60,7 +59,7 @@ int run(int argc,char** argv) {
         if(arg.rfind("--raw-",0)==0&&arg!="--raw-mode")raw_custom=true;
         auto value=[&]()->std::string{if(++i>=argc)throw std::invalid_argument("Missing value for "+arg);return argv[i];};
         using T=jxrc::Target;using P=jxrc::Preset;
-        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-pq",T::jxl_pq},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap}});target=true;}
+        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-scrgb",T::jxl_scrgb},{"jxl-pq",T::jxl_pq},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap}});target=true;}
         else if(arg=="--mode")o.mode=choice<jxrc::Mode>(value(),{{"preserve",jxrc::Mode::preserve},{"process",jxrc::Mode::process}});
         else if(arg=="--preset"){o.quality.preset=choice<P>(value(),{{"lossless",P::lossless},{"high",P::high},{"medium",P::medium},{"low",P::low},{"custom",P::custom}});preset=true;}
         else if(arg=="--quality"){o.quality.codec_quality=integer(value());custom=true;}
@@ -71,7 +70,6 @@ int run(int argc,char** argv) {
         else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}
         else if(arg=="--keep-exif")o.keep_exif=true;
         else if(arg=="--overwrite")o.overwrite=true;
-        else if(arg=="--scrgb-jxl")o.scrgb_jxl=true;
         else if(arg=="--convert-gamut")o.convert_gamut=true;
         else if(arg=="--no-convert-gamut")o.convert_gamut=false;
         else if(arg=="--no-extended-bt2020")o.extended_bt2020=false;

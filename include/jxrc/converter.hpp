@@ -9,7 +9,7 @@
 namespace jxrc {
 enum class Mode { preserve, process };
 // AVIF linear is deliberately absent: LocalViewer exports SDR, PQ or ISO gain maps.
-enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq };
+enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb };
 enum class Preset { lossless, high, medium, low, custom };
 struct Quality {
     Preset preset = Preset::high;
@@ -44,7 +44,6 @@ struct Options {
     bool overwrite = false;
     bool extended_bt2020 = true;
     bool convert_gamut = true; // Process mode: convert scRGB to BT.2020 for wider viewer compatibility.
-    bool scrgb_jxl = false; // Linear HDR JXL uses BT.709 primaries and the scRGB 80-nit unit.
 };
 struct Result {
     unsigned width = 0, height = 0;

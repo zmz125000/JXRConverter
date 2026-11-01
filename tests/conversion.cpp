@@ -134,7 +134,7 @@ static void signed_float_jxl(const fs::path& dir) {
     }
     check(complete && std::memcmp(input.data(),output.data(),input.size()*sizeof(float))==0,"Signed float32 JXL samples changed");
     check(is_scrgb_jxl(encoded.data(),encoded.size()),"scRGB JXL detection");
-    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.quality.preset=jxrc::Preset::lossless;options.scrgb_jxl=true;
+    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_scrgb;options.quality.preset=jxrc::Preset::lossless;
     const auto copied=dir/"scrgb-copy.jxl";jxrc::convert(path,copied,options);
     auto copy=bytes(copied);check(is_scrgb_jxl(copy.data(),copy.size()),"Direct scRGB JXL metadata lost");
     std::vector<float> working;unsigned width=0,height=0;uhdr_color_gamut_t gamut;bool hdr=false;int transfer=0;
@@ -149,7 +149,7 @@ static void signed_float_jxl(const fs::path& dir) {
         check(info.bits==32 && info.hdr && info.transfer=="Linear" && info.primaries=="BT.709","Preset changed scRGB encoding");
     }
     options.quality.preset=jxrc::Preset::lossless;
-    options.scrgb_jxl=false;options.convert_gamut=false;
+    options.convert_gamut=false;
     check(jxrc::Options{}.convert_gamut,"scRGB gamut conversion must default on");
     for(auto target:{jxrc::Target::avif_pq,jxrc::Target::jxl_pq,jxrc::Target::jxl_linear}) {
         options.target=target;
@@ -162,8 +162,7 @@ static void signed_float_jxl(const fs::path& dir) {
         check(jxrc::inspect(converted).primaries=="BT.2020","Explicit BT.2020 conversion ignored");
         options.convert_gamut=false;
     }
-    options.target=jxrc::Target::jxl_linear;
-    options.scrgb_jxl=true;options.convert_gamut=true;
+    options.target=jxrc::Target::jxl_scrgb;options.convert_gamut=true;
     options.exposure=1;options.extended_bt2020=false;
     const auto processed=dir/"scrgb-exposed.jxl";jxrc::convert(path,processed,options);
     auto changed=bytes(processed);check(is_scrgb_jxl(changed.data(),changed.size()),"Edited scRGB output metadata");
@@ -177,8 +176,8 @@ static void signed_float_jxl(const fs::path& dir) {
         source.transfer=8;source.primaries=primaries;source.intensity_target=1000.f;
         const auto inputPath=dir/("to-scrgb-source-"+std::to_string(primaries)+".jxl");
         check(encode_jxl_source(1,1,pixels,true,source,inputPath.string().c_str(),StillEncodeQuality(0))==0,"scRGB conversion fixture");
-        options={};options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;
-        options.scrgb_jxl=true;options.extended_bt2020=false;options.quality.preset=jxrc::Preset::lossless;
+        options={};options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_scrgb;
+        options.extended_bt2020=false;options.quality.preset=jxrc::Preset::lossless;
         const auto outputPath=dir/("to-scrgb-"+std::to_string(primaries)+".jxl");
         jxrc::ConversionSession session(inputPath);session.convert(outputPath,options);
         auto data=bytes(outputPath);check(is_scrgb_jxl(data.data(),data.size()),"Converted output is not scRGB");
@@ -202,7 +201,7 @@ static void shared_render(const fs::path& dir) {
     jxrc::ConversionSession session(source);
     jxrc::Options o;o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl;o.quality.preset=jxrc::Preset::lossless;
     session.convert(dir/"session.jxl",o);
-    auto sc=o;sc.target=jxrc::Target::jxl_linear;sc.scrgb_jxl=true;
+    auto sc=o;sc.target=jxrc::Target::jxl_scrgb;
     session.convert(dir/"sdr-to-scrgb.jxl",sc);
     auto converted=bytes(dir/"sdr-to-scrgb.jxl");check(is_scrgb_jxl(converted.data(),converted.size()),"SDR to scRGB metadata");
     const auto raster=decode_regular(raster_png8.data(),raster_png8.size());
@@ -398,6 +397,9 @@ int main(int argc,char** argv) try {
     write(dir/"bad",{1,2,3,4});o={};fails([&]{jxrc::convert(dir/"bad",dir/"bad-output",o);});check(!fs::exists(dir/"bad-output"),"Bad input published");
     dng(dir/"sensor.dng");o={};o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl_linear;
     auto raw=jxrc::convert(dir/"sensor.dng",dir/"raw.jxl",o);check(raw.width>0&&raw.height>0,"RAW decode");
+    o.target=jxrc::Target::jxl_scrgb;jxrc::convert(dir/"sensor.dng",dir/"raw-scrgb.jxl",o);
+    const auto rawScrgb=bytes(dir/"raw-scrgb.jxl");check(is_scrgb_jxl(rawScrgb.data(),rawScrgb.size()),"RAW to scRGB target");
+    o.target=jxrc::Target::jxl_linear;
     o.raw.hdr_mode=jxrc::RawHdrMode::custom;o.raw.exposure=1;o.raw.white_balance=8;o.raw.kelvin=6500;o.raw.shadows=0.2f;o.raw.highlights=-0.1f;o.raw.highlight_stops=1;
     jxrc::convert(dir/"sensor.dng",dir/"raw-adjusted.jxl",o);check(bytes(dir/"raw.jxl")!=bytes(dir/"raw-adjusted.jxl"),"RAW controls ineffective");
     o.target=jxrc::Target::avif_gainmap;jxrc::convert(dir/"sensor.dng",dir/"raw-gain.avif",o);

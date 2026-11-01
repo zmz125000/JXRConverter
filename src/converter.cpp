@@ -35,7 +35,8 @@ void require(bool condition,const std::string& message) { if(!condition) throw s
 void range(double value,double low,double high,const char* name) {
     if(!std::isfinite(value)||value<low||value>high) throw std::invalid_argument(std::string(name)+" out of range");
 }
-bool hdr_target(Target t) {return t==Target::jpeg_gainmap||t==Target::jxl_linear||t==Target::avif_pq||t==Target::avif_gainmap||t==Target::jxl_pq;}
+bool linear_jxl(Target t) {return t==Target::jxl_linear||t==Target::jxl_scrgb;}
+bool hdr_target(Target t) {return t==Target::jpeg_gainmap||linear_jxl(t)||t==Target::avif_pq||t==Target::avif_gainmap||t==Target::jxl_pq;}
 std::vector<uint8_t> read(const std::filesystem::path& path) {
     std::ifstream f(path,std::ios::binary|std::ios::ate);
     require(bool(f),"Cannot open input: "+path.u8string());
@@ -116,7 +117,7 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
 }
 }
 void validate(const Options& o) {
-    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,7,"target");
+    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,8,"target");
     range(static_cast<int>(o.quality.preset),0,4,"preset");
     range(o.quality.jxl_distance,0,3,"JXL distance");range(o.quality.codec_quality,1,100,"codec quality");
     if(o.quality.avif_depth!=10&&o.quality.avif_depth!=12)throw std::invalid_argument("AVIF depth must be 10 or 12");
@@ -146,13 +147,13 @@ struct ConversionSession::Impl {
     Options previous;
 };
 namespace {
-bool scrgb_output(const Options& o) {return o.scrgb_jxl && o.target==Target::jxl_linear;}
+bool scrgb_output(const Options& o) {return o.target==Target::jxl_scrgb;}
 bool convert_gamut(const Options& o) {return o.convert_gamut && !scrgb_output(o);}
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
-    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.extended_bt2020,convert_gamut(o),raw_kind,
-        format==4 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
+    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,format==3&&o.extended_bt2020,(format==3||format==4)&&convert_gamut(o),raw_kind,
+        format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr);
 }
@@ -182,10 +183,10 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     const auto path=stage.file.u8string();
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
     Result result;
-    const bool direct_jxl=format==3 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
+    const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
-    if(o.mode==Mode::preserve && o.target==Target::jxl_linear)require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
-    if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||o.target==Target::jxl_linear,"JXR preservation requires linear JXL output");
+    if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
+    if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
     if(direct_jxl || (o.mode==Mode::preserve && format!=4)) {
         require(format==0||format==1||format==3||format==6,"Source preservation supports JPEG, AVIF, JXL and regular raster images; use --mode process for RAW/JXR");
         int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:2;
@@ -217,7 +218,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
             else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):o.extended_bt2020),o.keep_exif?&exif:nullptr);
             else if(format==4) {
-                if((o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve))
+                if((linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve))
                     cache.scrgb=decode_jxr_scrgb(bytes.data(),bytes.size(),linear,w,h,cache.half_jxr);
                 require(o.mode!=Mode::preserve || cache.scrgb,"JXR source is not preservable scRGB; use --mode process");
                 if(!cache.scrgb)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,convert_gamut(o));
@@ -303,7 +304,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
         result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         result.transfer=o.target==Target::avif_pq||o.target==Target::jxl_pq?16:0;
-        result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":(o.target==Target::jxl_linear||cache.scrgb)?"linear":"sdr";
+        result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":(linear_jxl(o.target)||cache.scrgb)?"linear":"sdr";
     }
     require(std::filesystem::file_size(stage.file)>0,"Encoder produced no output");stage.publish(output,o.overwrite);return result;
 }

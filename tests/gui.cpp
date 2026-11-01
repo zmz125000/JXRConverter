@@ -131,8 +131,9 @@ private slots:
         MainWindow window;
         auto* keep=window.findChild<QCheckBox*>("convertGamut");QVERIFY(keep);QVERIFY(keep->isChecked());
         auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);
-        auto* scrgb=window.findChild<QCheckBox*>("scrgbJxl");QVERIFY(scrgb);QVERIFY(!scrgb->isChecked());scrgb->setChecked(true);
         auto* targets=window.findChild<QListWidget*>("conversionTargets");QVERIFY(targets);
+        for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==8?Qt::Checked:Qt::Unchecked);
+        QCOMPARE(window.options().target,jxrc::Target::jxl_scrgb);
         for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==6?Qt::Checked:Qt::Unchecked);
         window.findChild<QComboBox*>("qualityPreset")->setCurrentIndex(4);
         window.findChild<QSpinBox*>("codecQuality")->setValue(93);window.findChild<QDoubleSpinBox*>("jxlDistance")->setValue(1.25);
@@ -140,7 +141,7 @@ private slots:
         window.findChild<QComboBox*>("rawMode")->setCurrentIndex(2);window.findChild<QDoubleSpinBox*>("rawExposure")->setValue(0.7);
         window.findChild<QComboBox*>("rawWhiteBalance")->setCurrentIndex(8);window.findChild<QSpinBox*>("rawKelvin")->setValue(6400);
         window.findChild<QDoubleSpinBox*>("rawShoulder")->setValue(0.8);window.findChild<QSpinBox*>("rawTargetNits")->setValue(2000);
-        const auto o=window.options();QVERIFY(o.scrgb_jxl);QCOMPARE(o.mode,jxrc::Mode::process);QCOMPARE(o.target,jxrc::Target::avif_gainmap);QCOMPARE(o.quality.codec_quality,93);
+        const auto o=window.options();QCOMPARE(o.mode,jxrc::Mode::process);QCOMPARE(o.target,jxrc::Target::avif_gainmap);QCOMPARE(o.quality.codec_quality,93);
         QCOMPARE(o.quality.avif_depth,12);QCOMPARE(o.quality.jxl_distance,1.25f);QVERIFY(o.quality.downsize_gainmap);
         QCOMPARE(o.raw.hdr_mode,jxrc::RawHdrMode::custom);QCOMPARE(o.raw.exposure,0.7f);QCOMPARE(o.raw.white_balance,8);QCOMPARE(o.raw.kelvin,6400);
         mode->setCurrentIndex(0);const auto preserved=window.options();QCOMPARE(preserved.mode,jxrc::Mode::preserve);QCOMPARE(preserved.raw.exposure,0.f);QCOMPARE(preserved.raw.hdr_mode,jxrc::RawHdrMode::source);
@@ -204,13 +205,16 @@ private slots:
     void outputCollisionAndActualQueue() {
         const QString a=makeImage(root("jobs/a"),"same.jpg",64,48,200),b=makeImage(root("jobs/b"),"same.jpg",64,48,400);
         const QString destination=root("jobs/output");QDir().mkpath(destination);jxrc::Options o;o.target=jxrc::Target::avif;
+        auto scrgbOptions=o;scrgbOptions.target=jxrc::Target::jxl_scrgb;scrgbOptions.mode=jxrc::Mode::process;
+        const auto scrgbJobs=makeJobs({a},destination,scrgbOptions);
+        QVERIFY(scrgbJobs[0].output.endsWith("_scrgb.jxl"));
         const auto jobs=makeJobs({a,b},destination,o);QCOMPARE(jobs.size(),2);QVERIFY(jobs[0].output!=jobs[1].output);
         ConversionQueue queue;QSignalSpy done(&queue,&ConversionQueue::batchFinished);queue.start(jobs,2,2);QTRY_COMPARE(done.count(),1);
         QCOMPARE(done[0][0].toInt(),2);QCOMPARE(done[0][1].toInt(),0);for(const auto& job:jobs)QVERIFY(QFileInfo(job.output).size()>0);
         QVector<Job> multiple;o.mode=jxrc::Mode::process;QDir().mkpath(root("jobs/multiple"));
-        for(auto target:{jxrc::Target::avif,jxrc::Target::jxl,jxrc::Target::jxl_pq}){o.target=target;multiple+=makeJobs({a,b},root("jobs/multiple"),o);}
+        for(auto target:{jxrc::Target::avif,jxrc::Target::jxl,jxrc::Target::jxl_pq,jxrc::Target::jxl_linear,jxrc::Target::jxl_scrgb}){o.target=target;multiple+=makeJobs({a,b},root("jobs/multiple"),o);}
         queue.start(multiple,2,2);QTRY_COMPARE(done.count(),2);
-        QCOMPARE(done[1][0].toInt(),6);QCOMPARE(done[1][1].toInt(),0);
+        QCOMPARE(done[1][0].toInt(),10);QCOMPARE(done[1][1].toInt(),0);
         for(const auto& job:multiple)QVERIFY(QFileInfo(job.output).size()>0);
     }
 };

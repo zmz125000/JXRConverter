@@ -103,7 +103,7 @@ build/jxrconvert camera.dng output.avif --mode process --target avif-gainmap \
   --raw-highlight-stops 1 --raw-shoulder 0.6 --raw-target-nits 1500
 ```
 
-Targets: `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-pq`, `avif`,
+Targets: `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `avif`,
 `avif-pq`, `avif-gainmap`. Generic targets in preservation mode retain the source
 transfer, so `--target avif` can produce a PQ AVIF from a PQ source.
 Processing SDR targets clip to SDR; there is currently no selectable general
