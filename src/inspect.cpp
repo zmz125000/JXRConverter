@@ -1,5 +1,6 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
+#include "regular_decode.h"
 #include "ultrahdr/jpegdecoderhelper.h"
 #include <avif/avif.h>
 #include <jxl/decode_cxx.h>
@@ -49,6 +50,11 @@ ImageInfo inspect(const std::filesystem::path& input) {
         }
     } else if(bytes.size()>=4&&bytes[0]=='I'&&bytes[1]=='I'&&bytes[2]==0xbc&&bytes[3]==1) {
         out=inspect_jxr(bytes.data(),bytes.size());
+    } else if(is_regular_image(bytes.data(),bytes.size())) {
+        const auto raster=decode_regular(bytes.data(),bytes.size());
+        out.width=raster.width;out.height=raster.height;out.bits=raster.bits;out.format=raster.format;
+        out.transfer=raster.icc.empty()?"sRGB":"ICC";out.primaries=raster.icc.empty()?"BT.709":"ICC";
+        if(raster.orientation>=5)std::swap(out.width,out.height);
     } else {
         auto storage=std::make_unique<LibRaw>();
         auto& raw=*storage;

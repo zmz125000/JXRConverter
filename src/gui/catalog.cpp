@@ -4,8 +4,6 @@
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QIcon>
-#include <QImageReader>
-#include <QColorSpace>
 #include <QPixmap>
 #include <QRegularExpression>
 #include <algorithm>
@@ -44,7 +42,7 @@ QString dimensions(const Record& r) {
 }
 }
 bool supportedFile(const QString& path) {
-    static const QSet<QString> extensions = {"jpg","jpeg","jpe","avif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
+    static const QSet<QString> extensions = {"png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     return extensions.contains(QFileInfo(path).suffix().toLower());
 }
 Record readMetadata(const QString& path) {
@@ -75,22 +73,11 @@ Record readMetadata(const QString& path) {
         r.transfer = QString::fromStdString(info.transfer); r.primaries = QString::fromStdString(info.primaries);
     } catch (const std::exception& e) {
         if (r.metadataWarning.isEmpty()) r.metadataWarning = QString::fromUtf8(e.what());
-        r.raw = !QSet<QString>{"JPG","JPEG","JPE","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
-        QImageReader reader(path); const auto size = reader.size();
-        if (!r.width && size.isValid()) { r.width = size.width(); r.height = size.height(); }
+        r.raw = !QSet<QString>{"PNG","WEBP","TIF","TIFF","BMP","GIF","JPG","JPEG","JPE","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
     }
     r.inspected = true; return r;
 }
 QImage readThumbnail(const QString& path, int edge) {
-    // Qt's JPEG reader decodes at reduced resolution and displays the SDR base of UHDR.
-    QImageReader reader(path); reader.setAutoTransform(true);
-    const auto size = reader.size();
-    if (size.isValid()) reader.setScaledSize(size.scaled(edge,edge,Qt::KeepAspectRatio));
-    QImage image = reader.read();
-    if (!image.isNull()) {
-        if(image.colorSpace().isValid())image.convertToColorSpace(QColorSpace::SRgb);
-        return image.scaled(edge,edge,Qt::KeepAspectRatio,Qt::SmoothTransformation);
-    }
     auto p = preview(nativePath(path), edge);
     return QImage(p.rgba.data(),int(p.width),int(p.height),int(p.width)*4,QImage::Format_RGBA8888).copy();
 }

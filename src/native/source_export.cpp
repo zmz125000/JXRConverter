@@ -1,6 +1,7 @@
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "hdr_encode.h"
 #include "hdr_parallel.h"
+#include "regular_decode.h"
 
 #include "ultrahdr/jpegdecoderhelper.h"
 #include "ultrahdr/jpegencoderhelper.h"
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 namespace {
@@ -636,3 +638,25 @@ void normalize_exif(std::vector<uint8_t>& exif) {
     if(!exif.empty())exif=with_orientation(exif.data(),exif.size(),1);
 }
 std::vector<uint8_t> source_jpeg_icc(const uint8_t* data,size_t size) { return jpeg_icc(data,size); }
+
+int convert_regular_source(const RegularImage& raster, int target, const char* path,
+                           StillEncodeQuality quality, bool keep_exif, int* info) {
+    // TIFF photographic EXIF needs a separate IFD serializer; never copy raster offsets.
+    if(keep_exif && raster.format=="TIFF")throw std::runtime_error("TIFF EXIF retention is not implemented yet");
+    std::vector<uint8_t> exif=keep_exif?raster.exif:std::vector<uint8_t>{};
+    if(exif.empty())exif=orientation_exif(raster.orientation);
+    quality.exif=exif.data();quality.exif_size=exif.size();
+    info[0]=raster.width;info[1]=raster.height;info[2]=0;info[3]=13;
+    if(target==1) {
+        StillSourceColor color;color.bits=raster.bits;color.orientation=raster.orientation;
+        color.icc=raster.icc.data();color.icc_size=raster.icc.size();
+        const int rc=encode_jxl_source(raster.width,raster.height,raster.pixels.data(),raster.bits>8,color,path,quality);
+        return rc==0?1:rc;
+    }
+    // AVIF cannot retain all 16-bit codes: use the explicitly selected 10/12-bit depth.
+    auto image=from_rgb(raster.width,raster.height,raster.pixels.data(),raster.bits>8,
+        avif_source_depth(raster.bits,quality),raster.icc.empty()?1:2,raster.icc.empty()?13:2,quality,false,raster.icc.size()>=20 && !std::memcmp(raster.icc.data()+16,"GRAY",4));
+    if(!image)return -94;
+    if(!raster.icc.empty() && avifImageSetProfileICC(image.get(),raster.icc.data(),raster.icc.size())!=AVIF_RESULT_OK)return -80;
+    return write_source(image.get(),target,path,quality,info);
+}

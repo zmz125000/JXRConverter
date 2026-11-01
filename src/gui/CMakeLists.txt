@@ -5,9 +5,10 @@ if(JXRC_USE_SYSTEM_EXIV2)
 else()
     # The GUI reads EXIF from local still images. Avoid unrelated command-line,
     # network, video and XMP dependencies; retain BMFF/JXL metadata support.
-    foreach(flag PNG NLS WEBREADY CURL VIDEO XMP EXTERNAL_XMP INIH)
+    foreach(flag NLS WEBREADY CURL VIDEO XMP EXTERNAL_XMP INIH)
         set(EXIV2_ENABLE_${flag} OFF CACHE BOOL "" FORCE)
     endforeach()
+    set(EXIV2_ENABLE_PNG ON CACHE BOOL "" FORCE)
     set(EXIV2_ENABLE_BMFF ON CACHE BOOL "" FORCE)
     set(EXIV2_ENABLE_BROTLI ON CACHE BOOL "" FORCE)
     foreach(flag SAMPLES EXIV2_COMMAND UNIT_TESTS FUZZ_TESTS DOC)

@@ -1,7 +1,7 @@
 # Dependency releases
 
-Release audit: 2026-10-31. Source dependencies use explicit stable release tags,
-not moving branches. JPEG is fetched separately so an older Ultra HDR vendored
+Release audit: 2026-11-01. Source dependencies use explicit stable release tags,
+not moving branches. stb_image has no release tags and uses an explicit commit. JPEG is fetched separately so an older Ultra HDR vendored
 copy cannot override the selected release.
 
 | Dependency | Release | Upstream |
@@ -13,14 +13,24 @@ copy cannot override the selected release.
 | libavif | 1.4.2 | [Release](https://github.com/AOMediaCodec/libavif/releases/tag/v1.4.2) |
 | LibRaw | 0.22.3 | [Release](https://github.com/LibRaw/LibRaw/releases/tag/0.22.3) |
 | JPEG XR | 0.3.1 | [Tag](https://github.com/bvibber/jpegxr/tree/0.3.1) |
+| libpng | 1.6.59 | [Tag](https://github.com/pnggroup/libpng/tree/v1.6.59) |
+| zlib | 1.3.2 | [Tag](https://github.com/madler/zlib/tree/v1.3.2) |
+| libwebp | 1.6.0 | [Tag](https://github.com/webmproject/libwebp/tree/v1.6.0) |
+| libtiff | 4.7.2 | [Tag](https://gitlab.com/libtiff/libtiff/-/tags/v4.7.2) |
+| stb_image | 2.30 | [Pinned revision](https://github.com/nothings/stb/tree/003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5) |
 | Exiv2 | 0.28.9 | [Release](https://github.com/Exiv2/exiv2/releases/tag/v0.28.9) |
 | Qt (current-release GUI CI) | 6.12.0 | [Official release](https://download.qt.io/official_releases/qt/6.12/6.12.0/) |
 
 JPEG XR has no newer release tag. The existing Ultra HDR, libjxl and libavif
 pins were already current. libjxl's Brotli, Highway and skcms submodules retain
 the revisions selected by its release. Exiv2 reuses that Brotli decoder instead
-of building another copy. Exiv2's unused video/network/XMP/PNG/INI integrations
-are disabled; EXIF, BMFF and compressed JXL metadata remain enabled.
+of building another copy. Exiv2's unused video/network/XMP/INI integrations
+are disabled; EXIF, PNG, BMFF and compressed JXL metadata remain enabled.
+
+Raster codecs link statically into the native library and CLI. TIFF enables
+its built-in codecs and zlib/Deflate; optional JPEG, JBIG, LZMA, Zstd, WebP and
+LERC TIFF compression integrations are disabled. Dependency licenses are
+included in the runtime package, while development libraries are excluded.
 
 The normal desktop build fetches Exiv2. `JXRC_USE_SYSTEM_EXIV2=ON` retains support
 for distribution packages, including Ubuntu 24.04's Exiv2 0.27.6. Qt's supported

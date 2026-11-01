@@ -69,7 +69,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     setWindowTitle("JXRConverter " + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
     proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);selection_=new QItemSelectionModel(proxy_,this);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
-    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.jpg *.jpeg *.avif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
+    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open image folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
     auto* recent=new QToolButton;recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
@@ -252,7 +252,7 @@ QWidget* MainWindow::buildControls() {
     outputFormatsLayout->addWidget(targets_);
     auto* targetActions=new QHBoxLayout;
     acceptSdr_=check("Accept SDR formats","acceptSdr",QSettings().value("conversion/acceptSdr",false).toBool());
-    acceptSdr_->setToolTip("For HDR targets, include SDR-source filenames using the SDR output equivalent. Like LocalViewer, JXL, JXR and RAW filenames are in the HDR group; JPEG and AVIF are in the SDR group regardless of their contents.");
+    acceptSdr_->setToolTip("For HDR targets, include SDR-source filenames using the SDR output equivalent. Like LocalViewer, JXL, JXR and RAW filenames are in the HDR group; JPEG, AVIF, PNG, WebP, TIFF, BMP and GIF are in the SDR group regardless of their contents.");
     connect(acceptSdr_,&QCheckBox::toggled,this,[](bool on){QSettings().setValue("conversion/acceptSdr",on);});
     targetActions->addWidget(acceptSdr_);targetActions->addStretch();
     auto* clearTargets=new QPushButton("Clear targets");clearTargets->setObjectName("clearTargets");targetActions->addWidget(clearTargets);
@@ -411,7 +411,7 @@ void MainWindow::convertFiles(bool selected) {
         QMap<int,QStringList> inputsByTarget;
         for(const auto& path:paths) {
             const auto extension=QFileInfo(path).suffix().toLower();
-            const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif";
+            const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif"&&extension!="png"&&extension!="webp"&&extension!="tif"&&extension!="tiff"&&extension!="bmp"&&extension!="gif";
             for(auto target:targets) {
                 const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap;
                 if(hdrTarget&&!hdrGroup) {

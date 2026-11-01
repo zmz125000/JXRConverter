@@ -1,6 +1,7 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
 #include "hdr_parallel.h"
+#include "regular_decode.h"
 namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 #include <jxl/decode.h>
 #include <jxl/decode_cxx.h>
@@ -12,6 +13,8 @@ namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 #include <iostream>
 #include <stdexcept>
 #include <vector>
+
+#include "regular_fixtures.hpp"
 
 namespace fs=std::filesystem;
 static void check(bool ok,const char* text) {if(!ok)throw std::runtime_error(text);}
@@ -66,10 +69,46 @@ static void dng(const fs::path& path) {
     for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){auto v=u16(128+(x+y)*100);out.insert(out.end(),v.begin(),v.end());}
     write(path,out);
 }
+// Preserve raster samples through the public API, including low 16-bit bits and
+// RGB hidden behind zero alpha. A half-float or 8-bit intermediate fails this.
+static void regular_images(const fs::path& dir) {
+    struct Raster { const char* name;const std::vector<uint8_t>& data;const std::vector<uint16_t>& expected;unsigned bits; };
+    for(const auto& fixture:std::vector<Raster>{{"png16",raster_png16,expected_png16,16},
+        {"png8",raster_png8,expected_png8,8},{"webp",raster_webp,expected_webp,8},
+        {"tiff",raster_tiff,expected_tiff,8},{"bmp",raster_bmp,expected_bmp,8},
+        {"gif",raster_gif,expected_gif,8},{"palette",raster_palette,expected_palette,8}}) {
+        const auto input=dir/fixture.name,output=dir/(std::string(fixture.name)+".jxl");write(input,fixture.data);
+        const auto source=decode_regular(fixture.data.data(),fixture.data.size());
+        check(source.width==3 && source.height==2 && source.bits==fixture.bits,"Raster decoder dimensions/depth");
+        const auto info=jxrc::inspect(input);check(!info.raw && info.bits==fixture.bits,"Raster inspection");
+        jxrc::Options options;options.target=jxrc::Target::jxl;options.quality.preset=jxrc::Preset::lossless;
+        jxrc::convert(input,output,options);
+        const auto encoded=bytes(output);auto dec=JxlDecoderMake(nullptr);
+        check(JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_FULL_IMAGE)==JXL_DEC_SUCCESS,"Raster JXL events");
+        JxlDecoderSetInput(dec.get(),encoded.data(),encoded.size());JxlDecoderCloseInput(dec.get());
+        std::vector<uint8_t> pixels(24*(fixture.bits/8));
+        const JxlPixelFormat format{4,fixture.bits==16?JXL_TYPE_UINT16:JXL_TYPE_UINT8,JXL_NATIVE_ENDIAN,0};bool complete=false;
+        for(;;) {
+            const auto status=JxlDecoderProcessInput(dec.get());
+            if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER)check(JxlDecoderSetImageOutBuffer(dec.get(),&format,pixels.data(),pixels.size())==JXL_DEC_SUCCESS,"Raster JXL buffer");
+            else if(status==JXL_DEC_FULL_IMAGE){complete=true;break;}
+            else if(status==JXL_DEC_SUCCESS)break;
+            else check(status!=JXL_DEC_ERROR && status!=JXL_DEC_NEED_MORE_INPUT,"Raster JXL decode");
+        }
+        check(complete,"Missing raster JXL image");
+        for(size_t i=0;i<24;++i){uint16_t value=pixels[i];if(fixture.bits==16)std::memcpy(&value,pixels.data()+2*i,2);check(value==fixture.expected[i],"Preserve changed a raster sample");}
+        options.mode=jxrc::Mode::process;options.max_edge=2;options.exposure=1;
+        const auto processed=jxrc::convert(input,dir/(std::string(fixture.name)+"-processed.jxl"),options);
+        check(processed.width==2 && processed.height==1,"Raster processing resize");
+        const auto thumb=jxrc::preview(input,2);check(thumb.width==2 && thumb.height==1,"Raster native thumbnail");
+    }
+}
+
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    regular_images(dir);
     jxrc::validate({});
     { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }
 

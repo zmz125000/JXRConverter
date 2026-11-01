@@ -52,6 +52,12 @@ On Windows, provide Qt 6 Widgets with a matching compiler and architecture.
 Exiv2 is built automatically unless the system-library option is selected. Platform packaging
 and macOS/Windows GUI execution still need validation.
 
+Native inputs include JPEG, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and
+LibRaw camera formats. Regular raster decoding is independent of OS/Qt decoders.
+PNG/TIFF retain 16-bit integer samples for preservation; lossless JXL can preserve
+those codes exactly. AVIF is limited to 12 bits and JPEG remains lossy. See
+[supported raster layouts](docs/port-status.md) for restrictions.
+
 GUI input formats follow the converter's current codec support; the GUI does not
 add the Android-only formats listed in [port status](docs/port-status.md).
 

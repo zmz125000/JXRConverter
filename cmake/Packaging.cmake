@@ -7,7 +7,7 @@ install(FILES README.md COPYING NOTICE
 install(FILES docs/dependencies.md docs/build-warnings.md
     DESTINATION ${CMAKE_INSTALL_DATADIR}/JXRConverter/docs COMPONENT Runtime)
 # Retain dependency licenses and patents, including upstream submodules.
-foreach(source libultrahdr jpeg libjxl libaom libavif libraw jpegxr_src exiv2)
+foreach(source libultrahdr jpeg libjxl libaom libavif libraw jpegxr_src exiv2 zlib libpng libwebp libtiff stb)
     if(DEFINED ${source}_SOURCE_DIR)
         file(GLOB_RECURSE licenses LIST_DIRECTORIES FALSE
             "${${source}_SOURCE_DIR}/*LICENSE*" "${${source}_SOURCE_DIR}/*COPYING*"

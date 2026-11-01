@@ -22,15 +22,15 @@ add_library(skcms STATIC "${libjxl_SOURCE_DIR}/third_party/skcms/skcms.cc" "${li
 target_compile_definitions(skcms PRIVATE SKCMS_DISABLE_HSW SKCMS_DISABLE_SKX)
 add_library(jxrc STATIC src/converter.cpp src/inspect.cpp src/native/hdr_convert.cpp src/native/jxl_hdr.cpp
     src/native/avif_hdr.cpp src/native/still_jxl.cpp src/native/still_avif.cpp
-    src/native/source_export.cpp src/native/raw_still.cpp)
+    src/native/source_export.cpp src/native/raw_still.cpp src/native/regular_decode.cpp)
 add_library(jxrc::jxrc ALIAS jxrc)
 target_include_directories(jxrc PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/generated" PRIVATE src/native
     "${libultrahdr_SOURCE_DIR}" "${libultrahdr_SOURCE_DIR}/lib/include"
-    "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}" "${libjxl_SOURCE_DIR}/third_party/skcms")
+    "${jpeg_SOURCE_DIR}/src" "${jpeg_BINARY_DIR}" "${libjxl_SOURCE_DIR}/third_party/skcms" "${stb_SOURCE_DIR}" "${libwebp_SOURCE_DIR}/src")
 add_dependencies(jxrc jxrc_jpeg_build)
 add_dependencies(jxrc_raw jxrc_jpeg_build)
 target_compile_definitions(jxrc PRIVATE EHVIEWER_HDR_CODECS)
-target_link_libraries(jxrc PRIVATE jxrc_uhdr jpeg-static jxl jxl_threads jxl_cms skcms avif jxrc_raw jxrc_jxr Threads::Threads)
+target_link_libraries(jxrc PRIVATE jxrc_uhdr jpeg-static jxl jxl_threads jxl_cms skcms avif jxrc_raw jxrc_jxr png_static webpdemux tiff Threads::Threads)
 add_executable(jxrconvert src/main.cpp)
 target_link_libraries(jxrconvert PRIVATE jxrc)
 if(WIN32)
