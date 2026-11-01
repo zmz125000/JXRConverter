@@ -134,7 +134,7 @@ static void signed_float_jxl(const fs::path& dir) {
     }
     check(complete && std::memcmp(input.data(),output.data(),input.size()*sizeof(float))==0,"Signed float32 JXL samples changed");
     check(is_scrgb_jxl(encoded.data(),encoded.size()),"scRGB JXL detection");
-    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.quality.preset=jxrc::Preset::lossless;
+    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.quality.preset=jxrc::Preset::lossless;options.convert_gamut=false;
     const auto copied=dir/"scrgb-copy.jxl";jxrc::convert(path,copied,options);
     auto copy=bytes(copied);check(is_scrgb_jxl(copy.data(),copy.size()),"Direct scRGB JXL metadata lost");
     std::vector<float> working;unsigned width=0,height=0;uhdr_color_gamut_t gamut;bool hdr=false;int transfer=0;
@@ -149,6 +149,19 @@ static void signed_float_jxl(const fs::path& dir) {
         check(info.bits==32 && info.hdr && info.transfer=="Linear" && info.primaries=="BT.709","Preset changed scRGB encoding");
     }
     options.quality.preset=jxrc::Preset::lossless;
+    check(jxrc::Options{}.convert_gamut,"scRGB gamut conversion must default on");
+    for(auto target:{jxrc::Target::avif_pq,jxrc::Target::jxl_pq,jxrc::Target::jxl_linear}) {
+        options.target=target;
+        const auto keep=dir/("keep-primaries-"+std::to_string(int(target)));
+        jxrc::convert(path,keep,options);
+        check(jxrc::inspect(keep).primaries=="BT.709","scRGB output changed source primaries");
+        options.convert_gamut=true;
+        const auto converted=dir/("convert-primaries-"+std::to_string(int(target)));
+        jxrc::convert(path,converted,options);
+        check(jxrc::inspect(converted).primaries=="BT.2020","Explicit BT.2020 conversion ignored");
+        options.convert_gamut=false;
+    }
+    options.target=jxrc::Target::jxl_linear;
     options.exposure=1;options.extended_bt2020=false;
     const auto processed=dir/"scrgb-exposed.jxl";jxrc::convert(path,processed,options);
     auto changed=bytes(processed);

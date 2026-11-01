@@ -128,7 +128,7 @@ void validate(const Options& o) {
     if(o.jpeg_transcoding&&(o.mode!=Mode::preserve||o.target!=Target::jxl))throw std::invalid_argument("JPEG transcoding requires preserve mode and JXL target");
     if(o.mode==Mode::preserve) {
         const RawControls d;
-        if(o.convert_gamut||o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
+        if(o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
             throw std::invalid_argument("Pixel and RAW controls require --mode process");
         if(o.target==Target::jxl_pq||o.target==Target::avif_pq)
             throw std::invalid_argument("An explicit transfer conversion requires --mode process; preserve uses the source transfer");
@@ -150,7 +150,7 @@ auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
     return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.extended_bt2020,o.convert_gamut,raw_kind,
-        format==4 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && !o.convert_gamut,
+        format==4 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!o.convert_gamut || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr);
 }
@@ -179,7 +179,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
     Result result;
     const bool direct_jxl=format==3 && (o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
-        !o.exposure && !o.max_edge && !o.convert_gamut && is_scrgb_jxl(bytes.data(),bytes.size());
+        !o.exposure && !o.max_edge && (!o.convert_gamut || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && o.target==Target::jxl_linear)require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||o.target==Target::jxl_linear,"JXR preservation requires linear JXL output");
     if(direct_jxl || (o.mode==Mode::preserve && format!=4)) {
@@ -211,12 +211,12 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
             if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
-            else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,o.extended_bt2020,o.keep_exif?&exif:nullptr);
+            else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?o.convert_gamut:o.extended_bt2020),o.keep_exif?&exif:nullptr);
             else if(format==4) {
-                if((o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && !o.convert_gamut)
+                if((o.target==Target::jxl_linear || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!o.convert_gamut || o.mode==Mode::preserve))
                     cache.scrgb=decode_jxr_scrgb(bytes.data(),bytes.size(),linear,w,h,cache.half_jxr);
                 require(o.mode!=Mode::preserve || cache.scrgb,"JXR source is not preservable scRGB; use --mode process");
-                if(!cache.scrgb)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut);
+                if(!cache.scrgb)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.convert_gamut);
             }
             else if(format==6) {
                 const auto raster=decode_regular(bytes.data(),bytes.size());

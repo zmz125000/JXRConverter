@@ -1530,12 +1530,12 @@ jxrc::ImageInfo inspect_jxr(const uint8_t* data,size_t size) {
     info.transfer=info.hdr?"Linear":"SDR";info.primaries="Source profile";return info;
 }
 
-int decode_jxr_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut) {
+int decode_jxr_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,bool to_bt2020) {
     bool untagged=false;
     if(!decode_jxr_from_memory(data,size,rgba,w,h,false,&untagged,gamut,0,nullptr))return -1;
     if(untagged) {
-        rebase_untagged_scrgb(rgba,w,h,true);
-        if(gamut)*gamut=UHDR_CG_BT_2100;
+        rebase_untagged_scrgb(rgba,w,h,to_bt2020);
+        if(gamut)*gamut=to_bt2020?UHDR_CG_BT_2100:UHDR_CG_BT_709;
     }
     return 0;
 }

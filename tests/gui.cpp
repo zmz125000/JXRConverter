@@ -128,6 +128,7 @@ private slots:
     }
     void controlsSnapshot() {
         MainWindow window;
+        auto* keep=window.findChild<QCheckBox*>("convertGamut");QVERIFY(keep);QVERIFY(keep->isChecked());
         auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);
         auto* targets=window.findChild<QListWidget*>("conversionTargets");QVERIFY(targets);
         for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==6?Qt::Checked:Qt::Unchecked);

@@ -43,7 +43,7 @@ struct Options {
     bool keep_exif = false;
     bool overwrite = false;
     bool extended_bt2020 = true;
-    bool convert_gamut = false; // Force scRGB sources through the BT.2020 processing path.
+    bool convert_gamut = true; // Process mode: convert scRGB to BT.2020 for wider viewer compatibility.
 };
 struct Result {
     unsigned width = 0, height = 0;

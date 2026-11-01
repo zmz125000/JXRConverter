@@ -272,8 +272,9 @@ QWidget* MainWindow::buildControls() {
     processing_=new QGroupBox("Pixel processing");auto* processingForm=new QFormLayout(processing_);exposure_=real(-3,3,0,0.1,"exposure");exposure_->setSuffix(" EV");
     exposure_->setToolTip("0 EV leaves exposure unchanged. −3 EV multiplies linear RGB by 1/8; +3 EV multiplies it by 8. For RAW gain-map output, use Custom RAW exposure instead.");
     maxEdge_=spin(0,65535,0,"maxEdge");maxEdge_->setSpecialValueText("Original size");bt2020_=check("Extended BT.2020 · JXL decoding","extendedBt2020",true);
-    bt2020_->setToolTip("When decoding floating-point linear-sRGB JXL, convert extended RGB values to BT.2020 before clipping negative channels. This preserves more wide-gamut color. Other input formats are unaffected; it does not select the output transfer function.");
-    convertGamut_=check("Convert scRGB gamut to BT.2020","convertGamut");
+    bt2020_->setToolTip("When decoding floating-point linear-sRGB JXL, convert extended RGB values to BT.2020 before clipping negative channels. This preserves more wide-gamut color. Convert scRGB gamut to BT.2020 takes priority for scRGB sources. Other input formats are unaffected; it does not select the output transfer function.");
+    convertGamut_=check("Convert scRGB gamut to BT.2020","convertGamut",true);
+    convertGamut_->setToolTip("Convert scRGB to BT.2020 in Process pixels mode. Uncheck to retain scRGB for untouched linear HDR JXL and sRGB/BT.709 primaries for other outputs.");
     processingForm->addRow(convertGamut_);
     processingForm->addRow("Exposure (EV)",exposure_);processingForm->addRow("Max edge (px)",maxEdge_);processingForm->addRow(bt2020_);layout->addWidget(processing_);
     raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawLayout->addRow("HDR mode",rawMode_);
