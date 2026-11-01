@@ -155,6 +155,9 @@ private slots:
         for(int i=0;i<40;++i)files<<makeImage(directory,QString("%1.jpg").arg(i,2,10,QChar('0')),96,48,100);
         Catalog model;model.setBackgroundMetadata(false);model.addPaths({directory});
         QTRY_COMPARE(model.rowCount(),40);QTRY_VERIFY(!model.scanning());
+        model.beginThumbnailFrame([](const QModelIndex& i){return i.row()<3;});
+        for(int i=0;i<3;++i)model.index(i,0).data(Catalog::ThumbnailRole);
+        model.endThumbnailFrame();
         QTRY_VERIFY(model.record(0).inspected&&model.record(1).inspected&&model.record(2).inspected);
         QTRY_COMPARE(model.metadataJobCount(),0);
         for(int i=3;i<40;++i)QVERIFY(!model.record(i).inspected);
@@ -170,8 +173,26 @@ private slots:
         QCOMPARE(model.rowCount(),0);QTRY_COMPARE(model.thumbnailJobCount(),0);QTRY_COMPARE(model.metadataJobCount(),0);
         // Stale enumeration batches must never repopulate a cleared library.
         model.addPaths({directory});model.clear();
-        model.addPaths({files.first()});QTRY_COMPARE(model.rowCount(),1);QTRY_VERIFY(inspected(model)&&!model.scanning());
+        model.addPaths({files.first()});QTRY_COMPARE(model.rowCount(),1);
+        model.beginThumbnailFrame([](const QModelIndex&){return true;});model.index(0,0).data(Catalog::ThumbnailRole);model.endThumbnailFrame();
+        QTRY_VERIFY(inspected(model)&&!model.scanning());
         QTest::qWait(30);QCOMPARE(model.rowCount(),1);
+    }
+    void thumbnailAndMetadataShareSource() {
+        const auto path=makeImage(root("shared-source"),"photo.jpg",128,64,400);
+        QVERIFY(QFileInfo(path).size()<256*1024);
+        int checks=0;bool removed=false;Record metadata;
+        // Make the path unavailable immediately after the single source read
+        // closes. EXIF and native inspection must both finish from its buffer.
+        const auto image=readThumbnail(path,48,[&]{if(++checks==3)removed=QFile::remove(path);return false;},&metadata);
+        QVERIFY(removed);QVERIFY(!QFileInfo::exists(path));QCOMPARE(image.size(),QSize(48,24));
+        QVERIFY(metadata.inspected);QCOMPARE(metadata.width,128);QCOMPARE(metadata.height,64);QCOMPARE(metadata.bits,8);
+        QCOMPARE(metadata.iso,400);QCOMPARE(metadata.format,QString("JPEG"));QCOMPARE(metadata.camera,QString("Test Camera Body"));
+
+        QImage raster(1024,512,QImage::Format_RGBA64);raster.fill(QColor(50,100,150));
+        const auto png=root("shared-source")+"/sixteen.png";QVERIFY(raster.save(png));
+        const auto thumbnail=readThumbnail(png,128,{},&metadata);
+        QCOMPARE(thumbnail.size(),QSize(128,64));QCOMPARE(metadata.width,1024);QCOMPARE(metadata.height,512);QCOMPARE(metadata.bits,16);
     }
     void cancellableImageReads() {
         const auto path=root("cancel-read.bin");QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));QVERIFY(file.resize(8*1024*1024));file.close();

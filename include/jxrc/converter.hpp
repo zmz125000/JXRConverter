@@ -81,10 +81,15 @@ struct Preview {
 JXRC_API ImageInfo inspect(const std::filesystem::path& input);
 // Returning true cancels before opening the file or between 256 KiB reads.
 JXRC_API ImageInfo inspect(const std::filesystem::path& input, const std::function<bool()>& cancelled);
+JXRC_API ImageInfo inspect_bytes(const std::vector<uint8_t>& input);
 // Display previews are capped at 768 px even when a larger edge is requested.
 JXRC_API Preview preview(const std::filesystem::path& input, unsigned max_edge = 384);
 // As above; codec calls already running finish before cancellation is checked.
 JXRC_API Preview preview(const std::filesystem::path& input, unsigned max_edge, const std::function<bool()>& cancelled);
+// Share already loaded bytes with metadata readers. source_info describes the
+// original image, before thumbnail resizing, and is optional.
+JXRC_API Preview preview_bytes(const std::vector<uint8_t>& input, unsigned max_edge = 384,
+                              ImageInfo* source_info = nullptr, const std::function<bool()>& cancelled = {});
 JXRC_API void validate(const Options& options);
 JXRC_API std::string version();
 } // namespace jxrc

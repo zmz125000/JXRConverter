@@ -297,6 +297,13 @@ RegularImage decode_regular(const uint8_t* data,size_t size) {
     if(signature(data,size,"BM",2) || signature(data,size,"GIF87a",6) || signature(data,size,"GIF89a",6))return decode_bitmap(data,size);
     throw std::runtime_error("Unsupported regular image format");
 }
+jxrc::ImageInfo inspect_regular(const RegularImage& image) {
+    jxrc::ImageInfo out;out.width=image.width;out.height=image.height;out.bits=image.bits;out.format=image.format;out.hdr=image.hdr();
+    out.transfer=image.hdr()?(image.transfer==16?"PQ":"HLG"):image.icc.empty()?"sRGB":"ICC";
+    out.primaries=image.hdr()?(image.primaries==9?"BT.2020":image.primaries==12?"Display P3":"BT.709"):image.icc.empty()?"BT.709":"ICC";
+    if(image.orientation>=5)std::swap(out.width,out.height);
+    return out;
+}
 void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,uhdr_color_gamut_t& gamut) {
     if(image.hdr()) {
         cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,

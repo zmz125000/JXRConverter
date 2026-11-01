@@ -32,6 +32,7 @@ ImageInfo inspect(const std::filesystem::path& input,const std::function<bool()>
     return inspect_bytes(bytes);
 }
 ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
+    if(bytes.empty()||bytes.size()>512u*1024*1024)throw std::runtime_error("Input exceeds inspection limit");
     ImageInfo out;
     if(bytes.size()>2&&bytes[0]==255&&bytes[1]==216) {
         ultrahdr::JpegDecoderHelper jpeg;
@@ -67,12 +68,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
     } else if(bytes.size()>=4&&bytes[0]=='I'&&bytes[1]=='I'&&bytes[2]==0xbc&&bytes[3]==1) {
         out=inspect_jxr(bytes.data(),bytes.size());
     } else if(is_regular_image(bytes.data(),bytes.size())) {
-        const auto raster=decode_regular(bytes.data(),bytes.size());
-        out.width=raster.width;out.height=raster.height;out.bits=raster.bits;out.format=raster.format;
-        out.hdr=raster.hdr();
-        out.transfer=raster.hdr()?(raster.transfer==16?"PQ":"HLG"):raster.icc.empty()?"sRGB":"ICC";
-        out.primaries=raster.hdr()?(raster.primaries==9?"BT.2020":raster.primaries==12?"Display P3":"BT.709"):raster.icc.empty()?"BT.709":"ICC";
-        if(raster.orientation>=5)std::swap(out.width,out.height);
+        out=inspect_regular(decode_regular(bytes.data(),bytes.size()));
     } else {
         auto storage=std::make_unique<LibRaw>();
         auto& raw=*storage;

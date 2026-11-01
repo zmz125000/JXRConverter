@@ -3,6 +3,8 @@
 #include <exiv2/exiv2.hpp>
 #include <QDirIterator>
 #include <QFileInfo>
+#include <QFile>
+#include <stdexcept>
 #include <QIcon>
 #include <QPixmap>
 #include <QRegularExpression>
@@ -46,13 +48,31 @@ bool supportedFile(const QString& path) {
     static const QSet<QString> extensions = {"png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     return extensions.contains(QFileInfo(path).suffix().toLower());
 }
-Record readMetadata(const QString& path,const std::function<bool()>& cancelled) {
+namespace {
+void checkCancelled(const std::function<bool()>& cancelled) {
+    if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
+}
+std::vector<uint8_t> readSource(const QString& path,const std::function<bool()>& cancelled) {
+    checkCancelled(cancelled);
+    QFile file(path);if(!file.open(QIODevice::ReadOnly))throw std::runtime_error(file.errorString().toStdString());
+    const qint64 length=file.size();
+    if(length<=0||length>512LL*1024*1024)throw std::runtime_error("Input must be 1 byte to 512 MiB");
+    std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    for(size_t offset=0;offset<bytes.size();) {
+        checkCancelled(cancelled);
+        const auto count=file.read(reinterpret_cast<char*>(bytes.data()+offset),qint64(std::min<size_t>(256*1024,bytes.size()-offset)));
+        if(count<=0)throw std::runtime_error("Cannot read image");
+        offset+=size_t(count);
+    }
+    file.close();checkCancelled(cancelled);return bytes;
+}
+Record metadataFromBytes(const QString& path,const std::vector<uint8_t>& bytes,const std::function<bool()>& cancelled,const ImageInfo* sourceInfo=nullptr) {
     Record r;if(cancelled&&cancelled())return r; r.path = path; QFileInfo file(path);
-    r.name = file.fileName(); r.bytes = file.size(); r.modified = file.lastModified();
+    r.name = file.fileName(); r.bytes = qint64(bytes.size()); r.modified = file.lastModified();
     r.format = file.suffix().toUpper();
     try {
         if(cancelled&&cancelled())return r;
-        auto image = Exiv2::ImageFactory::open(nativePath(path).u8string());
+        auto image = Exiv2::ImageFactory::open(bytes.data(),bytes.size());
         if (image.get() != nullptr) {
             if(cancelled&&cancelled())return r;
             image->readMetadata(); r.width = image->pixelWidth(); r.height = image->pixelHeight();
@@ -71,7 +91,8 @@ Record readMetadata(const QString& path,const std::function<bool()>& cancelled) 
     } catch (const std::exception& e) { r.metadataWarning = QString::fromUtf8(e.what()); }
     try {
         if(cancelled&&cancelled())return r;
-        const auto info = inspect(nativePath(path),cancelled);
+        const auto info = sourceInfo?*sourceInfo:inspect_bytes(bytes);
+        if(!info.width||!info.height)throw std::runtime_error("Image header information unavailable");
         r.width = info.width; r.height = info.height; r.bits = info.bits;
         r.format = QString::fromStdString(info.format); r.raw = info.raw; r.gainmap = info.gainmap; r.hdr = info.hdr;
         r.transfer = QString::fromStdString(info.transfer); r.primaries = QString::fromStdString(info.primaries);
@@ -81,9 +102,27 @@ Record readMetadata(const QString& path,const std::function<bool()>& cancelled) 
     }
     r.inspected = true; return r;
 }
-QImage readThumbnail(const QString& path, int edge,const std::function<bool()>& cancelled) {
-    auto p = preview(nativePath(path), std::min(edge,768),cancelled);
-    return QImage(p.rgba.data(),int(p.width),int(p.height),int(p.width)*4,QImage::Format_RGBA8888).copy();
+}
+Record readMetadata(const QString& path,const std::function<bool()>& cancelled) {
+    try {return metadataFromBytes(path,readSource(path,cancelled),cancelled);}
+    catch(const std::exception& e) {
+        Record result;if(cancelled&&cancelled())return result;
+        result.path=path;result.name=QFileInfo(path).fileName();result.format=QFileInfo(path).suffix().toUpper();
+        result.inspected=true;result.metadataWarning=QString::fromUtf8(e.what());return result;
+    }
+}
+QImage readThumbnail(const QString& path,int edge,const std::function<bool()>& cancelled,Record* metadata) {
+    Preview image;
+    if(metadata) {
+        const auto bytes=readSource(path,cancelled);ImageInfo source;
+        try {image=preview_bytes(bytes,std::min(edge,768),&source,cancelled);}
+        catch(...) {
+            if(!cancelled||!cancelled())*metadata=metadataFromBytes(path,bytes,cancelled);
+            throw;
+        }
+        *metadata=metadataFromBytes(path,bytes,cancelled,&source);
+    } else image=preview(nativePath(path),std::min(edge,768),cancelled);
+    return QImage(image.rgba.data(),int(image.width),int(image.height),int(image.width)*4,QImage::Format_RGBA8888).copy();
 }
 Catalog::Catalog(QObject* parent, int thumbnailCacheKiB) : QAbstractTableModel(parent) {
     cache_.setMaxCost(std::max(1,thumbnailCacheKiB));
@@ -169,7 +208,9 @@ void Catalog::insertPaths(const QStringList& paths) {
         metadataQueue_.append(path);
         beginInsertRows({},records_.size(),records_.size());records_.append(r);endInsertRows();
     }
-    pumpMetadata();
+    // In browsing mode let the first paint schedule a combined thumbnail and
+    // metadata read, rather than inspecting files before their thumbnails.
+    if(backgroundMetadata_)pumpMetadata();
 }
 bool Catalog::metadataWanted(const QString& path) const {
     if(backgroundMetadata_||visibleThumbnails_.contains(path))return true;
@@ -191,13 +232,18 @@ void Catalog::cancelMetadata() {
 void Catalog::pumpMetadata() {
     if(metadataTask_||!epoch_->load())return;
     QString path;
+    auto standalone=[this](int row) {
+        // A visible thumbnail supplies metadata from its source buffer. Only
+        // failed thumbnails need a separate metadata fallback.
+        return row>=0&&!records_[row].inspected&&(!visibleThumbnails_.contains(records_[row].path)||records_[row].thumbnailFailed);
+    };
     for(const auto& candidate:visibleThumbnails_) {
-        const int row=find(candidate);if(row>=0&&!records_[row].inspected){path=candidate;break;}
+        const int row=find(candidate);if(standalone(row)){path=candidate;break;}
     }
-    if(path.isEmpty())for(int row=0;row<std::min(3,int(records_.size()));++row)if(!records_[row].inspected){path=records_[row].path;break;}
+    if(path.isEmpty())for(int row=0;row<std::min(3,int(records_.size()));++row)if(standalone(row)){path=records_[row].path;break;}
     if(path.isEmpty()&&backgroundMetadata_)while(!metadataQueue_.isEmpty()) {
         const auto candidate=metadataQueue_.takeFirst();const int row=find(candidate);
-        if(row>=0&&!records_[row].inspected){path=candidate;break;}
+        if(standalone(row)){path=candidate;break;}
     }
     if(path.isEmpty())return;
     const auto epoch=epoch_;auto token=std::make_shared<std::atomic_bool>(true);
@@ -285,19 +331,21 @@ void Catalog::pumpThumbnails() {
         // Capture only the path and cancellation token. Opening the file and
         // constructing its decoder happen inside readThumbnail, after this
         // runnable starts and checks cancellation.
-        const int edge=thumbnailEdge_;
-        auto* task=QRunnable::create([this,path,token,edge] {
-            QImage image;QString error;
+        const int edge=thumbnailEdge_;const bool collectMetadata=!record.inspected;
+        auto* task=QRunnable::create([this,path,token,edge,collectMetadata] {
+            QImage image;QString error;Record metadata;
             if(token->load()) {
-                try {image=readThumbnail(path,edge,[token]{return !token->load();});}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
+                try {image=readThumbnail(path,edge,[token]{return !token->load();},collectMetadata?&metadata:nullptr);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
             }
-            QMetaObject::invokeMethod(this,[this,path,token,image,error] {
+            QMetaObject::invokeMethod(this,[this,path,token,image,error,metadata=std::move(metadata)]() mutable {
                 thumbnailJobs_.remove(path);
                 delete thumbnailTasks_.take(path);
                 const int row=find(path);
                 if(row>=0) {
                     auto& r=records_[row];r.thumbnailPending=false;
                     if(token->load()) {
+                        const bool updated=metadata.inspected&&!r.inspected;
+                        if(updated){metadata.status=r.status;metadata.error=r.error;r=std::move(metadata);}
                         r.thumbnailFailed=image.isNull();
                         if(!image.isNull()) {
                             auto ready=image;
@@ -305,10 +353,11 @@ void Catalog::pumpThumbnails() {
                             cache_.insert(path,new QImage(ready),std::max<qint64>(1,(ready.sizeInBytes()+1023)/1024));
                         }
                         else if(r.metadataWarning.isEmpty())r.metadataWarning="Thumbnail: "+error;
-                        emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole,Qt::ToolTipRole});
+                        if(updated)emit dataChanged(index(row,0),index(row,ColumnCount-1));
+                        else emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole,Qt::ToolTipRole});
                     }
                 }
-                pumpThumbnails();
+                pumpThumbnails();pumpMetadata();
             },Qt::QueuedConnection);
         });
         // Own the runnable until completion, avoiding tryTake's documented

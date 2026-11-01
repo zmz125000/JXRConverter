@@ -25,7 +25,7 @@ struct Record {
 };
 bool supportedFile(const QString& path);
 Record readMetadata(const QString& path, const std::function<bool()>& cancelled = {});
-QImage readThumbnail(const QString& path, int edge = 384, const std::function<bool()>& cancelled = {});
+QImage readThumbnail(const QString& path, int edge = 384, const std::function<bool()>& cancelled = {}, Record* metadata = nullptr);
 
 class Catalog : public QAbstractTableModel {
     Q_OBJECT

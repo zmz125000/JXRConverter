@@ -375,9 +375,22 @@ Preview preview(const std::filesystem::path& input,unsigned edge) {
 }
 Preview preview(const std::filesystem::path& input,unsigned edge,const std::function<bool()>& cancelled) {
     require(edge>0&&edge<=1024,"Preview edge must be 1..1024");
+    return preview_bytes(read(input,cancelled),edge,nullptr,cancelled);
+}
+Preview preview_bytes(const std::vector<uint8_t>& bytes,unsigned edge,ImageInfo* source_info,const std::function<bool()>& cancelled) {
+    require(edge>0&&edge<=1024,"Preview edge must be 1..1024");
+    require(!bytes.empty()&&bytes.size()<=512u*1024*1024,"Input must be 1 byte to 512 MiB");
+    if(cancelled&&cancelled())throw std::runtime_error("Preview cancelled");
     edge=std::min(edge,768u);
     JxrcThreadBudget budget(1);
-    auto bytes=read(input,cancelled);const int format=kind(bytes);
+    const int format=kind(bytes);
+    if(source_info) {
+        *source_info={};
+        // Regular rasters supply this from the actual decode below. Other
+        // codecs have header inspectors that reuse the same in-memory bytes.
+        if(format!=6)try{*source_info=inspect_bytes(bytes);}catch(const std::exception&){/* Metadata failure must not suppress a usable preview. */}
+    }
+    if(cancelled&&cancelled())throw std::runtime_error("Preview cancelled");
     std::vector<uint16_t> linear;std::vector<uint8_t> raw_pixels;
     unsigned w=0,h=0,raster_orientation=1;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;bool hdr=false;int gain=0,transfer=0,rc=0;
     if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,edge);
@@ -386,6 +399,7 @@ Preview preview(const std::filesystem::path& input,unsigned edge,const std::func
     else if(format==4)rc=decode_jxr_memory(bytes.data(),bytes.size(),linear,w,h,&gamut,std::min(edge,768u));
     else if(format==6) {
         auto raster=decode_regular(bytes.data(),bytes.size());
+        if(source_info)*source_info=inspect_regular(raster);
         w=raster.width;h=raster.height;raster_orientation=raster.orientation;
         if(raster.bits>8) {
             const auto preview_pixels=reduce_preview(reinterpret_cast<const uint16_t*>(raster.pixels.data()),w,h,size_t(w)*4,4,edge);
