@@ -1,12 +1,15 @@
 # JXRConverter
 
-A C++17 image conversion library and CLI extracted from LocalViewer. The library
-owns conversion policy and controls; both the CLI and Qt desktop GUI use it.
-No Android SDK or JVM is required. The library and CLI work without a display.
+A C++17 image conversion library and CLI extracted from [LocalViewer](https://github.com/zmz125000/LocalViewer). 
 
-This is the first native port, with Linux integration coverage. Windows and macOS
-builds still need validation. See [port status](docs/port-status.md) for the
-supported scope and remaining work.
+Features:  
+1. Convert JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL PQ HDR.
+2. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
+3. Support auto color management, keeping source wide color gamut and color tag.
+4. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for SDR output.
+5. RAW images are processed and output as Linear HDR or PQ HDR with BT.2020 color.
+
+See [port status](docs/port-status.md) for the supported scope and remaining work.
 
 ## Build
 
@@ -19,18 +22,6 @@ cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target jxrconvert jxrc_tests -j 6
 ctest --test-dir build --output-on-failure
 ```
-
-To reuse an existing LocalViewer native source cache, supply its `_deps` directory:
-
-```sh
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
-  -DJXRC_DEPS_DIR=/path/to/LocalViewer/app/.cxx/RelWithDebInfo/build-id/x86_64/_deps
-```
-
-The source snapshot in `LocalViewer/` is a reference, not a build dependency.
-`src/native/` contains the extracted implementation. The build never invokes
-Gradle or compiles Android entry points. Build only the named targets above to
-avoid unrelated upstream developer tools.
 
 ## Desktop GUI
 
@@ -60,49 +51,6 @@ and provide `-DCMAKE_PREFIX_PATH="$(brew --prefix qt)"` if Qt is not discovered.
 On Windows, provide Qt 6 Widgets with a matching compiler and architecture.
 Exiv2 is built automatically unless the system-library option is selected. Platform packaging
 and macOS/Windows GUI execution still need validation.
-
-The desktop supports:
-
-- Drag-and-drop files or folders, folder opening, optional recursive import, and
-  canonical-path deduplication. Import and metadata discovery run in the background.
-- Grid, list, and sortable detail views with a shared selection and size slider.
-  Like LocalViewer, the grid slider sets minimum cell width (100–500 dp, in 10 dp
-  steps), and cells expand to fill each row as the window resizes.
-  Drag from blank space to box-select; Ctrl/Cmd-click and Shift-click extend selection.
-- Lazy asynchronous thumbnails with a bounded 64 MiB cache. JPEG thumbnails show
-  the SDR base; native JXL/AVIF/JXR/RAW decoders provide fallback previews. Preview
-  display rendering is separate from conversion and does not change exported pixels.
-- Instant case-insensitive text filtering, with a toggle for the full metadata
-  controls: EXIF tags/values, format, SDR/HDR/RAW, minimum longest edge and
-  megapixels (both must match), and capture date. The format input accepts comma-
-  or space-separated formats/extensions, for example `jpg, avif, raw`. Capture
-  date defaults to yesterday through today. Hidden metadata
-  controls do not restrict simple search. Today filters by capture date, falling
-  back to modification date when capture date is absent, and overrides the custom
-  date range. Detail columns sort numerically for size,
-  ISO, aperture, shutter, focal length, bit depth, and pixel count. Missing capture
-  dates are excluded when a date filter is active.
-- Quality presets/custom controls and pixel/RAW controls mapped to the library's
-  `Options`. Unsupported transfer targets are disabled in preservation mode.
-- Check multiple output formats to convert every input to each selected target.
-  Click either a checkbox or its row text to toggle it; Clear targets unchecks all.
-  Accept SDR formats follows LocalViewer's filename grouping: for HDR targets,
-  JPEG/AVIF inputs are skipped when off and use the SDR equivalent when on.
-  JXL, JXR and RAW filenames remain in the HDR group regardless of metadata.
-  Outputs mapping to the same target are deduplicated per input.
-  All outputs share the configured parallel job limit. Per-file completion waits
-  for every output, retaining failures even if another output succeeds. A collapsible output panel is shared beneath the Conversion and Metadata tabs.
-- A toolbar toggle enables wheel changes to dropdowns and numeric inputs; it is
-  off by default to avoid changing settings while scrolling. Open output folder
-  opens the destination in the system file manager, creating it if needed.
-- Separate **Convert selected** and **Convert visible files** actions. Each batch
-  captures its options; changing controls during a run affects the next batch.
-- Parallel jobs default to CPU count / 4, rounded down with a minimum of one, and a
-  per-job codec thread budget. Ultra HDR's pinned source gets a build-tree-only CPU
-  budget adaptation; downloaded source files are not modified. Reduce jobs for
-  very large images.
-- Per-file queue/error states, collision-safe output names within a batch, existing
-  output protection, and stopping pending work while active conversions finish.
 
 GUI input formats follow the converter's current codec support; the GUI does not
 add the Android-only formats listed in [port status](docs/port-status.md).
@@ -199,33 +147,6 @@ The port retains LocalViewer's GPLv3 license. See [COPYING](COPYING) and
 
 ## Versions, CI downloads and releases
 
-The current version is **0.1.1**. Change `project(JXRConverter VERSION ...)` in
-`CMakeLists.txt` to update the library's `jxrc::version()`, CLI help/`--version`,
-GUI title/`--version`, Windows file properties, macOS bundle metadata and package
-filenames together. The generated public header is `jxrc/version.hpp`.
-
-The **Native library, CLI and GUI** Actions run uploads three downloadable
-`JXRConverter-*` artifacts (14-day retention). Each contains a versioned archive
-with both applications and Qt runtime dependencies: Windows x64 ZIP, macOS
-Apple Silicon tar.gz, and Linux x64 tar.gz. Extract the complete archive before
-running `./jxrconverter` (`jxrconverter.exe` on Windows) or the macOS
-`jxrconverter.app`; the CLI is `./jxrconvert`. Portable packages place applications
-at the extracted root, alongside runtime folders, with no `bin/` directory.
-Linux packages target Ubuntu
-24.04 or a compatible newer system and still require the system display/graphics
-libraries. macOS/Windows packages are unsigned.
-
-The application icon comes from the supplied SVG, stored in
-`assets/icons/jxrconverter.svg`. PNG, Windows ICO and macOS ICNS derivatives are
-checked in, so normal builds need no icon-generation tools. To regenerate them,
-install CairoSVG and Pillow in a Python environment and run
-`python3 tools/generate_icons.py`.
-
-Package runners are macOS 26 and Windows Server 2025; macOS binaries retain a
-14.0 deployment target. Linux packages retain Ubuntu 24.04 as their build
-baseline, with distribution compatibility tests on both 24.04 and 26.04.
-See [runner and installer details](docs/dependencies.md#runner-images-and-qt-installation).
-
 To build a desktop archive locally (Qt 6.10+ required for runtime deployment):
 
 ```sh
@@ -242,24 +163,3 @@ After committing the version and changes, push a matching release tag:
 git tag v0.1.1
 git push origin v0.1.1
 ```
-
-The **Release** workflow checks the tag against CMake's version, builds and tests
-all three desktop packages, tests extracted archives, and publishes a GitHub
-Release with generated notes and `SHA256SUMS.txt`. A mismatched tag fails without
-publishing. Like LocalViewer, publishing uses `softprops/action-gh-release` to
-upload the versioned archives directly to the release's **Assets** section;
-rerunning publication can update an existing release's assets. The reusable
-`packages.yml` workflow supplies the same package checks
-to CI and releases. Source distributions and dependency pins are available through
-the tagged repository; bundled third-party license files accompany the binaries.
-
-For noisy downloaded Actions logs, run the streaming deduplicator before reading:
-
-```sh
-python3 tools/summarize_build_logs.py .git/logs_RUN_ID
-python3 tools/summarize_build_logs.py .git/logs_RUN_ID --details > warnings.txt
-```
-
-See [the warning audit](docs/build-warnings.md) for the inspected successful build.
-
-Desktop appearance offers Auto, Light and Dark in the top-right toolbar; Dark uses a mid-grey background. Double-click an image to open it, or right-click for Open image, Open folder and Remove selected. Output controls are shared below the Conversion/Metadata tabs, expand to a fixed height, and collapse with the progress bar still visible. RAW HDR shoulder is available in all rendering modes. JXR previews request decoder thumbnail scaling, bounded to 768 px. macOS package smoke tests use the bundled Cocoa platform plugin.
