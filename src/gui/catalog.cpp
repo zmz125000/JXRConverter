@@ -4,6 +4,7 @@
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QFile>
+#include <QMutexLocker>
 #include <stdexcept>
 #include <QIcon>
 #include <QPixmap>
@@ -12,17 +13,9 @@
 #include <algorithm>
 #include <cmath>
 #include <QLocale>
-#include <filesystem>
 
 namespace jxrc::gui {
 namespace {
-std::filesystem::path nativePath(const QString& path) {
-#ifdef _WIN32
-    return std::filesystem::path(path.toStdWString());
-#else
-    return std::filesystem::u8path(path.toUtf8().constData());
-#endif
-}
 QString key(const QString& path) {
     // Imports are already canonical. Do not stat SMB files again for model keys.
     QString canonical = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
@@ -52,23 +45,32 @@ namespace {
 void checkCancelled(const std::function<bool()>& cancelled) {
     if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
 }
-std::vector<uint8_t> readSource(const QString& path,const std::function<bool()>& cancelled) {
+struct SourceBuffer {
+    std::vector<uint8_t> bytes;
+    QDateTime modified;
+};
+SourceBuffer readSource(const QString& path,const std::function<bool()>& cancelled,QMutex* sourceReadMutex,bool wantMetadata=true) {
+    // Hold the HDD/SMB read gate only until this file is loaded and closed.
+    // Decoder work below runs concurrently after this lock is released.
+    QMutexLocker<QMutex> lock(sourceReadMutex);
     checkCancelled(cancelled);
     QFile file(path);if(!file.open(QIODevice::ReadOnly))throw std::runtime_error(file.errorString().toStdString());
     const qint64 length=file.size();
     if(length<=0||length>512LL*1024*1024)throw std::runtime_error("Input must be 1 byte to 512 MiB");
-    std::vector<uint8_t> bytes(static_cast<size_t>(length));
+    SourceBuffer source;auto& bytes=source.bytes;bytes.resize(static_cast<size_t>(length));
+    if(wantMetadata)source.modified=file.fileTime(QFileDevice::FileModificationTime);
     for(size_t offset=0;offset<bytes.size();) {
         checkCancelled(cancelled);
         const auto count=file.read(reinterpret_cast<char*>(bytes.data()+offset),qint64(std::min<size_t>(256*1024,bytes.size()-offset)));
         if(count<=0)throw std::runtime_error("Cannot read image");
         offset+=size_t(count);
     }
-    file.close();checkCancelled(cancelled);return bytes;
+    file.close();checkCancelled(cancelled);return source;
 }
-Record metadataFromBytes(const QString& path,const std::vector<uint8_t>& bytes,const std::function<bool()>& cancelled,const ImageInfo* sourceInfo=nullptr) {
+Record metadataFromBytes(const QString& path,const SourceBuffer& source,const std::function<bool()>& cancelled,const ImageInfo* sourceInfo=nullptr) {
+    const auto& bytes=source.bytes;
     Record r;if(cancelled&&cancelled())return r; r.path = path; QFileInfo file(path);
-    r.name = file.fileName(); r.bytes = qint64(bytes.size()); r.modified = file.lastModified();
+    r.name = file.fileName(); r.bytes = qint64(bytes.size()); r.modified = source.modified;
     r.format = file.suffix().toUpper();
     try {
         if(cancelled&&cancelled())return r;
@@ -103,35 +105,33 @@ Record metadataFromBytes(const QString& path,const std::vector<uint8_t>& bytes,c
     r.inspected = true; return r;
 }
 }
-Record readMetadata(const QString& path,const std::function<bool()>& cancelled) {
-    try {return metadataFromBytes(path,readSource(path,cancelled),cancelled);}
+Record readMetadata(const QString& path,const std::function<bool()>& cancelled,QMutex* sourceReadMutex) {
+    try {return metadataFromBytes(path,readSource(path,cancelled,sourceReadMutex),cancelled);}
     catch(const std::exception& e) {
         Record result;if(cancelled&&cancelled())return result;
         result.path=path;result.name=QFileInfo(path).fileName();result.format=QFileInfo(path).suffix().toUpper();
         result.inspected=true;result.metadataWarning=QString::fromUtf8(e.what());return result;
     }
 }
-QImage readThumbnail(const QString& path,int edge,const std::function<bool()>& cancelled,Record* metadata) {
-    Preview image;
-    if(metadata) {
-        const auto bytes=readSource(path,cancelled);ImageInfo source;
-        try {image=preview_bytes(bytes,std::min(edge,768),&source,cancelled);}
-        catch(...) {
-            if(!cancelled||!cancelled())*metadata=metadataFromBytes(path,bytes,cancelled);
-            throw;
-        }
-        *metadata=metadataFromBytes(path,bytes,cancelled,&source);
-    } else image=preview(nativePath(path),std::min(edge,768),cancelled);
+QImage readThumbnail(const QString& path,int edge,const std::function<bool()>& cancelled,Record* metadata,QMutex* sourceReadMutex) {
+    const auto source=readSource(path,cancelled,sourceReadMutex,metadata!=nullptr);
+    Preview image;ImageInfo info;
+    try {image=preview_bytes(source.bytes,std::min(edge,768),metadata?&info:nullptr,cancelled);}
+    catch(...) {
+        if(metadata&&(!cancelled||!cancelled()))*metadata=metadataFromBytes(path,source,cancelled);
+        throw;
+    }
+    if(metadata)*metadata=metadataFromBytes(path,source,cancelled,&info);
     return QImage(image.rgba.data(),int(image.width),int(image.height),int(image.width)*4,QImage::Format_RGBA8888).copy();
 }
 Catalog::Catalog(QObject* parent, int thumbnailCacheKiB) : QAbstractTableModel(parent) {
     cache_.setMaxCost(std::max(1,thumbnailCacheKiB));
-    scans_.setMaxThreadCount(1);io_.setMaxThreadCount(1); // One sequential content reader for HDD/SMB.
+    scans_.setMaxThreadCount(1);workers_.setMaxThreadCount(ThumbnailBudget); // Parallel decoding; sourceReadMutex_ serializes file reads.
 }
 Catalog::~Catalog() {
     epoch_->store(false);if(metadataToken_)metadataToken_->store(false);
     for(const auto& token:thumbnailJobs_)token->store(false);
-    scans_.clear();io_.clear();scans_.waitForDone();io_.waitForDone();
+    scans_.clear();workers_.clear();scans_.waitForDone();workers_.waitForDone();
     delete metadataTask_;qDeleteAll(thumbnailTasks_);
 }
 int Catalog::rowCount(const QModelIndex& parent) const { return parent.isValid()?0:records_.size(); }
@@ -225,7 +225,7 @@ void Catalog::setBackgroundMetadata(bool enabled) {
 }
 void Catalog::cancelMetadata() {
     if(metadataToken_)metadataToken_->store(false);
-    if(metadataTask_&&io_.tryTake(metadataTask_)) {
+    if(metadataTask_&&workers_.tryTake(metadataTask_)) {
         delete metadataTask_;metadataTask_=nullptr;metadataToken_.reset();metadataPath_.clear();
     }
 }
@@ -250,7 +250,7 @@ void Catalog::pumpMetadata() {
     metadataToken_=token;metadataPath_=path;
     metadataTask_=QRunnable::create([this,path,epoch,token] {
         const auto cancelled=[epoch,token]{return !epoch->load()||!token->load();};
-        Record result;if(!cancelled())result=readMetadata(path,cancelled);
+        Record result;if(!cancelled())result=readMetadata(path,cancelled,&sourceReadMutex_);
         QMetaObject::invokeMethod(this,[this,path,epoch,token,result=std::move(result)]() mutable {
             delete metadataTask_;metadataTask_=nullptr;metadataToken_.reset();metadataPath_.clear();
             const int row=find(path);
@@ -261,7 +261,7 @@ void Catalog::pumpMetadata() {
             pumpMetadata();
         },Qt::QueuedConnection);
     });
-    metadataTask_->setAutoDelete(false);io_.start(metadataTask_,0);
+    metadataTask_->setAutoDelete(false);workers_.start(metadataTask_,0);
 }
 void Catalog::clear() {
     epoch_->store(false);epoch_=std::make_shared<std::atomic_bool>(true);
@@ -292,7 +292,7 @@ void Catalog::endThumbnailFrame() {
 void Catalog::cancelThumbnail(const QString& path) {
     if(auto token=thumbnailJobs_.value(path))token->store(false);
     auto* task=thumbnailTasks_.value(path);
-    if(task&&io_.tryTake(task)) {
+    if(task&&workers_.tryTake(task)) {
         delete task;thumbnailTasks_.remove(path);thumbnailJobs_.remove(path);
         const int row=find(path);if(row>=0)records_[row].thumbnailPending=false;
     }
@@ -319,7 +319,7 @@ void Catalog::fitThumbnailCache() {
         cache_.insert(it.key(),new QImage(it.value()),std::max<qint64>(1,(it.value().sizeInBytes()+1023)/1024));
 }
 void Catalog::pumpThumbnails() {
-    // Six submitted thumbnail jobs total; content reads are serialized. Queued
+    // Six submitted thumbnail jobs total, with parallel decoding and serialized reads. Queued
     // jobs carry cancellation tokens so scrolling never decodes stale cells.
     for(const auto& path:visibleThumbnails_) {
         if(thumbnailJobs_.size()>=ThumbnailBudget)break;
@@ -335,7 +335,7 @@ void Catalog::pumpThumbnails() {
         auto* task=QRunnable::create([this,path,token,edge,collectMetadata] {
             QImage image;QString error;Record metadata;
             if(token->load()) {
-                try {image=readThumbnail(path,edge,[token]{return !token->load();},collectMetadata?&metadata:nullptr);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
+                try {image=readThumbnail(path,edge,[token]{return !token->load();},collectMetadata?&metadata:nullptr,&sourceReadMutex_);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
             }
             QMetaObject::invokeMethod(this,[this,path,token,image,error,metadata=std::move(metadata)]() mutable {
                 thumbnailJobs_.remove(path);
@@ -362,7 +362,7 @@ void Catalog::pumpThumbnails() {
         });
         // Own the runnable until completion, avoiding tryTake's documented
         // pointer-reuse race with automatically deleted runnables.
-        task->setAutoDelete(false);thumbnailTasks_.insert(path,task);io_.start(task,1);
+        task->setAutoDelete(false);thumbnailTasks_.insert(path,task);workers_.start(task,1);
     }
 }
 void Catalog::removePaths(const QStringList& paths) {
