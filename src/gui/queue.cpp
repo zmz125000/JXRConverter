@@ -19,18 +19,32 @@ int coreCount() { return std::max(1,QThread::idealThreadCount()); }
 int recommendedWorkers(int cores) {
     return std::max(1,cores/4);
 }
-QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const Options& options) {
+QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const Options& options,const OutputLayout& layout) {
     validate(options);QVector<Job> result;QSet<QString> outputs;
     const int target=int(options.target);
     const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl"};
+    static const QSet<QString> rawExtensions={"dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
+    auto pathKey=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
+    QSet<QString> sources;for(const auto& input:inputs)sources.insert(pathKey(input));
     for(const auto& input:inputs) {
-        const QString stem=QFileInfo(input).completeBaseName();
+        const QFileInfo source(input);QString stem=source.completeBaseName();
+        const bool raw=layout.raw_inputs.contains(input)||rawExtensions.contains(source.suffix().toLower());
+        if(raw && options.mode==Mode::process) {
+            if(options.raw.hdr_mode==RawHdrMode::boost)stem+="_hdr_boost";
+            else if(options.raw.hdr_mode==RawHdrMode::custom)stem+="_hdr_custom";
+        }
+        QString folder=layout.source_folder?source.absolutePath():directory;
+        if(folder.trimmed().isEmpty())throw std::invalid_argument("Choose an output folder");
+        if(layout.format_subfolders)folder=QDir(folder).filePath(suffixes[target].section('.',-1));
         QString filename=stem+"_"+suffixes[target];int n=2;
-        while(outputs.contains(filename.toCaseFolded()))filename=stem+"_"+QString::number(n++)+"_"+suffixes[target];
-        outputs.insert(filename.toCaseFolded());
-        const QString output=QDir(directory).absoluteFilePath(filename);
-        if(QFileInfo(input).absoluteFilePath()==output)throw std::invalid_argument("Output would replace an input file");
-        result.append({input,output,options});
+        auto outputPath=[&]{return QDir(folder).absoluteFilePath(filename);};
+        while(outputs.contains(pathKey(outputPath())) ||
+              (layout.rename_conflicts && (QFileInfo::exists(outputPath()) || sources.contains(pathKey(outputPath())))))
+            filename=stem+"_"+QString::number(n++)+"_"+suffixes[target];
+        const QString output=outputPath();outputs.insert(pathKey(output));
+        if(sources.contains(pathKey(output)))throw std::invalid_argument("Output would replace an input file");
+        Options snapshot=options;if(layout.rename_conflicts)snapshot.overwrite=false;
+        result.append({input,output,snapshot});
     }
     return result;
 }

@@ -784,3 +784,15 @@ int decode_raw(const uint8_t* data, size_t size, const jxrc::RawControls& contro
     w=result.w; h=result.h; gamut=result.gamut; pixels=std::move(result.pixels);
     return 0;
 }
+
+// Match LocalViewer's cover path: ask LibRaw for the camera's JPEG before
+// unpacking sensor pixels. This function is used only for display thumbnails.
+bool raw_jpeg_thumbnail(const uint8_t* data,size_t size,std::vector<uint8_t>& jpeg) {
+    auto raw=std::make_unique<LibRaw>();
+    if(raw->open_buffer(data,size)!=LIBRAW_SUCCESS || raw->unpack_thumb()!=LIBRAW_SUCCESS)return false;
+    int error=0;
+    std::unique_ptr<libraw_processed_image_t,decltype(&LibRaw::dcraw_clear_mem)> image(raw->dcraw_make_mem_thumb(&error),LibRaw::dcraw_clear_mem);
+    if(!image || error!=LIBRAW_SUCCESS || image->type!=LIBRAW_IMAGE_JPEG || image->data_size<2 || image->data_size>512u*1024*1024)return false;
+    if(image->data[0]!=255 || image->data[1]!=216)return false;
+    jpeg.assign(image->data,image->data+image->data_size);return true;
+}

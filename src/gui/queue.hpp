@@ -2,6 +2,7 @@
 #include "jxrc/converter.hpp"
 #include <QObject>
 #include <QHash>
+#include <QSet>
 #include <QThreadPool>
 #include <QString>
 #include <QVector>
@@ -11,7 +12,13 @@ namespace jxrc::gui {
 struct Job { QString input, output; Options options; };
 int coreCount();
 int recommendedWorkers(int cores);
-QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options);
+struct OutputLayout {
+    bool format_subfolders = false;
+    bool source_folder = false;
+    bool rename_conflicts = false;
+    QSet<QString> raw_inputs; // Catalog-identified RAW, including TIFF sensor containers.
+};
+QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options, const OutputLayout& layout = {});
 class ConversionQueue : public QObject {
     Q_OBJECT
 public:

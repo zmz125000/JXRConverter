@@ -1,5 +1,6 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
+#include "input_format.h"
 #include "regular_decode.h"
 #include "ultrahdr/jpegdecoderhelper.h"
 #include <avif/avif.h>
@@ -27,7 +28,7 @@ ImageInfo inspect(const std::filesystem::path& input) {
         out.hdr=out.gainmap;
         auto icc=source_jpeg_icc(bytes.data(),bytes.size());out.primaries=icc.empty()?"sRGB":"ICC";
         int orientation=source_orientation(bytes.data(),bytes.size(),0,nullptr);if(orientation>=5)std::swap(out.width,out.height);
-    } else if(bytes.size()>=12&&!std::memcmp(bytes.data()+4,"ftyp",4)) {
+    } else if(is_avif_input(bytes.data(),bytes.size())) {
         std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> dec(avifDecoderCreate(),avifDecoderDestroy);
         if(!dec)throw std::runtime_error("Cannot allocate AVIF inspector");
         dec->imageSizeLimit=80000000;

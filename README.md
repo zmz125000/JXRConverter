@@ -169,3 +169,10 @@ After committing the version and changes, push a matching release tag:
 git tag v0.1.1
 git push origin v0.1.1
 ```
+
+The output panel can create format subfolders (`avif/`, `jxl/`, `jpg/`), save
+beside each original image, and rename conflicting outputs with a number.
+These settings are persistent. Rename disables replacement of existing files.
+RAW outputs rendered with Boost highlights or Custom include `_hdr_boost` or
+`_hdr_custom` before the target suffix. RAW thumbnails prefer the camera's
+embedded JPEG, falling back to a reduced-size demosaic when it is unavailable.

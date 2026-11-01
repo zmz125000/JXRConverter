@@ -1,5 +1,6 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
+#include "input_format.h"
 #include "hdr_parallel.h"
 #include "regular_decode.h"
 namespace ultrahdr { unsigned int GetCPUCoreCount(); }
@@ -108,6 +109,14 @@ int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    // BMFF is a container, not an AVIF signature. Canon CR3 must reach LibRaw.
+    const std::vector<uint8_t> cr3_header={0,0,0,24,'f','t','y','p','c','r','x',' ',0,0,0,1,'c','r','x',' ','i','s','o','m'};
+    check(!is_avif_input(cr3_header.data(),cr3_header.size()),"CR3 routed to AVIF decoder");
+    auto avif_header=cr3_header;std::memcpy(avif_header.data()+8,"avif",4);std::memcpy(avif_header.data()+16,"avif",4);
+    check(is_avif_input(avif_header.data(),avif_header.size()),"AVIF major brand rejected");
+    std::memcpy(avif_header.data()+8,"mif1",4);
+    check(is_avif_input(avif_header.data(),avif_header.size()),"AVIF compatible brand rejected");
+    check(!is_avif_input(cr3_header.data(),8),"Truncated BMFF identified as AVIF");
     regular_images(dir);
     jxrc::validate({});
     { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }

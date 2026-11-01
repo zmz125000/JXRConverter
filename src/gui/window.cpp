@@ -216,7 +216,7 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return {mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
-        overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        formatFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
 void MainWindow::restoreSettings() {
@@ -286,14 +286,27 @@ QWidget* MainWindow::buildControls() {
     queuePanel_=new QWidget;auto* queueLayout=new QVBoxLayout(queuePanel_);queueLayout->setContentsMargins(14,0,14,10);queueLayout->setSpacing(8);
     auto* destination=new QGroupBox("Output queue");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
     auto* folderButtons=new QHBoxLayout;
-    auto* browse=new QPushButton("Choose folder…");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});folderButtons->addWidget(browse);
+    auto* browse=new QPushButton("Choose folder…");browse->setObjectName("chooseOutputFolder");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});folderButtons->addWidget(browse);
     auto* openOutput=new QPushButton("Open output folder");openOutput->setObjectName("openOutputFolder");folderButtons->addWidget(openOutput);destinationLayout->addLayout(folderButtons);
     connect(openOutput,&QPushButton::clicked,this,[this]{
-        const auto path=output_->text().trimmed();
+        QString path=output_->text().trimmed();
+        if(sourceFolder_->isChecked()) {
+            auto paths=selectedPaths();if(paths.isEmpty()&&proxy_->rowCount())paths.append(proxy_->index(0,0).data(Catalog::PathRole).toString());
+            if(paths.isEmpty()){QMessageBox::warning(this,"Cannot open output folder","Select an image to open its source folder.");return;}
+            path=QFileInfo(paths.first()).absolutePath();
+        }
         if(path.isEmpty()||!QDir().mkpath(path)){QMessageBox::warning(this,"Cannot open output folder","Choose a writable output folder.");return;}
         if(!QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(path).absolutePath())))QMessageBox::warning(this,"Cannot open output folder","The system file manager could not open this folder.");
     });
+    formatFolders_=check("Create format subfolders","formatSubfolders");destinationLayout->addWidget(formatFolders_);
+    formatFolders_->setToolTip("Group outputs by format: avif/, jxl/ and jpg/ inside the destination folder.");
+    sourceFolder_=check("Save to original folder","saveToSourceFolder");destinationLayout->addWidget(sourceFolder_);
+    sourceFolder_->setToolTip("Save beside each source image. Format subfolders, when enabled, are created there.");
+    renameConflicts_=check("Rename if conflict","renameConflicts");destinationLayout->addWidget(renameConflicts_);
+    renameConflicts_->setToolTip("Choose an unused numbered filename instead of replacing existing output files.");
     overwrite_=check("Replace existing output files","overwrite");destinationLayout->addWidget(overwrite_);
+    connect(sourceFolder_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
+    connect(renameConflicts_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
     const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
     selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert visible files");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue · finish active files");cancel_->setObjectName("cancelQueue");
@@ -316,7 +329,12 @@ void MainWindow::updateMode() {
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(!process&&selectedTargets().contains(Target::jxl));
     if(!transcode_->isEnabled())transcode_->setChecked(false);
-    updateCounts();
+    updateOutputSettings();updateCounts();
+}
+void MainWindow::updateOutputSettings() {
+    overwrite_->setEnabled(!renameConflicts_->isChecked());
+    output_->setEnabled(!sourceFolder_->isChecked());
+    findChild<QPushButton*>("chooseOutputFolder")->setEnabled(!sourceFolder_->isChecked());
 }
 QVector<Target> MainWindow::selectedTargets() const {
     QVector<Target> result;
@@ -331,7 +349,7 @@ Options MainWindow::options() const {
 Options MainWindow::optionsForTarget(Target target) const {
     Options o;o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=target;o.quality.preset=Preset(preset_->currentIndex());
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()?12:10;o.quality.downsize_gainmap=downsize_->isChecked();
-    o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isChecked();o.jpeg_transcoding=transcode_->isEnabled()&&transcode_->isChecked()&&target==Target::jxl;
+    o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isEnabled()&&transcode_->isChecked()&&target==Target::jxl;
     if(o.mode==Mode::process) {
         o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.shoulder=static_cast<float>(shoulder_->value());
         if(o.raw.hdr_mode!=RawHdrMode::source)o.raw.target_nits=static_cast<float>(nits_->value());
@@ -407,7 +425,7 @@ void MainWindow::convertFiles(bool selected) {
     if(paths.isEmpty()||queue_->busy())return;
     try {
         const auto targets=selectedTargets();if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
-        const QString directory=output_->text().trimmed();if(directory.isEmpty())throw std::invalid_argument("Choose an output folder");
+        const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         QMap<int,QStringList> inputsByTarget;
         for(const auto& path:paths) {
             const auto extension=QFileInfo(path).suffix().toLower();
@@ -423,9 +441,15 @@ void MainWindow::convertFiles(bool selected) {
                 auto& inputs=inputsByTarget[int(target)];if(!inputs.contains(path))inputs.append(path);
             }
         }
-        QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())));
+        OutputLayout layout;layout.format_subfolders=formatFolders_->isChecked();layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
+        for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.raw)layout.raw_inputs.insert(record.path);}
+        QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())),layout);
         if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");
-        if(!QDir().mkpath(directory))throw std::runtime_error("Cannot create output folder");
+        QSet<QString> inputs;for(const auto& path:paths)inputs.insert(QFileInfo(path).absoluteFilePath().toCaseFolded());
+        for(const auto& job:jobs) {
+            if(inputs.contains(QFileInfo(job.output).absoluteFilePath().toCaseFolded()))throw std::invalid_argument("Output would replace an input file");
+            if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
+        }
         queue_->start(std::move(jobs),workers_->value());updateCounts();
     } catch(const std::exception& e){QMessageBox::warning(this,"Cannot start conversion",QString::fromUtf8(e.what()));}
 }

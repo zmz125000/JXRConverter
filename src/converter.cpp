@@ -2,6 +2,7 @@
 #include "jxrc/version.hpp"
 #include "reader_pixels.h"
 #include "codec_api.h"
+#include "input_format.h"
 #include "regular_decode.h"
 #include "hdr_parallel.h"
 #include "linear_color_profile.h"
@@ -63,7 +64,7 @@ struct Staging {
 };
 int kind(const std::vector<uint8_t>& b) {
     if(b.size()>2&&b[0]==255&&b[1]==216)return 0;
-    if(b.size()>=12&&!std::memcmp(b.data()+4,"ftyp",4))return 1;
+    if(is_avif_input(b.data(),b.size()))return 1;
     if(b.size()>=2&&((b[0]==255&&b[1]==10)||(b.size()>=12&&!std::memcmp(b.data(),"\0\0\0\x0cJXL \r\n\x87\n",12))))return 3;
     if(b.size()>=4&&b[0]=='I'&&b[1]=='I'&&b[2]==0xbc&&b[3]==1)return 4;
     if(is_regular_image(b.data(),b.size()))return 6;
@@ -244,13 +245,24 @@ Preview preview(const std::filesystem::path& input,unsigned edge) {
         w=raster.width;h=raster.height;raster_orientation=raster.orientation;regular_to_linear(raster,linear,gamut);
     }
     else {
-        int cg=0;rc=decode_raw(bytes.data(),bytes.size(),RawControls{},false,edge,raw_pixels,w,h,cg);
-        gamut=cg==2?UHDR_CG_BT_2100:cg==1?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
-        if(rc==0){linear.resize(size_t(w)*h*4);std::memcpy(linear.data(),raw_pixels.data(),linear.size()*2);}
+        std::vector<uint8_t> jpeg;bool embedded=false;
+        if(raw_jpeg_thumbnail(bytes.data(),bytes.size(),jpeg)) {
+            try {
+                jpeg_linear(jpeg,linear,w,h,gamut,hdr);
+                const int orient=source_orientation(jpeg.data(),jpeg.size(),0,nullptr);
+                require(orient>=1 && orient<=8,"Invalid RAW thumbnail orientation");
+                raster_orientation=unsigned(orient);embedded=true;
+            } catch(const std::exception&) {linear.clear();w=h=0;}
+        }
+        if(!embedded) {
+            int cg=0;rc=decode_raw(bytes.data(),bytes.size(),RawControls{},false,edge,raw_pixels,w,h,cg);
+            gamut=cg==2?UHDR_CG_BT_2100:cg==1?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
+            if(rc==0){linear.resize(size_t(w)*h*4);std::memcpy(linear.data(),raw_pixels.data(),linear.size()*2);}
+        }
     }
     require(rc==0&&w&&h&&linear.size()==size_t(w)*h*4,"Thumbnail decode failed");
     scale_rgba_f16_max_edge(linear,w,h,edge);
-    const int orient=format==6?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,nullptr);
+    const int orient=(format==6||format==5)?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,nullptr);
     require(orient>=1&&orient<=8,"Unsupported thumbnail orientation/crop");
     Preview output;output.width=orient>=5?h:w;output.height=orient>=5?w:h;output.rgba.resize(size_t(w)*h*4);
     for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {

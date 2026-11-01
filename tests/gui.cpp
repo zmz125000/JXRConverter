@@ -158,6 +158,27 @@ private slots:
         QCOMPARE(done[1][0].toInt(),2);QCOMPARE(done[1][2].toInt(),4);QVERIFY(peak.load()<=2);QCOMPARE(invalidBudget.load(),0);
         QCOMPARE(recommendedWorkers(16),4);QCOMPARE(recommendedWorkers(7),1);QCOMPARE(recommendedWorkers(2),1);QCOMPARE(recommendedWorkers(0),1);
     }
+    void outputLayoutAndRawNames() {
+        const QString a=makeImage(root("layout/a"),"same.jpg",16,12,100),b=makeImage(root("layout/b"),"same.jpg",16,12,100);
+        jxrc::Options options;options.target=jxrc::Target::avif;options.overwrite=true;
+        OutputLayout layout;layout.source_folder=true;layout.format_subfolders=true;layout.rename_conflicts=true;
+        auto jobs=makeJobs({a,b},{},options,layout);QCOMPARE(jobs.size(),2);
+        QCOMPARE(QFileInfo(jobs[0].output).absolutePath(),QFileInfo(a).absolutePath()+"/avif");
+        QCOMPARE(QFileInfo(jobs[1].output).absolutePath(),QFileInfo(b).absolutePath()+"/avif");
+        QVERIFY(!jobs[0].options.overwrite);QVERIFY(!jobs[1].options.overwrite);
+        QDir().mkpath(QFileInfo(jobs[0].output).absolutePath());QFile existing(jobs[0].output);QVERIFY(existing.open(QIODevice::WriteOnly));existing.write("keep");existing.close();
+        const auto renamed=makeJobs({a,a},{},options,layout);
+        QVERIFY(renamed[0].output!=jobs[0].output);QVERIFY(renamed[0].output!=renamed[1].output);
+        QVERIFY(existing.open(QIODevice::ReadOnly));QCOMPARE(existing.readAll(),QByteArray("keep"));existing.close();
+        options.mode=jxrc::Mode::process;options.raw.hdr_mode=jxrc::RawHdrMode::boost;
+        const QString raw=QFileInfo(a).absolutePath()+"/sensor.nef";
+        auto rawJobs=makeJobs({raw,a},root("layout/output"),options);
+        QVERIFY(QFileInfo(rawJobs[0].output).fileName().contains("_hdr_boost_"));QVERIFY(!rawJobs[1].output.contains("_hdr_boost_"));
+        options.raw.hdr_mode=jxrc::RawHdrMode::custom;
+        QVERIFY(makeJobs({raw},root("layout/output"),options)[0].output.contains("_hdr_custom_"));
+        MainWindow window;auto* rename=window.findChild<QCheckBox*>("renameConflicts");auto* overwrite=window.findChild<QCheckBox*>("overwrite");
+        QVERIFY(rename && overwrite);rename->setChecked(true);QVERIFY(!overwrite->isEnabled());rename->setChecked(false);QVERIFY(overwrite->isEnabled());
+    }
     void outputCollisionAndActualQueue() {
         const QString a=makeImage(root("jobs/a"),"same.jpg",64,48,200),b=makeImage(root("jobs/b"),"same.jpg",64,48,400);
         const QString destination=root("jobs/output");QDir().mkpath(destination);jxrc::Options o;o.target=jxrc::Target::avif;
