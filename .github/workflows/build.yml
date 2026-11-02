@@ -22,7 +22,20 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJXRC_BUILD_GUI=ON -DJXRC_USE_SYSTEM_EXIV2=ON
       - name: Build
-        run: cmake --build build --target jxrconverter jxrc_gui_tests jxrconvert jxrc_tests -j 3
+        run: cmake --build build --target jxrconverter jxrconvert -j 3
+      - name: Package distro binaries (requires system Qt and Exiv2)
+        run: |
+          cmake --install build --prefix "$PWD/stage" --component Runtime
+          tar -czf JXRConverter-${{ matrix.os }}-distro.tar.gz -C stage .
+      - name: Upload distro binaries
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: JXRConverter-distro-${{ matrix.os }}
+          path: JXRConverter-${{ matrix.os }}-distro.tar.gz
+          if-no-files-found: error
+          retention-days: 14
+      - name: Build tests
+        run: cmake --build build --target jxrc_gui_tests jxrc_update_path_tests jxrc_tests -j 3
       - name: Test offscreen
         env:
           QT_QPA_PLATFORM: offscreen

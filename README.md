@@ -1,15 +1,52 @@
-# JXRConverter
+<h1 align="center">
+<img src="https://raw.githubusercontent.com/zmz125000/LocalViewer-art/refs/heads/master/JXRConverter.svg" width="200" alt="JXRConverter">
+<br>JXRConverter<br>
+  
+</h1>
+<p align="center">
+  <a href="https://github.com/zmz125000/JXRConverter/actions/workflows/release.yml">
+    <img src="https://github.com/zmz125000/JXRConverter/actions/workflows/release.yml/badge.svg" alt="Github Actions">
+  </a>
+  <a href="/LICENSE">
+    <img src="https://img.shields.io/github/license/zmz125000/JXRConverter" alt="LICENSE">
+  </a>
+  <a href="https://github.com/zmz125000/JXRConverter/releases">
+    <img src="https://img.shields.io/github/v/release/zmz125000/JXRConverter" alt="Release">
+  </a>
+  <a href="https://github.com/zmz125000/JXRConverter/issues">
+    <img src="https://img.shields.io/github/issues/zmz125000/JXRConverter" alt="Issues">
+  </a>
+</p>
+<p align="center">
+  <a href="https://github.com/zmz125000/JXRConverter/releases/latest">
+    <img src="https://img.shields.io/github/downloads/zmz125000/JXRConverter/latest/total?label=Latest%20Downloads&labelColor=27303D&color=0D1117&logo=github&logoColor=FFFFFF&style=flat" alt="Github Actions">
+  </a>
+  <a href="https://github.com/zmz125000/JXRConverter/releases">
+    <img src="https://img.shields.io/github/downloads/zmz125000/JXRConverter/total?label=Total%20Downloads&labelColor=27303D&color=0D1117&logo=github&logoColor=FFFFFF&style=flat" alt="LICENSE">
+  </a>
+</p>
+A C++17 image conversion library and CLI extracted from [LocalViewer](https://github.com/zmz125000/LocalViewer) .  
 
-A C++17 image conversion library and CLI extracted from [LocalViewer](https://github.com/zmz125000/LocalViewer). 
 
 Features:  
+
 1. Convert JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL PQ HDR.
 2. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
 3. Support auto color management, keeping source wide color gamut and color tag.
 4. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for SDR output.
-5. RAW images are processed and output as Linear HDR or PQ HDR with BT.2020 color.
+5. RAW images are processed and output as scRGB, Linear HDR or PQ HDR with BT.2020 color.
+6. Float32 high quality image processing.
+7. File listing with ultra fast thumbnails.
+8. HDR boost rendering for RAW images.
 
 See [port status](docs/port-status.md) for the supported scope and remaining work.
+
+<a href="https://github.com/zmz125000/JXRConverter/releases">
+<img alt="Get it on GitHub" src="https://github.com/zmz125000/LocalViewer-art/blob/master/get-it-on-github.svg" width="200px"/>
+</a>
+
+<img width="2232" height="1561" alt="JXRConverter screenshot" src="https://github.com/user-attachments/assets/a9cdc1e5-86de-4592-8fa6-4db33049ab23" />
+
 
 ## Build
 
