@@ -3,6 +3,8 @@
 #include "input_format.h"
 #include "hdr_parallel.h"
 #include "regular_decode.h"
+#include "exif_metadata.h"
+#include <exiv2/exiv2.hpp>
 namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 #include <jxl/decode.h>
 #include <jxl/decode_cxx.h>
@@ -17,6 +19,7 @@ namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 #include <vector>
 
 #include "regular_fixtures.hpp"
+#include "exif_jxr_fixture.hpp"
 
 namespace fs=std::filesystem;
 static void check(bool ok,const char* text) {if(!ok)throw std::runtime_error(text);}
@@ -390,10 +393,85 @@ static void hdr_png(const fs::path& dir) {
     fails([&]{decode_regular(bad.data(),bad.size());}); // CRC, not just chunk contents.
 }
 
+static Exiv2::ExifData photographic_fixture() {
+    Exiv2::ExifData exif;
+    exif["Exif.Image.Make"]="JXRC";exif["Exif.Image.Model"]="Test Camera";
+    exif["Exif.Image.Artist"]="Photographer";exif["Exif.Image.Orientation"]=uint16_t(6);
+    exif["Exif.Photo.DateTimeOriginal"]="2025:06:12 14:30:00";
+    exif["Exif.Photo.ExposureTime"]="1/125";exif["Exif.Photo.FNumber"]="28/10";
+    exif["Exif.Photo.ISOSpeedRatings"]=uint16_t(400);exif["Exif.Photo.LensModel"]="Prime 50";
+    exif["Exif.GPSInfo.GPSLatitudeRef"]="N";exif["Exif.GPSInfo.GPSLatitude"]="25/1 2/1 0/1";
+    exif["Exif.GPSInfo.GPSLongitudeRef"]="E";exif["Exif.GPSInfo.GPSLongitude"]="121/1 30/1 0/1";
+    return exif;
+}
+static void exif_retention(const fs::path& dir) {
+    std::vector<fs::path> sources;
+    for(const auto& item:std::vector<std::pair<const char*,std::vector<uint8_t>>>{{"tiff",raster_tiff},{"png",raster_png8},{"webp",raster_webp}}) {
+        const auto path=dir/(std::string("photo.")+item.first);write(path,item.second);sources.push_back(path);
+    }
+    sources.push_back(dir/"photo.jpg");encode(sources.back(),0,false);
+    sources.push_back(dir/"photo.dng");dng(sources.back());
+    for(const auto& path:sources) {
+        auto image=Exiv2::ImageFactory::open(path.string());image->readMetadata();
+        auto metadata=image->exifData();for(const auto& tag:photographic_fixture())metadata.add(tag);
+        image->setExifData(metadata);image->writeMetadata();
+    }
+    for(auto target:{jxrc::Target::avif,jxrc::Target::jxl}) {
+        jxrc::Options options;options.target=target;options.keep_exif=true;
+        const auto path=dir/(target==jxrc::Target::avif?"photo.avif":"photo.jxl");jxrc::convert(dir/"photo.jpg",path,options);sources.push_back(path);
+    }
+    auto exif=photographic_fixture();Exiv2::Blob tiff;Exiv2::ExifParser::encode(tiff,Exiv2::littleEndian,exif);
+    // Exercise XR's different TIFF magic and offset-based EXIF/GPS IFDs.
+    auto xr=tiff;xr[2]=0xbc;xr[3]=1;
+    auto extracted=portable_source_exif(xr.data(),xr.size(),64,48);
+    Exiv2::ExifData xrExif;Exiv2::ExifParser::decode(xrExif,extracted.data(),extracted.size());
+    check(xrExif["Exif.Photo.DateTimeOriginal"].toString()=="2025:06:12 14:30:00","JXR photographic directory lost");
+    check(xrExif.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLatitude"))!=xrExif.end(),"JXR GPS directory lost");
+    const auto xrPath=dir/"photo.jxr";write_jxr_exif_fixture(xrPath,tiff);sources.push_back(xrPath);
+    // A real HDR source catches the Ultra HDR encoder's missing EXIF wiring.
+    StillEncodeQuality quality(1);quality.exif=tiff.data();quality.exif_size=tiff.size();
+    auto pixels=fixture();const auto hdr=dir/"photo-hdr.jxl";
+    check(encode_still_export(reinterpret_cast<const uint8_t*>(pixels.data()),pixels.size()*2,64,48,true,2,3,false,hdr.string().c_str(),0,quality,false)==0,"HDR EXIF fixture encode");sources.push_back(hdr);
+    for(const auto& input:sources) {
+        jxrc::ConversionSession session(input);
+        for(int target=0;target<=8;++target) {
+            // Ultra HDR gain maps need larger fixtures; the JPEG/RAW/HDR JXL
+            // sources below exercise both gain-map output encoders.
+            if((target==1||target==6)&&jxrc::inspect(input).width<8)continue;
+            jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target(target);options.keep_exif=true;options.max_edge=32;
+            std::cout<<"EXIF "<<input.filename()<<" target "<<target<<std::endl;
+            const auto path=dir/(input.filename().string()+"-"+std::to_string(target));const auto result=session.convert(path,options);
+            if(input==hdr&&target==1)check(jxrc::inspect(path).gainmap,"HDR EXIF test used SDR JPEG fallback");
+            const auto data=bytes(path);auto output=Exiv2::ImageFactory::open(data.data(),data.size());output->readMetadata();const auto& tags=output->exifData();
+            auto value=[&](const char* key){const auto it=tags.findKey(Exiv2::ExifKey(key));check(it!=tags.end(),key);return it->toString();};
+            check(value("Exif.Image.Make")=="JXRC","EXIF camera make lost");
+            check(value("Exif.Photo.DateTimeOriginal")=="2025:06:12 14:30:00","EXIF date lost");
+            check(value("Exif.Photo.LensModel")=="Prime 50","EXIF lens lost");
+            check(value("Exif.Image.Orientation")=="1","Processed EXIF orientation stale");
+            check(value("Exif.Photo.PixelXDimension")==std::to_string(result.width),"EXIF output width stale");
+            check(value("Exif.Photo.PixelYDimension")==std::to_string(result.height),"EXIF output height stale");
+            value("Exif.GPSInfo.GPSLatitude");value("Exif.Photo.ExposureTime");
+            check(tags.findKey(Exiv2::ExifKey("Exif.Image.StripOffsets"))==tags.end(),"Raster offsets copied into EXIF");
+            options.keep_exif=false;session.convert(dir/(path.filename().string()+"-stripped"),options);
+            const auto stripped=bytes(dir/(path.filename().string()+"-stripped"));
+            if(stripped.size()>=2&&stripped[0]==255&&stripped[1]==10)continue; // Raw JXL codestream has no metadata boxes.
+            auto noExif=Exiv2::ImageFactory::open(stripped.data(),stripped.size());noExif->readMetadata();
+            check(noExif->exifData().findKey(Exiv2::ExifKey("Exif.Image.Make"))==noExif->exifData().end(),"Keep EXIF off retained photography");
+        }
+    }
+    // This TIFF fixture has transparency, which preservation cannot put in JPEG.
+    for(auto target:{jxrc::Target::avif,jxrc::Target::jxl}) {
+        jxrc::Options options;options.target=target;options.keep_exif=true;
+        const auto path=dir/("preserved-tiff-"+std::to_string(int(target)));jxrc::convert(sources.front(),path,options);
+        const auto data=bytes(path);auto image=Exiv2::ImageFactory::open(data.data(),data.size());image->readMetadata();
+        check(image->exifData()["Exif.Image.Make"].toString()=="JXRC","Preserved TIFF EXIF lost");
+    }
+}
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
     // BMFF is a container, not an AVIF signature. Canon CR3 must reach LibRaw.
     const std::vector<uint8_t> cr3_header={0,0,0,24,'f','t','y','p','c','r','x',' ',0,0,0,1,'c','r','x',' ','i','s','o','m'};

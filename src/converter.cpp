@@ -5,6 +5,7 @@
 #include "working_pixels.h"
 #include "input_format.h"
 #include "regular_decode.h"
+#include "exif_metadata.h"
 #include "hdr_parallel.h"
 #include "linear_color_profile.h"
 #include "skcms.h"
@@ -251,6 +252,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         } else {
             if(format==6) {
                 if(!regular)regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
+                if(o.keep_exif&&regular->format=="TIFF")regular->exif=portable_source_exif(bytes.data(),bytes.size(),regular->width,regular->height,regular->orientation);
                 rc=convert_regular_source(*regular,target,path.c_str(),q,o.keep_exif,info);
             } else rc=convert_source(bytes.data(),bytes.size(),format,target,path.c_str(),q,o.keep_exif,info);
             require(rc>0 || (rc==0&&direct_sdr),"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
@@ -287,9 +289,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             }
             else if(format==6) {
                 const auto raster=regular?std::move(*regular):decode_regular(bytes.data(),bytes.size());
-                require(!o.keep_exif || raster.format!="TIFF","TIFF EXIF retention is not implemented yet");
                 w=raster.width;h=raster.height;raster_orientation=raster.orientation;cache.bits=raster.bits;
-                if(o.keep_exif)exif=raster.exif;
+                if(o.keep_exif)exif=raster.format=="TIFF"?portable_source_exif(bytes.data(),bytes.size(),w,h,raster.orientation):raster.exif;
                 regular_to_linear(raster,linear,gamut);
             }
             else {
@@ -301,7 +302,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             require(rc==0&&w&&h&&uint64_t(w)*h<=80000000&&
                     linear.size()==size_t(w)*h*4,
                     "Image decode failed (codec "+std::to_string(rc)+")");
-            require(!(o.keep_exif&&(format==4||format==5)),"EXIF retention for processed JXR/RAW is not implemented yet");
+            if(o.keep_exif&&(format==4||format==5))exif=portable_source_exif(bytes.data(),bytes.size(),w,h);
             // JXL decoder emits a 4-byte box offset before TIFF; normalize orientation after decode.
             if(format==3&&!exif.empty()) {
                 require(exif.size()>=4,"Invalid JXL EXIF");
@@ -337,7 +338,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             if(format!=5&&o.max_edge)scale_rgba_f32_max_edge(linear,w,h,o.max_edge);
             cache.previous=o;cache.ready=true;
         }
-        q.exif=exif.data();q.exif_size=exif.size();q.source_bits=cache.bits;
+        auto output_exif=exif;prepare_export_exif(output_exif,w,h);
+        q.exif=output_exif.data();q.exif_size=output_exif.size();q.source_bits=cache.bits;
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
         int rc;
         if(cache.scrgb) {

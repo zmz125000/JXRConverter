@@ -25,7 +25,8 @@ ctest --test-dir build --output-on-failure
 
 ## Desktop GUI
 
-The optional desktop application uses Qt 6 Widgets and Exiv2. Exiv2 0.28.9 is
+The optional desktop application uses Qt 6 Widgets. The native converter and GUI
+use Exiv2 for photographic metadata. Exiv2 0.28.9 is
 built from source by default. Qt 6.12.0 is covered by CI; installed Qt 6.4+
 remains supported. On Ubuntu:
 

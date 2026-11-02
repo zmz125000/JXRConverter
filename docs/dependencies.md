@@ -32,7 +32,8 @@ its built-in codecs and zlib/Deflate; optional JPEG, JBIG, LZMA, Zstd, WebP and
 LERC TIFF compression integrations are disabled. Dependency licenses are
 included in the runtime package, while development libraries are excluded.
 
-The normal desktop build fetches Exiv2. `JXRC_USE_SYSTEM_EXIV2=ON` retains support
+The native library/CLI and desktop build fetch Exiv2 for photographic EXIF
+reading and serialization. `JXRC_USE_SYSTEM_EXIV2=ON` retains support
 for distribution packages, including Ubuntu 24.04's Exiv2 0.27.6. Qt's supported
 minimum remains 6.4; the current-release CI job installs Qt 6.12.0 and its ICU
 runtime, while a separate job exercises Ubuntu's older Qt and Exiv2 packages.

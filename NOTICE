@@ -17,8 +17,9 @@ libjxl and skcms (BSD/Apache-2.0 and accompanying dependency notices), libavif
 and patent license), libtiff (libtiff license), and stb_image (MIT/public domain).
 Consult each dependency's license files when distributing binaries and source.
 
-The optional Qt desktop links Qt 6 Widgets (LGPL/GPL/commercial licensing) and
-Exiv2 (GPL and accompanying dependency notices). The pinned Ultra HDR CPU-count
+The native converter links Exiv2 (GPL and accompanying dependency notices) for
+photographic metadata. The optional desktop links Qt 6 Widgets
+(LGPL/GPL/commercial licensing). The pinned Ultra HDR CPU-count
 helper is adapted in a generated build-tree copy to honor per-conversion thread
 budgets; its original licenses and notices are retained.
 

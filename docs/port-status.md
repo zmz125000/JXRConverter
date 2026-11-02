@@ -13,7 +13,7 @@ The reference is LocalViewer commit `e74a70c2811a1e6a80841ea975ba171e219cf306`.
 | JXL distance, JPEG/AVIF quality, AVIF 10/12 bit | Ported |
 | Gain-map downsize | Ported |
 | Extended BT.2020 JXL processing | Ported |
-| EXIF retention | Preserve paths; processed JPEG/AVIF/JXL |
+| EXIF retention | JPEG/AVIF/JXL/PNG/WebP/TIFF/RAW/JXR inputs; JPEG/JXL/AVIF outputs, including HDR |
 | RAW demosaic and camera look | Ported via LibRaw |
 | RAW exposure, WB presets, Kelvin | Ported |
 | RAW highlight stops, shoulder, HDR ceiling | Ported |
@@ -71,13 +71,19 @@ PNG/WebP EXIF and raster orientation are supported. Untagged rasters assume sRGB
 
 TIFF supports unsigned 8/16-bit RGB and black/white grayscale, contiguous or planar,
 strips or tiles, opaque or explicitly straight alpha. Associated alpha, palette,
-YCbCr/CMYK, floating samples, multipage TIFF and TIFF photographic EXIF retention
-are rejected. TIFF-based sensor files continue through LibRaw. Animated PNG/WebP/GIF
+YCbCr/CMYK, floating samples and multipage TIFF are rejected. TIFF-based sensor files continue through LibRaw. Animated PNG/WebP/GIF
 and unsupported PNG CICP encodings are rejected. Calibrated BMP requires an embedded
 ICC profile; external linked profiles are rejected. Thumbnails use the same native
 pipeline, with sRGB conversion only for display.
 
-Processed RAW/JXR EXIF retention is explicitly rejected. Preservation can retain
+Keep EXIF supports photographic metadata from TIFF, RAW and JXR as well as JPEG,
+PNG, WebP, AVIF and JXL. Processed output retains camera, capture date, exposure,
+attribution and GPS tags; orientation and dimensions describe the exported pixels.
+Maker notes, source raster offsets, embedded thumbnails and source color tags are
+not transplanted. Files without readable EXIF still convert. JPEG gain-map,
+JXL linear/PQ/scRGB, and AVIF PQ/gain-map targets retain the same photographic tags.
+
+Preservation can retain
 custom source profiles, but processing supports the color transforms in the
 ported native code. File input is capped at 512 MiB and output pixels at 80M;
 these are limits, not a strict peak-memory guarantee. Conversion is synchronous;

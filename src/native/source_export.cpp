@@ -699,8 +699,6 @@ std::vector<uint8_t> source_jpeg_icc(const uint8_t* data,size_t size) { return j
 
 int convert_regular_source(const RegularImage& raster, int target, const char* path,
                            StillEncodeQuality quality, bool keep_exif, int* info) {
-    // TIFF photographic EXIF needs a separate IFD serializer; never copy raster offsets.
-    if(keep_exif && raster.format=="TIFF")throw std::runtime_error("TIFF EXIF retention is not implemented yet");
     std::vector<uint8_t> exif=keep_exif?raster.exif:std::vector<uint8_t>{};
     if(exif.empty())exif=orientation_exif(raster.orientation);
     quality.exif=exif.data();quality.exif_size=exif.size();
