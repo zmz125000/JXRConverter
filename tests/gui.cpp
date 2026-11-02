@@ -26,6 +26,8 @@
 #include <QStandardPaths>
 #include <QStandardItemModel>
 #include <QScrollBar>
+#include <QScrollArea>
+#include <QGroupBox>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QDateEdit>
@@ -303,8 +305,8 @@ private slots:
         QTRY_VERIFY(list.visualRect(model.index(2,0)).top()>list.visualRect(model.index(0,0)).top());
         const int unused=list.viewport()->width()-list.visualRect(model.index(1,0)).right()-1;
         QVERIFY(unused>=1&&unused<=2);
-        const int squareHeight=list.gridSize().height();list.setPresentation(true,200,true);
-        QVERIFY(list.gridSize().height()<squareHeight);QVERIFY(delegate.wide);
+        const int squareHeight=list.gridSize().height();list.setPresentation(true,200,16.0/9);
+        QVERIFY(list.gridSize().height()<squareHeight);QCOMPARE(delegate.aspect,16.0/9);
         list.setPresentation(false,100);auto* bar=list.verticalScrollBar();QTRY_VERIFY(bar->maximum()>200);bar->setSingleStep(40);bar->setValue(0);
         auto wheel=[&]{const QPointF point(50,50);QWheelEvent event(point,list.viewport()->mapToGlobal(point.toPoint()),QPoint(),QPoint(0,-120),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(list.viewport(),&event);};
         wheel();QCOMPARE(bar->value(),qRound(QApplication::wheelScrollLines()*40/2.0));
@@ -322,7 +324,7 @@ private slots:
         const QString directory=root("views");makeImage(directory,"one.jpg",160,80,100);makeImage(directory,"two.jpg",160,80,200);makeImage(directory,"three.jpg",160,80,300);
         MainWindow window;window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));window.addPaths({directory});QTRY_COMPARE(window.catalog()->rowCount(),3);
         auto* list=window.findChild<FileListView*>("fileList");auto* modes=window.findChild<QButtonGroup*>("viewMode");auto* slider=window.findChild<QSlider*>("thumbnailSize");QVERIFY(list&&modes&&slider);QCOMPARE(slider->value(),200);
-        QVERIFY(window.findChild<QCheckBox*>("smoothScrolling"));QVERIFY(window.findChild<QPushButton*>("thumbnailAspect"));
+        QVERIFY(window.findChild<QCheckBox*>("smoothScrolling"));QVERIFY(window.findChild<QToolButton*>("thumbnailAspect"));
         QTest::qWait(120);window.grab().save(QDir::tempPath()+"/jxrc-desktop-test.png");
         modes->button(0)->click();slider->setValue(100);QTRY_VERIFY(list->visualRect(window.filterModel()->index(2,0)).isValid());
         QTest::mouseClick(list->viewport(),Qt::LeftButton,Qt::NoModifier,list->visualRect(window.filterModel()->index(0,0)).center());
@@ -342,14 +344,15 @@ private slots:
         window.grab().save(QDir::tempPath()+"/jxrc-desktop-test.png");
     }
     void libraryAspectAndSearchReset() {
+        appSettings().clear();
         const auto directory=root("wide-library");
         QStringList files;
         for(const auto& name:{"alpha.jpg","beta.jpg","gamma.jpg"})files<<makeImage(directory,name,160,90,100);
         MainWindow window;window.show();QVERIFY(QTest::qWaitForWindowExposed(&window));
-        auto* aspect=window.findChild<QPushButton*>("thumbnailAspect");QVERIFY(aspect);aspect->setChecked(false);QCOMPARE(aspect->text(),QString("1:1"));
+        auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");QVERIFY(aspect);aspect->menu()->actions()[2]->trigger();QCOMPARE(aspect->text(),QString("1:1"));
         window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),3);QTRY_VERIFY(inspected(*window.catalog()));
-        QTRY_VERIFY(aspect->isChecked());QCOMPARE(aspect->text(),QString("16:9"));
-        aspect->setChecked(false);window.catalog()->setStatus(files.first(),"Ready");QVERIFY(!aspect->isChecked());
+        QTRY_COMPARE(aspect->text(),QString("16:9"));
+        window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);aspect->menu()->actions()[2]->trigger();window.catalog()->setStatus(files.first(),"Ready");QCOMPARE(aspect->text(),QString("1:1"));
 
         auto* search=window.findChild<QLineEdit*>("search");auto* instant=window.findChild<QLineEdit*>("instantFilter");QVERIFY(search&&instant);
         search->setText("alpha");QTest::keyClick(search,Qt::Key_Return);QCOMPARE(window.filterModel()->rowCount(),1);
@@ -359,8 +362,8 @@ private slots:
         QVERIFY(window.filterModel()->index(0,0).data().toString().contains("beta"));
         instant->clear();QCOMPARE(window.filterModel()->rowCount(),3);
 
-        // Extension-based JXR detection applies to subsequent imports too.
-        const auto alias=directory+"/added.JXR";QVERIFY(QFile::copy(files.first(),alias));window.addPaths({alias});QTRY_VERIFY(aspect->isChecked());
+        // Auto off also prevents extension-based changes on subsequent imports.
+        const auto alias=directory+"/added.JXR";QVERIFY(QFile::copy(files.first(),alias));window.addPaths({alias});QCOMPARE(aspect->text(),QString("1:1"));
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(true);QTest::qWait(30);
         for(const auto& name:{"minImageEdge","minMegapixels"}) {
             auto* input=window.findChild<QAbstractSpinBox*>(name);QVERIFY(input);
@@ -370,9 +373,45 @@ private slots:
         window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
     }
+    void logClearAndPanelWidths() {
+        appSettings().clear();MainWindow window;window.show();
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");auto* conversion=window.findChild<QScrollArea*>("conversionScroll");auto* output=window.findChild<QScrollArea*>("outputQueueScroll");
+        auto* formats=window.findChild<QGroupBox*>("outputFormats");auto* destination=window.findChild<QGroupBox*>("outputDestination");
+        QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
+        tabs->setCurrentIndex(2);QCOMPARE(tabs->tabText(2),QString("Log"));auto* log=window.findChild<QPlainTextEdit*>("outputLog");auto* clear=window.findChild<QPushButton*>("clearLog");
+        QVERIFY(tabs->widget(2)->isAncestorOf(clear));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(2)->width()/2);
+        window.resize(1600,850);QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
+    }
+    void aspectRatioMenuAndAutoSampling() {
+        appSettings().clear();MainWindow window;window.show();auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");
+        QVERIFY(automatic->isChecked());QCOMPARE(aspect->popupMode(),QToolButton::InstantPopup);QCOMPARE(aspect->menu()->actions().size(),5);
+        const QStringList names={"16:9","4:3","1:1","9:16 (portrait)","3:4 (portrait)"};const double ratios[]={16.0/9,4.0/3,1,9.0/16,3.0/4};
+        auto* view=window.findChild<FileListView*>();automatic->setChecked(false);
+        for(int i=0;i<5;++i){auto* action=aspect->menu()->actions()[i];QCOMPARE(action->text(),names[i]);action->trigger();auto* delegate=dynamic_cast<ThumbnailDelegate*>(view->itemDelegate());QCOMPARE(delegate->aspect,ratios[i]);QCOMPARE(view->gridSize().height(),qRound(delegate->edge/ratios[i])+94);}
+        QStringList files;for(int i=0;i<3;++i)files.append(makeImage(root("auto-four-three"),QString::number(i)+".jpg",120,90,100));
+        window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),3);QTRY_VERIFY(inspected(*window.catalog()));QTest::qWait(70);QCOMPARE(aspect->text(),QString("3:4"));
+        automatic->setChecked(true);QTRY_COMPARE(aspect->text(),QString("4:3"));
+        window.catalog()->clear();QStringList mixed{makeImage(root("mixed-ar"),"a.jpg",160,90,100),makeImage(root("mixed-ar"),"b.jpg",120,90,100),makeImage(root("mixed-ar"),"c.jpg",90,120,100)};
+        window.addPaths(mixed);QTRY_COMPARE(window.catalog()->rowCount(),3);QTRY_VERIFY(inspected(*window.catalog()));QTRY_COMPARE(aspect->text(),QString("1:1"));
+        // Auto off stops metadata work requested only for the initial sample.
+        Catalog model;model.setBackgroundMetadata(false);model.setAspectSampling(false);model.addPaths(files);QTRY_COMPARE(model.rowCount(),3);model.setBackgroundMetadata(false);QTest::qWait(50);QCOMPARE(model.metadataJobCount(),0);QVERIFY(!model.record(0).inspected);
+        model.setAspectSampling(true);QTRY_VERIFY(inspected(model));
+    }
+    void viewportAspectSamplingAndAutoPersistence() {
+        appSettings().clear();QStringList files;const auto directory=root("viewport-ar");
+        for(int i=0;i<30;++i)files.append(makeImage(directory,QString("%1.jpg").arg(i,2,10,QChar('0')),i<15?160:90,i<15?90:160,100));
+        {
+            MainWindow window;window.resize(1400,760);window.show();window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),30);
+            auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");auto* view=window.findChild<FileListView*>();QTRY_COMPARE(aspect->text(),QString("16:9"));
+            view->scrollTo(window.filterModel()->index(27,0),QAbstractItemView::PositionAtTop);QTRY_COMPARE(aspect->text(),QString("9:16"));
+            const auto row=view->firstVisibleRow();QVERIFY(!row.isEmpty());for(const auto& index:row)QVERIFY(index.row()>=15);
+            automatic->setChecked(false);aspect->menu()->actions()[4]->trigger();view->verticalScrollBar()->setValue(0);QTest::qWait(100);QCOMPARE(aspect->text(),QString("3:4"));
+        }
+        MainWindow restored;restored.show();QVERIFY(!restored.findChild<QCheckBox*>("autoThumbnailAspect")->isChecked());QCOMPARE(restored.findChild<QToolButton*>("thumbnailAspect")->text(),QString("3:4"));
+    }
     void outputLogRawResetAndUpdateSchedule() {
         appSettings().clear();MainWindow window;window.show();
-        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");QCOMPARE(tabs->tabText(2),QString("Output"));
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");QCOMPARE(tabs->tabText(2),QString("Log"));
         auto* output=window.findChild<QPlainTextEdit*>("outputLog");QVERIFY(output->isReadOnly());QCOMPARE(output->maximumBlockCount(),5000);
         std::fputs("Native stdout marker\n",stdout);std::fflush(stdout);std::fputs("Native stderr marker\n",stderr);std::fflush(stderr);qWarning("Qt warning marker");
         QTRY_VERIFY(output->toPlainText().contains("Native stdout marker"));QTRY_VERIFY(output->toPlainText().contains("Native stderr marker"));QTRY_VERIFY(output->toPlainText().contains("Qt warning marker"));

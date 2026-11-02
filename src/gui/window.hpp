@@ -80,6 +80,8 @@ private:
     void updateBackgroundMetadata();
     void updatePresentation();
     void updateAutoThumbnailAspect();
+    void requestAspectSample(bool viewport);
+    void setThumbnailAspect(int index);
     void updateCounts();
     void showMetadata();
     void convertFiles(bool selected);
@@ -106,16 +108,18 @@ private:
     QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_;
     QDoubleSpinBox *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
-    QCheckBox *smoothScrolling_, *loadFolder_, *loadFiles_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *dateFolders_, *jobFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
+    QCheckBox *autoAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *dateFolders_, *jobFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
-    QPushButton *thumbnailAspect_, *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_;
+    QPushButton *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_;
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit *inspector_, *outputLog_;
     QTimer* updateTimer_;
     QTimer *jobHover_, *jobSaveTimer_;
     QMenu* jobMenu_;
-    QToolButton* jobButton_;
+    QToolButton *jobButton_, *thumbnailAspect_;
+    QTimer* aspectTimer_;
+    int aspectIndex_ = 2;
     QPushButton* running_;
     QProgressBar* progress_;
     QStringList recentFolders_, recentFiles_, lastFiles_;
@@ -133,7 +137,7 @@ private:
     int selectionModelChanges_ = 0;
     bool syncingSelection_ = false, bulkSelecting_ = false;
     bool closeWhenIdle_ = false;
-    bool thumbnailAspectSampleChecked_ = false;
+    bool aspectSamplePending_ = false, aspectViewportSample_ = false, changingAspect_ = false;
     Qt::SortOrder sortOrder_ = Qt::AscendingOrder;
 };
 }

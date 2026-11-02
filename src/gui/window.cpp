@@ -23,6 +23,8 @@
 #include <QMouseEvent>
 #include <QKeyEvent>
 #include <QAction>
+#include <QActionGroup>
+#include <QPersistentModelIndex>
 #include <QApplication>
 #include <QAbstractSpinBox>
 #include <QCheckBox>
@@ -74,6 +76,15 @@ public:
     ToolbarSeparator(){setFixedWidth(8);setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Expanding);}
 protected:
     void paintEvent(QPaintEvent*) override {QStyleOption option;option.initFrom(this);option.state|=QStyle::State_Horizontal;QPainter painter(this);style()->drawPrimitive(QStyle::PE_IndicatorToolBarSeparator,&option,&painter,this);}
+};
+const QStringList aspectNames={"16:9","4:3","1:1","9:16 (portrait)","3:4 (portrait)"};
+const double aspectRatios[]={16.0/9,4.0/3,1,9.0/16,3.0/4};
+class WidthMatchedScrollArea : public QScrollArea {
+    QWidget* reference_;
+public:
+    explicit WidthMatchedScrollArea(QWidget* reference):reference_(reference){reference->installEventFilter(this);setFixedWidth(reference->width());}
+protected:
+    bool eventFilter(QObject* object,QEvent* event) override {if(object==reference_&&event->type()==QEvent::Resize)setFixedWidth(reference_->width());return QScrollArea::eventFilter(object,event);}
 };
 QComboBox* combo(const QStringList& values,const char* name,QWidget* parent=nullptr) {auto* w=new QComboBox(parent);w->addItems(values);w->setObjectName(name);return w;}
 QSpinBox* spin(int low,int high,int initial,const char* name) {auto* w=new QSpinBox;w->setRange(low,high);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
@@ -140,8 +151,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* direction=new QPushButton("Ascending");direction->setObjectName("sortDirection");viewBar->addWidget(new QLabel("Sort"));viewBar->addWidget(sort_);viewBar->addWidget(direction);viewBar->addStretch();
     smoothScrolling_=new QCheckBox("Smooth scrolling");smoothScrolling_->setObjectName("smoothScrolling");
     smoothScrolling_->setToolTip("Animate scrolling in the image grid, list and details views.");viewBar->addWidget(smoothScrolling_);
-    thumbnailAspect_=new QPushButton;thumbnailAspect_->setObjectName("thumbnailAspect");thumbnailAspect_->setCheckable(true);
-    thumbnailAspect_->setToolTip("Toggle thumbnail cells between square and 16:9. Images retain their original proportions.");viewBar->addWidget(thumbnailAspect_);
+    thumbnailAspect_=new QToolButton;thumbnailAspect_->setObjectName("thumbnailAspect");thumbnailAspect_->setPopupMode(QToolButton::InstantPopup);thumbnailAspect_->setText("1:1");
+    auto* aspectMenu=new QMenu(thumbnailAspect_);thumbnailAspect_->setMenu(aspectMenu);auto* aspectActions=new QActionGroup(this);aspectActions->setExclusive(true);
+    for(int i=0;i<aspectNames.size();++i){auto* action=aspectMenu->addAction(aspectNames[i]);action->setData(i);action->setCheckable(true);action->setChecked(i==aspectIndex_);aspectActions->addAction(action);connect(action,&QAction::triggered,this,[this,i]{setThumbnailAspect(i);});}
+    thumbnailAspect_->setToolTip("Thumbnail cell aspect ratio; images retain their original proportions");viewBar->addWidget(thumbnailAspect_);
+    autoAspect_=check("Auto","autoThumbnailAspect",true);autoAspect_->setToolTip("Sample the first three images on import, then up to three images in the viewport’s first row when scrolling. Mixed ratios use 1:1.");viewBar->addWidget(autoAspect_);
+    aspectTimer_=new QTimer(this);aspectTimer_->setSingleShot(true);aspectTimer_->setInterval(50);connect(aspectTimer_,&QTimer::timeout,this,&MainWindow::updateAutoThumbnailAspect);
     thumbnailFit_=new QPushButton("Fit");thumbnailFit_->setObjectName("thumbnailFit");thumbnailFit_->setCheckable(true);
     thumbnailFit_->setToolTip("Fit shows the whole image. Fill crops the image to fill its thumbnail cell. Click to switch.");viewBar->addWidget(thumbnailFit_);
     viewBar->addWidget(new QLabel("Minimum size"));
@@ -178,10 +193,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     clear_=new QPushButton("Clear");clear_->setObjectName("clearLibrary");actionsLayout->addWidget(clear_);connect(clear_,&QPushButton::clicked,this,&MainWindow::clearCurrentTab);auto* footerScroll=new QScrollArea;footerScroll->setObjectName("libraryFooterScroll");footerScroll->setFrameShape(QFrame::NoFrame);footerScroll->setWidgetResizable(true);footerScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);footerScroll->setWidget(libraryActions);footerScroll->setFixedHeight(libraryActions->sizeHint().height()+style()->pixelMetric(QStyle::PM_ScrollBarExtent)+2);layout->addWidget(footerScroll);
 
     auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
-    auto* scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
+    auto* scroll=new QScrollArea;scroll->setObjectName("conversionScroll");scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
     sidebar->addTab(scroll,"Conversion");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
-    outputLog_=new QPlainTextEdit;outputLog_->setObjectName("outputLog");outputLog_->setReadOnly(true);outputLog_->setMaximumBlockCount(5000);outputLog_->setLineWrapMode(QPlainTextEdit::NoWrap);sidebar->addTab(outputLog_,"Output");
+    auto* logPanel=new QWidget;auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(8,8,8,8);auto* logControls=new QHBoxLayout;logControls->addStretch();
+    auto* clearLog=new QPushButton("Clear");clearLog->setObjectName("clearLog");logControls->addWidget(clearLog);logLayout->addLayout(logControls);
+    outputLog_=new QPlainTextEdit;outputLog_->setObjectName("outputLog");outputLog_->setReadOnly(true);outputLog_->setMaximumBlockCount(5000);outputLog_->setLineWrapMode(QPlainTextEdit::NoWrap);logLayout->addWidget(outputLog_,1);sidebar->addTab(logPanel,"Log");connect(clearLog,&QPushButton::clicked,outputLog_,&QPlainTextEdit::clear);
     connect(OutputCapture::instance(),&OutputCapture::textReady,this,[this](const QString& text){auto* bar=outputLog_->verticalScrollBar();const bool follow=bar->value()==bar->maximum();QTextCursor cursor(outputLog_->document());cursor.movePosition(QTextCursor::End);cursor.insertText(text);if(follow){outputLog_->setTextCursor(cursor);outputLog_->ensureCursorVisible();}});
     logMessage("JXRConverter "+QString::fromStdString(jxrc::version()));
     auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
@@ -189,7 +206,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(12,0,12,0);startButtons->addWidget(visible_,1);
     auto* openQueueOutput=new QPushButton;openQueueOutput->setObjectName("openQueueOutputFolder");openQueueOutput->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));openQueueOutput->setToolTip("Open output folder");startButtons->addWidget(openQueueOutput);connect(openQueueOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
     startButtons->addWidget(selected_,1);sideLayout->addLayout(startButtons);
-    auto* outputScroll=new QScrollArea;outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);sideLayout->addWidget(outputScroll);
+    auto* outputScroll=new WidthMatchedScrollArea(scroll->parentWidget());outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);sideLayout->addWidget(outputScroll,0,Qt::AlignHCenter);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(12,6,12,12);auto* progressRow=new QHBoxLayout;progressRow->addWidget(progress_,1);
     progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();progressRow->addWidget(progressStop_);progressLayout->addLayout(progressRow);
     connect(progressStop_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);sideLayout->addWidget(progressFrame);
@@ -272,23 +289,23 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);updateBackgroundMetadata();});
     connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
     connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(column);direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
-    connect(smoothScrolling_,&QCheckBox::toggled,this,&MainWindow::updatePresentation);connect(thumbnailAspect_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
+    connect(smoothScrolling_,&QCheckBox::toggled,this,&MainWindow::updatePresentation);
+    connect(autoAspect_,&QCheckBox::toggled,this,[this](bool on){catalog_->setAspectSampling(on);if(on)requestAspectSample(list_->verticalScrollBar()->value()>0);else{aspectSamplePending_=false;aspectTimer_->stop();}});
+    connect(list_,&FileListView::viewportChanged,this,[this]{if(!changingAspect_&&viewMode_->checkedId()==0&&!(aspectSamplePending_&&!aspectViewportSample_))requestAspectSample(true);});
     connect(thumbnailFit_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
     connect(viewMode_,&QButtonGroup::idClicked,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
+    connect(list_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{if(!changingAspect_&&viewMode_->checkedId()==0)requestAspectSample(true);});
     connect(list_,&FileListView::bulkSelectionChanged,this,[this](bool selecting){bulkSelecting_=selecting;});
     connect(table_,&FileTableView::bulkSelectionChanged,this,[this](bool selecting){bulkSelecting_=selecting;});
     connect(selection_,&QItemSelectionModel::selectionChanged,this,&MainWindow::changeSelection);
     for(auto* view:QList<QAbstractItemView*>{list_,table_})connect(view,&QAbstractItemView::clicked,this,[this](const QModelIndex& index){rememberedImages_.insert(index.data(Catalog::PathRole).toString());showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,[this]{syncSelection();updateCounts();});connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
-    connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this](const QModelIndex&,int first,int last){
-        for(int row=first;row<=last;++row){const auto ext=QFileInfo(catalog_->record(row).path).suffix().toLower();if(ext=="jxr"||ext=="wdp"||ext=="hdp"){thumbnailAspect_->setChecked(true);break;}}
-        updateAutoThumbnailAspect();
-    });
+    connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{requestAspectSample(false);});
     connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);rememberedImages_.remove(path);for(auto& selected:jobSelections_)selected.remove(path);}});
-    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())thumbnailAspectSampleChecked_=false;updateFilter();});
-    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;loggedWarnings_.clear();selectedImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
+    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())aspectSamplePending_=false;updateFilter();});
+    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{aspectSamplePending_=false;loggedWarnings_.clear();selectedImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& first,const QModelIndex& last){
-        updateCounts();showMetadata();updateAutoThumbnailAspect();
+        updateCounts();showMetadata();if(autoAspect_->isChecked()&&aspectSamplePending_)aspectTimer_->start();
         for(int row=first.row();row<=last.row();++row){const auto& record=catalog_->record(row);if(record.metadataWarning.isEmpty())continue;const auto warning=record.path+"\n"+record.metadataWarning;if(!loggedWarnings_.contains(warning)){loggedWarnings_.insert(warning);logMessage("Warning: "+warning);}}
     });
     connect(catalog_,&Catalog::scanStateChanged,this,[this](bool scanning){statusBar()->showMessage(scanning?"Scanning folders…":"Folder scan complete",scanning?0:4000);updateCounts();});
@@ -311,7 +328,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
     restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
-    updateMode();updateFilter();updatePresentation();updateCounts();
+    catalog_->setAspectSampling(autoAspect_->isChecked());updateMode();updateFilter();updatePresentation();updateCounts();requestAspectSample(false);
     QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
     QTimer::singleShot(0,this,[this]{QStringList files=temporaryJob_.files;for(const auto& job:savedJobs_)files+=job.files;files.removeDuplicates();if(!files.isEmpty())catalog_->addPaths(files,false);});
     QTimer::singleShot(0,this,[this]{if(loadFolder_->isChecked()&&!recentFolders_.isEmpty())addPaths({recentFolders_.first()});if(loadFiles_->isChecked())addPaths(lastFiles_);});
@@ -331,7 +348,7 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {checkUpdates_,smoothScrolling_,thumbnailAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
+    return {checkUpdates_,smoothScrolling_,autoAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
         formatFolders_,dateFolders_,jobFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
@@ -347,6 +364,7 @@ void MainWindow::restoreSettings() {
         const auto saved=settings.value("conversion/targets").toStringList();const QSignalBlocker blocker(targets_);
         for(int i=0;i<targets_->count();++i){auto* item=targets_->item(i);item->setCheckState(saved.contains(item->data(Qt::UserRole).toString())?Qt::Checked:Qt::Unchecked);}
     }
+    aspectIndex_=std::clamp(settings.value("browser/aspectRatio",2).toInt(),0,4);
     sortOrder_=settings.value("browser/descending",false).toBool()?Qt::DescendingOrder:Qt::AscendingOrder;
     findChild<QSlider*>("rawTargetNitsSlider")->setValue(nits_->value());
     findChild<QSlider*>("rawShoulderSlider")->setValue(qRound(shoulder_->value()*100));
@@ -355,12 +373,12 @@ void MainWindow::saveSettings() const {
     auto settings=appSettings();
     for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
-    settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
+    settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
 }
 QWidget* MainWindow::buildControls() {
-    auto* panel=new QWidget;auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(14,16,14,16);layout->setSpacing(14);
+    auto* panel=new QWidget;panel->setObjectName("conversionControls");auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(14,16,14,16);layout->setSpacing(14);
     auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");mode_->setCurrentIndex(1);general->addRow("Mode",mode_);layout->addLayout(general);
-    auto* outputFormats=new QGroupBox("Output formats · select one or more");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
+    auto* outputFormats=new QGroupBox("Output formats · select one or more");outputFormats->setObjectName("outputFormats");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new QListWidget;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setMinimumHeight(155);targets_->setMaximumHeight(210);
     const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR"};
     for(int i=0;i<targetNames.size();++i){auto* item=new QListWidgetItem(targetNames[i],targets_);item->setData(Qt::UserRole,i);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(i==4?Qt::Checked:Qt::Unchecked);}
@@ -411,7 +429,7 @@ QWidget* MainWindow::buildControls() {
     auto* resetRaw=new QPushButton("Reset RAW rendering");resetRaw->setObjectName("resetRaw");rawLayout->addRow(resetRaw);
     connect(resetRaw,&QPushButton::clicked,this,[this]{for(auto* widget:raw_->findChildren<QWidget*>())if(widget->property("rawDefault").isValid())widget->setProperty(settingProperty(widget),widget->property("rawDefault"));updateMode();});
     queuePanel_=new QWidget;auto* queueLayout=new QVBoxLayout(queuePanel_);queueLayout->setContentsMargins(14,0,14,10);queueLayout->setSpacing(8);
-    auto* destination=new QGroupBox("Output queue");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
+    auto* destination=new QGroupBox("Output queue");destination->setObjectName("outputDestination");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
     auto* folderButtons=new QHBoxLayout;
     auto* browse=new QPushButton("Choose folder…");browse->setObjectName("chooseOutputFolder");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});folderButtons->addWidget(browse);
     auto* openOutput=new QPushButton("Open output folder");openOutput->setObjectName("openOutputFolder");folderButtons->addWidget(openOutput);destinationLayout->addLayout(folderButtons);
@@ -658,28 +676,39 @@ void MainWindow::updateBackgroundMetadata() {
 void MainWindow::updatePresentation() {
     saveBrowserScroll();
     const bool details=viewMode_->checkedId()==2,grid=viewMode_->checkedId()==0;
-    views_->setCurrentWidget(details?static_cast<QWidget*>(table_):list_);list_->setPresentation(grid,size_->value(),thumbnailAspect_->isChecked());
+    views_->setCurrentWidget(details?static_cast<QWidget*>(table_):list_);list_->setPresentation(grid,size_->value(),aspectRatios[aspectIndex_]);
     list_->setSmoothScrolling(smoothScrolling_->isChecked());table_->setSmoothScrolling(smoothScrolling_->isChecked());
-    const bool wide=thumbnailAspect_->isChecked();thumbnailAspect_->setText(wide?"16:9":"1:1");
-    thumbnailAspect_->setMinimumWidth(thumbnailAspect_->sizeHint().width());
+    thumbnailAspect_->setText(aspectNames[aspectIndex_].section(' ',0,0));
+    for(auto* action:thumbnailAspect_->menu()->actions())action->setChecked(action->data().toInt()==aspectIndex_);
     const bool fill=thumbnailFit_->isChecked();thumbnailFit_->setText(fill?"Fill":"Fit");delegate_->fill=fill;table_->setFillThumbnails(fill);
     table_->setIconSize(QSize(size_->value()/2,size_->value()/2));table_->verticalHeader()->setDefaultSectionSize(std::max(32,size_->value()/2+8));
     updateFilter();
 }
+void MainWindow::requestAspectSample(bool viewport) {
+    if(!autoAspect_->isChecked()||changingAspect_)return;
+    aspectSamplePending_=true;aspectViewportSample_=viewport;aspectTimer_->start();
+}
+void MainWindow::setThumbnailAspect(int index) {
+    index=std::clamp(index,0,4);if(index==aspectIndex_)return;
+    const auto visible=list_->firstVisibleRow(1);const QPersistentModelIndex anchor=visible.isEmpty()?QModelIndex{}:visible.first();
+    const double offset=anchor.isValid()?double(list_->visualRect(anchor).top())/std::max(1,list_->gridSize().height()):0;
+    changingAspect_=true;aspectIndex_=index;updatePresentation();
+    if(anchor.isValid()&&viewMode_->checkedId()==0){list_->scrollTo(anchor,QAbstractItemView::PositionAtTop);list_->verticalScrollBar()->setValue(list_->verticalScrollBar()->value()-qRound(offset*list_->gridSize().height()));}
+    changingAspect_=false;
+}
 void MainWindow::updateAutoThumbnailAspect() {
-    if(thumbnailAspectSampleChecked_||catalog_->rowCount()<3)return;
-    bool wide=true;
-    for(int row=0;row<3;++row) {
-        const auto& record=catalog_->record(row);
-        if(!record.inspected)return;
-        // Allow rounded pixel dimensions, without mistaking other landscape
-        // ratios for 16:9. Read the display dimensions, including orientation.
-        wide=wide&&record.height>0&&std::abs(double(record.width)/record.height-16.0/9)<0.02;
+    if(!autoAspect_->isChecked()||!aspectSamplePending_)return;
+    QVector<int> rows;
+    if(aspectViewportSample_){if(viewMode_->checkedId()!=0)return;for(const auto& index:list_->firstVisibleRow())rows.append(proxy_->mapToSource(index).row());}
+    else for(int row=0;row<std::min(3,catalog_->rowCount());++row)rows.append(row);
+    if(rows.isEmpty())return;
+    int choice=-1;
+    for(const auto row:rows){const auto& record=catalog_->record(row);if(!record.inspected)return;
+        int match=2;
+        if(record.width>0&&record.height>0){const double ratio=double(record.width)/record.height;for(int i=0;i<5;++i)if(std::abs(ratio/aspectRatios[i]-1)<0.03){match=i;break;}}
+        if(choice<0)choice=match;else if(choice!=match){choice=2;break;}
     }
-    // Sample once per library so later metadata/thumbnail completions cannot
-    // undo a manual choice of cell aspect ratio.
-    thumbnailAspectSampleChecked_=true;
-    if(wide)thumbnailAspect_->setChecked(true);
+    aspectSamplePending_=false;setThumbnailAspect(choice);
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
 void MainWindow::updateCounts() {

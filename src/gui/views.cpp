@@ -96,7 +96,7 @@ FileListView::FileListView(QWidget* parent):QListView(parent) {
     // Stable viewport width keeps adaptive columns from oscillating as the
     // scrollbar appears or disappears near a column/row boundary.
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
-    connect(verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{ThumbnailFrame frame(this);});
+    connect(verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{ThumbnailFrame frame(this);emit viewportChanged();});
 }
 void FileListView::paintEvent(QPaintEvent* event) {
     ThumbnailFrame frame(this);
@@ -107,13 +107,13 @@ void FileListView::paintEvent(QPaintEvent* event) {
             "Drop image files or folders here\n\nOpen folder to browse your collection.\nDrag from blank space to box-select files.");
     }
 }
-void FileListView::setPresentation(bool grid,int size,bool wide) {
-    grid_=grid;minimumCell_=size;wide_=wide;
+void FileListView::setPresentation(bool grid,int size,double aspect) {
+    grid_=grid;minimumCell_=size;aspect_=std::clamp(aspect,0.25,4.0);
     setViewMode(grid?IconMode:ListMode);setMovement(Static);setWrapping(grid);setFlow(grid?LeftToRight:TopToBottom);
     setVerticalScrollMode(ScrollPerPixel);setSelectionRectVisible(true);setSpacing(grid?0:5);updateCellSize();
 }
 void FileListView::resizeEvent(QResizeEvent* event) {
-    QListView::resizeEvent(event);updateCellSize();
+    QListView::resizeEvent(event);updateCellSize();emit viewportChanged();
 }
 void FileListView::updateCellSize() {
     // LocalViewer 535800129: GridCells.Adaptive chooses columns from the
@@ -130,9 +130,19 @@ void FileListView::updateCellSize() {
     // on both sides, leaving the fitted cell width and a fixed 10 dp gap.
     const int slot=cell+gutter;
     const int edge=grid_?std::max(1,cell-20):minimumCell_;
-    if(auto* delegate=dynamic_cast<ThumbnailDelegate*>(itemDelegate())){delegate->grid=grid_;delegate->edge=edge;delegate->wide=wide_;}
-    setGridSize(grid_?QSize(slot,(wide_?qRound(edge*9.0/16):edge)+94):QSize{});
+    if(auto* delegate=dynamic_cast<ThumbnailDelegate*>(itemDelegate())){delegate->grid=grid_;delegate->edge=edge;delegate->aspect=aspect_;}
+    setGridSize(grid_?QSize(slot,qRound(edge/aspect_)+94):QSize{});
     setIconSize(QSize(edge,edge));doItemsLayout();viewport()->update();
+}
+QModelIndexList FileListView::firstVisibleRow(int count) const {
+    QModelIndexList result;if(!model()||count<1)return result;
+    const int slot=grid_?std::max(1,gridSize().width()):std::max(1,viewport()->width());
+    const int limit=std::min(viewport()->height(),grid_?gridSize().height()+8:sizeHintForRow(0)+8);
+    for(int y=0;y<limit;y+=4){
+        for(int x=std::min(slot/2,viewport()->width()/2);x<viewport()->width()&&result.size()<count;x+=slot){const auto index=indexAt(QPoint(x,y));if(index.isValid()&&!result.contains(index))result.append(index);}
+        if(!result.isEmpty())break;
+    }
+    return result;
 }
 void FileListView::setSmoothScrolling(bool enabled){smooth_=enabled;if(!enabled&&scrollAnimation_)scrollAnimation_->stop();}
 void FileListView::wheelEvent(QWheelEvent* e){if(!scrollWheel(this,e,smooth_,scrollAnimation_,wheelRemainder_))QListView::wheelEvent(e);}

@@ -9,12 +9,14 @@ class FileListView : public QListView {
     Q_OBJECT
 public:
     explicit FileListView(QWidget* parent = nullptr);
-    void setPresentation(bool grid, int size, bool wide = false);
+    void setPresentation(bool grid, int size, double aspect = 1.0);
     void setSmoothScrolling(bool enabled);
     void selectAll() override;
+    QModelIndexList firstVisibleRow(int count = 3) const;
 signals:
     void pathsDropped(const QStringList& paths);
     void bulkSelectionChanged(bool selecting);
+    void viewportChanged();
 protected:
     void wheelEvent(QWheelEvent*) override;
     void hideEvent(QHideEvent*) override;
@@ -27,7 +29,8 @@ private:
     void updateCellSize();
     bool grid_ = true;
     int minimumCell_ = 200;
-    bool wide_ = false, smooth_ = false;
+    double aspect_ = 1.0;
+    bool smooth_ = false;
     QPropertyAnimation* scrollAnimation_ = nullptr;
     double wheelRemainder_ = 0;
 };
@@ -58,9 +61,9 @@ public:
     explicit ThumbnailDelegate(QObject* parent = nullptr):QStyledItemDelegate(parent) {}
     bool grid = true;
     int edge = 200;
-    bool wide = false;
+    double aspect = 1.0;
     bool fill = false;
-    int thumbnailHeight() const { return wide ? qRound(edge*9.0/16) : edge; }
+    int thumbnailHeight() const { return qRound(edge/aspect); }
     void paint(QPainter*, const QStyleOptionViewItem&, const QModelIndex&) const override;
     QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override;
 };

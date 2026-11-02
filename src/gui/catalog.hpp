@@ -46,6 +46,7 @@ public:
     void removePaths(const QStringList& paths);
     void clear();
     void setBackgroundMetadata(bool enabled);
+    void setAspectSampling(bool enabled);
     void setStatus(const QString& path, const QString& status, const QString& error = {});
     // Layout probes never enqueue work; views bracket actual painting instead.
     void beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible);
@@ -76,7 +77,7 @@ private:
     QStringList metadataQueue_;
     QString metadataPath_;
     QRunnable* metadataTask_ = nullptr;
-    bool backgroundMetadata_ = true;
+    bool backgroundMetadata_ = true, aspectSampling_ = true;
     QCache<QString, QImage> cache_{128*1024}; // 128 MiB of 8-bit RGBA thumbnails; costs in KiB.
     QStringList visibleThumbnails_;
     QMap<QString, std::shared_ptr<std::atomic_bool>> thumbnailJobs_;

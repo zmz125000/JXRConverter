@@ -218,9 +218,10 @@ void Catalog::insertPaths(const QStringList& paths) {
 bool Catalog::metadataWanted(const QString& path) const {
     if(backgroundMetadata_||visibleThumbnails_.contains(path))return true;
     // The first three images are used by automatic grid aspect detection.
-    for(int row=0;row<std::min(3,int(records_.size()));++row)if(records_[row].path==path)return true;
+    if(aspectSampling_)for(int row=0;row<std::min(3,int(records_.size()));++row)if(records_[row].path==path)return true;
     return false;
 }
+void Catalog::setAspectSampling(bool enabled) {aspectSampling_=enabled;setBackgroundMetadata(backgroundMetadata_);}
 void Catalog::setBackgroundMetadata(bool enabled) {
     backgroundMetadata_=enabled;
     if(metadataTask_&&!metadataWanted(metadataPath_))cancelMetadata();
@@ -243,7 +244,7 @@ void Catalog::pumpMetadata() {
     for(const auto& candidate:visibleThumbnails_) {
         const int row=find(candidate);if(standalone(row)){path=candidate;break;}
     }
-    if(path.isEmpty())for(int row=0;row<std::min(3,int(records_.size()));++row)if(standalone(row)){path=records_[row].path;break;}
+    if(path.isEmpty()&&aspectSampling_)for(int row=0;row<std::min(3,int(records_.size()));++row)if(standalone(row)){path=records_[row].path;break;}
     if(path.isEmpty()&&backgroundMetadata_)while(!metadataQueue_.isEmpty()) {
         const auto candidate=metadataQueue_.takeFirst();const int row=find(candidate);
         if(standalone(row)){path=candidate;break;}
