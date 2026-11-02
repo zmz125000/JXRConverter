@@ -114,7 +114,7 @@ private:
     QCheckBox *autoAspect_, *portraitAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *loadJobs_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *dateFolders_, *jobFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
-    QPushButton *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_;
+    QPushButton *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_, *cancelJob_;
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit *inspector_, *outputLog_;
     QTimer* updateTimer_;

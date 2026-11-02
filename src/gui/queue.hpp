@@ -34,6 +34,7 @@ public:
     void cancelPending();
     void cancelBatch(qint64 batch);
     bool hasPendingBatch(qint64 batch) const;
+    bool hasRunningBatch(qint64 batch) const;
     qint64 runningBatch() const;
     void cancelPendingFor(const QStringList& inputs);
     bool hasPendingFor(const QStringList& inputs) const;

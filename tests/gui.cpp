@@ -699,13 +699,13 @@ private slots:
         const auto output=root("job-folders-output");window.findChild<QLineEdit*>("outputDirectory")->setText(output);
         window.findChild<QSpinBox*>("parallelJobs")->setValue(1);window.findChild<QCheckBox*>("jobSubfolders")->setChecked(true);window.findChild<QCheckBox*>("dateSubfolders")->setChecked(true);
         QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();
-        auto* jobButton=window.findChild<QToolButton*>("statusJob");QVERIFY(jobButton->isChecked());QVERIFY(jobButton->menu());QCOMPARE(jobButton->popupMode(),QToolButton::InstantPopup);QCOMPARE(jobButton->popupMode(),window.findChild<QToolButton*>("recentFolders")->popupMode());QCOMPARE(jobButton->height(),window.findChild<QPushButton*>("runningJob")->height());QCOMPARE(window.findChild<QPushButton*>("clearLibrary")->text(),QString("Cancel job"));
-        window.findChild<QPushButton*>("statusAll")->click();window.findChild<QPushButton*>("runningJob")->click();QVERIFY(jobButton->isChecked());QVERIFY(savedJob(window,1)->isChecked());
+        auto* jobButton=window.findChild<QToolButton*>("statusJob");QVERIFY(jobButton->isChecked());QVERIFY(jobButton->menu());QCOMPARE(jobButton->popupMode(),QToolButton::InstantPopup);QCOMPARE(jobButton->popupMode(),window.findChild<QToolButton*>("recentFolders")->popupMode());QCOMPARE(jobButton->height(),window.findChild<QPushButton*>("runningJob")->height());QCOMPARE(window.findChild<QPushButton*>("clearLibrary")->text(),QString("Clear"));QVERIFY(!window.findChild<QPushButton*>("clearLibrary")->isEnabled());QVERIFY(window.findChild<QPushButton*>("cancelJob")->isVisible());QVERIFY(jobButton->text().endsWith("*"));QVERIFY(savedJob(window,1)->text().endsWith("*"));
+        window.findChild<QPushButton*>("statusAll")->click();QVERIFY(!window.findChild<QPushButton*>("cancelJob")->isVisible());QVERIFY(savedJob(window,1)->text().endsWith("*"));window.findChild<QPushButton*>("runningJob")->click();QVERIFY(jobButton->isChecked());QVERIFY(savedJob(window,1)->isChecked());
         // UI edits after submission must not move the pending output.
         window.findChild<QLineEdit*>("outputDirectory")->setText(root("different-job-output"));window.findChild<QCheckBox*>("jobSubfolders")->setChecked(false);
         QTRY_COMPARE(done.count(),1);const auto folder=output+"/"+QDate::currentDate().toString(Qt::ISODate)+"-Job-1";
         QVERIFY(QFileInfo::exists(folder+"/a_sdr.avif"));QVERIFY(QFileInfo::exists(folder+"/b_sdr.avif"));QVERIFY(!QFileInfo::exists(root("different-job-output")+"/b_sdr.avif"));
-        QCOMPARE(jobButton->text(),QString("Job #1 (2/2/0/0)"));QCOMPARE(savedJob(window,1)->text(),jobButton->text());
+        QCOMPARE(jobButton->text(),QString("Job #1 (2/2/0/0)"));QVERIFY(!savedJob(window,1)->text().endsWith("*"));QVERIFY(window.findChild<QPushButton*>("cancelJob")->x()<jobButton->x());QCOMPARE(savedJob(window,1)->text(),jobButton->text());
         FolderReceiver receiver;QDesktopServices::setUrlHandler("file",&receiver,"open");auto restore=qScopeGuard([]{QDesktopServices::unsetUrlHandler("file");});
         auto* icon=window.findChild<QPushButton*>("openQueueOutputFolder");QVERIFY(icon);QVERIFY(!icon->icon().isNull());icon->click();QCOMPARE(receiver.opened.toLocalFile(),folder);
         QTest::mouseMove(jobButton,jobButton->rect().center());QTest::qWait(450);QVERIFY(!window.findChild<QMenu*>("jobMenu")->isVisible());
@@ -766,6 +766,15 @@ private slots:
         QCOMPARE(converted[0].options.quality.codec_quality,42);QCOMPARE(converted[0].options.exposure,1.5f);QCOMPARE(converted[1].options.quality.codec_quality,17);QCOMPARE(converted[1].options.exposure,-2.f);QCOMPARE(converted[1].output,root("snapshots/c"));
         bool owner=false,alias=false;for(const auto& value:outputs)if(value[3].toString()=="Cancelled"){owner|=value[0].toLongLong()==1;alias|=value[0].toLongLong()==0;}QVERIFY(owner);QVERIFY(alias);
     }
+    void runningJobFlagsAndSharedPriorityOutput() {
+        QSemaphore gate;ConversionQueue queue(nullptr,[&](const std::filesystem::path&,const std::filesystem::path&,const jxrc::Options&){gate.acquire();return jxrc::Result{};});
+        const Job a{"a",root("running-flags/a"),{},1},b{"b",root("running-flags/b"),{},2},c{"c",root("running-flags/c"),{},3};
+        QSignalSpy done(&queue,&ConversionQueue::batchFinished);queue.start({a,b,c},2,2);
+        const bool first=queue.hasRunningBatch(1),second=queue.hasRunningBatch(2),pending=queue.hasRunningBatch(3);
+        auto single=a;single.batch=0;queue.enqueueNext({single},2,2);const bool promoted=queue.hasRunningBatch(0);gate.release(3);
+        QVERIFY(first);QVERIFY(second);QVERIFY(!pending);QVERIFY(promoted);QCOMPARE(queue.total(),3);QTRY_COMPARE(done.count(),1);
+        for(qint64 number=0;number<4;++number)QVERIFY(!queue.hasRunningBatch(number));
+    }
     void sendSelectedJobAndCancelJobButton() {
         appSettings().clear();MainWindow window;window.show();
         const auto directory=root("send-job");QStringList files;for(int i=0;i<3;++i)files.append(makeImage(directory,QString::number(i)+".jpg",64,48,100));
@@ -774,7 +783,7 @@ private slots:
         QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("sendSelectedToJob");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});
         QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);view->customContextMenuRequested(view->visualRect(window.filterModel()->index(0,0)).center());QVERIFY(chosen);
         QVERIFY(savedJob(window,1)->isChecked());QVERIFY(window.findChild<QToolButton*>("statusJob")->isChecked());QCOMPARE(window.queue()->total(),3);
-        auto* cancel=window.findChild<QPushButton*>("clearLibrary");QCOMPARE(cancel->text(),QString("Cancel job"));QVERIFY(cancel->isEnabled());cancel->click();
+        auto* cancel=window.findChild<QPushButton*>("cancelJob");QCOMPARE(cancel->text(),QString("Cancel job"));QVERIFY(cancel->isEnabled());cancel->click();
         QTRY_COMPARE(done.count(),1);QCOMPARE(done[0][0].toInt(),1);QCOMPARE(done[0][2].toInt(),2);QCOMPARE(window.catalog()->rowCount(),3);QCOMPARE(window.filterModel()->rowCount(),3);
     }
     void collapsedQueueAndDateFolders() {

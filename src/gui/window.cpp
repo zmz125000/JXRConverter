@@ -200,6 +200,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
     auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
+    cancelJob_=new QPushButton("Cancel job");cancelJob_->setObjectName("cancelJob");cancelJob_->setToolTip("Cancel this job’s pending outputs; active conversions finish");actionsLayout->addWidget(cancelJob_);cancelJob_->hide();connect(cancelJob_,&QPushButton::clicked,this,[this]{queue_->cancelBatch(viewedJob_);updateCounts();});
     jobButton_=new PopupButton;jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
     jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Click to choose a job. Counts: finished / all / skipped / failed (images).");
     running_=new QPushButton("Running");running_->setObjectName("runningJob");actionsLayout->addWidget(running_);connect(running_,&QPushButton::clicked,this,[this]{const auto batch=queue_->runningBatch();if(batch>=0)showJob(batch);});
@@ -343,7 +344,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(queue_,&ConversionQueue::outputFinished,this,[this](qint64 batch,const QString& input,const QString& output,const QString& state){updateJobOutput(batch,input,output,state);});
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
     connect(queue_,&ConversionQueue::statusChanged,this,[this](const QString& path,const QString& state,const QString& detail){logMessage(state+": "+path+(detail.isEmpty()?QString{}:"\n"+detail));});
-    connect(queue_,&ConversionQueue::progress,this,[this](int done,int total,int active){progress_->setRange(0,total);progress_->setValue(done);queueState_->setText(QString("%1 / %2 outputs finished · %3 active").arg(done).arg(total).arg(active));updateCounts();});
+    connect(queue_,&ConversionQueue::progress,this,[this](int done,int total,int active){progress_->setRange(0,total);progress_->setValue(done);queueState_->setText(QString("%1 / %2 outputs finished · %3 active").arg(done).arg(total).arg(active));refreshJobs();updateCounts();});
     connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){saveJobs();queueState_->setText(QString("%1 done · %2 skipped · %3 failed · %4 cancelled").arg(success).arg(queue_->skipped()).arg(failed).arg(cancelled));logMessage(queueState_->text());updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
     auto* deleteShortcut=new QShortcut(QKeySequence::Delete,this);connect(deleteShortcut,&QShortcut::activated,this,[this]{if(!queue_->busy()&&(list_->hasFocus()||table_->hasFocus()))catalog_->removePaths(selectedPaths());});
     auto* allShortcut=new QShortcut(QKeySequence::SelectAll,this);connect(allShortcut,&QShortcut::activated,this,[this]{if(list_->hasFocus()||table_->hasFocus())selectVisible();});
@@ -592,7 +593,7 @@ QString MainWindow::jobText(qint64 number) const {
     for(const auto& output:job->outputs){auto& c=counts[output.input];++c.total;if(output.state=="Finished"||output.state=="Skipped"||output.state=="Failed"||output.state=="Cancelled"||output.state=="Interrupted")++c.terminal;if(output.state=="Finished")++c.finished;else if(output.state=="Skipped")++c.skipped;else if(output.state=="Failed")++c.failed;}
     int finished=0,skipped=0,failed=0;
     for(const auto& input:job->files){const auto c=counts.value(input);if(c.total&&c.terminal==c.total){if(c.failed)++failed;else if(c.skipped==c.total)++skipped;else if(c.finished+c.skipped==c.total)++finished;}}
-    return (number?QString("Job #%1").arg(number):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed);
+    return (number?QString("Job #%1").arg(number):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed)+(queue_->hasRunningBatch(number)?" *":"");
 }
 void MainWindow::refreshJobs() {
     QVector<qint64> ids{0};for(auto it=savedJobs_.crbegin();it!=savedJobs_.crend();++it)ids.append(it->number);
@@ -635,7 +636,7 @@ void MainWindow::updateJobOutput(qint64 batch,const QString& input,const QString
 }
 void MainWindow::clearCurrentTab() {
     const int tab=statusFilter_->checkedId();
-    if(tab==2){queue_->cancelBatch(viewedJob_);updateCounts();return;}
+    if(tab==2)return;
     if(tab==1){clearImageSelection();return;}
     if(tab==5){rememberedImages_.clear();updateFilter();return;}
     QStringList paths;for(int row=0;row<proxy_->rowCount();++row)paths.append(proxy_->index(row,0).data(Catalog::PathRole).toString());
@@ -770,9 +771,9 @@ void MainWindow::updateCounts() {
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
     progressStop_->setVisible(queue_->busy());
-    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);clear_->setText(statusFilter_->checkedId()==2?"Cancel job":"Clear");
-    clear_->setToolTip(statusFilter_->checkedId()==2?"Cancel this job’s pending outputs; active conversions finish":"Clear the current tab");
-    clear_->setEnabled(statusFilter_->checkedId()==2?queue_->hasPendingBatch(viewedJob_):statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
+    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
+    clear_->setToolTip("Clear the current tab");
+    clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
 }
 void MainWindow::showMetadata() {

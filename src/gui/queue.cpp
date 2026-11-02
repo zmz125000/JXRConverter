@@ -100,6 +100,11 @@ qint64 ConversionQueue::runningBatch() const {
     qint64 current=-1;for(auto it=activeBatches_.cbegin();it!=activeBatches_.cend();++it){const auto batch=it.value();if(batch==0||batchAliases_.value(jobKey({it.key(),activeOutputs_.value(it.key()),{},batch})).contains(0))return 0;current=std::max(current,batch);}
     return current>=0?current:next_<jobs_.size()?jobs_[next_].batch:-1;
 }
+bool ConversionQueue::hasRunningBatch(qint64 batch) const {
+    for(auto it=activeBatches_.cbegin();it!=activeBatches_.cend();++it)
+        if(it.value()==batch||batchAliases_.value(jobKey({it.key(),activeOutputs_.value(it.key()),{},it.value()})).contains(batch))return true;
+    return false;
+}
 bool ConversionQueue::hasPendingBatch(qint64 batch) const {return std::any_of(jobs_.cbegin()+next_,jobs_.cend(),[this,batch](const Job& job){return job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch);});}
 void ConversionQueue::cancelBatch(qint64 batch) {cancelPendingMatching(nullptr,batch);}
 void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
