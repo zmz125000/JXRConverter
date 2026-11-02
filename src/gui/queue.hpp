@@ -12,8 +12,10 @@ namespace jxrc::gui {
 struct Job { QString input, output; Options options; };
 int coreCount();
 int recommendedWorkers(int cores);
+QString outputDateFolder();
 struct OutputLayout {
     bool format_subfolders = false;
+    bool date_subfolders = false;
     bool source_folder = false;
     bool rename_conflicts = false;
     QSet<QString> raw_inputs; // Catalog-identified RAW, including TIFF sensor containers.

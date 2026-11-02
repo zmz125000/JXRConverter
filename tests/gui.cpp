@@ -15,6 +15,7 @@
 #include <cmath>
 #include <QItemSelectionModel>
 #include <QLineEdit>
+#include <QLocale>
 #include <QListWidget>
 #include <QMimeData>
 #include <QSettings>
@@ -317,6 +318,47 @@ private slots:
         }
         window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
+    }
+    void collapsedQueueAndDateFolders() {
+        appSettings().clear();
+        MainWindow window;window.show();QTest::qWait(20);
+        QVERIFY(window.options().keep_exif);
+        QCOMPARE(window.options().raw.hdr_mode,jxrc::RawHdrMode::boost);
+        auto* toggle=window.findChild<QPushButton*>("toggleOutput");
+        auto* all=window.findChild<QPushButton*>("convertVisible");
+        auto* selected=window.findChild<QPushButton*>("convertSelected");
+        auto* stop=window.findChild<QPushButton*>("stopProgress");
+        toggle->setChecked(false);
+        QVERIFY(all->isVisible());QVERIFY(selected->isVisible());
+        QVERIFY(!window.findChild<QLineEdit*>("outputDirectory")->isVisible());
+        QVERIFY(!selected->isEnabled());QVERIFY(selected->property("noSelection").toBool());
+        QVERIFY(!stop->isVisible());
+        const QLocale previous;
+        for(const auto& locale:{QLocale(QLocale::English,QLocale::UnitedStates),QLocale(QLocale::German,QLocale::Germany)}) {
+            QLocale::setDefault(locale);
+            auto expected=locale.toString(QDate::currentDate(),QLocale::ShortFormat);expected.replace('/','-');
+            QCOMPARE(outputDateFolder(),expected);
+            OutputLayout layout;layout.date_subfolders=true;layout.format_subfolders=true;
+            jxrc::Options options;options.target=jxrc::Target::avif;
+            const auto source=root("dated/source.jpg");
+            const auto jobs=makeJobs({source},root("dated/output"),options,layout);
+            QCOMPARE(QFileInfo(jobs.first().output).absolutePath(),root("dated/output")+"/"+expected+"/avif");
+            layout.source_folder=true;
+            QCOMPARE(QFileInfo(makeJobs({source},{},options,layout).first().output).absolutePath(),root("dated")+"/"+expected+"/avif");
+        }
+        QLocale::setDefault(previous);
+        window.findChild<QCheckBox*>("dateSubfolders")->setChecked(true);
+        const auto input=makeImage(root("queue-ui"),"source.jpg",32,24,100);
+        QDir().mkpath(root("queue-ui/output"));
+        jxrc::Options options;options.target=jxrc::Target::avif;
+        QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
+        window.queue()->start(makeJobs({input,input},root("queue-ui/output"),options),1,1);
+        QVERIFY(stop->isVisible());
+        auto* cancel=window.findChild<QPushButton*>("cancelQueue");
+        QVERIFY(cancel->isEnabled());QVERIFY(cancel->property("running").toBool());
+        stop->click();QTRY_COMPARE(finished.count(),1);
+        QCOMPARE(finished[0][2].toInt(),1);
+        QVERIFY(!stop->isVisible());QVERIFY(!cancel->isEnabled());
     }
     void controlsSnapshot() {
         MainWindow window;

@@ -42,6 +42,10 @@ void applyDesktopStyle(int theme) {
         QPushButton { padding: 7px; }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit { padding: 5px; }
         QPushButton[primary="true"] { background: #2e8069; color: white; }
+        QPushButton[primary="true"][noSelection="true"] { background: #c4e3d3; color: #567565; }
+        QPushButton#cancelQueue[running="true"], QPushButton#stopProgress { background: #b83e3e; color: white; }
+        QPushButton#toggleOutput { padding: 2px 7px; }
+        QPushButton#stopProgress { padding: 1px; }
         QProgressBar { border: 1px solid palette(mid); border-radius: 4px; text-align: center; min-height: 17px; }
         QProgressBar::chunk { background: #72ad93; }
     )");

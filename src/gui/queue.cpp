@@ -1,5 +1,7 @@
 #include "queue.hpp"
 #include <QDir>
+#include <QDate>
+#include <QLocale>
 #include <QFileInfo>
 #include <QSet>
 #include <QThread>
@@ -15,6 +17,13 @@ std::filesystem::path nativePath(const QString& value) {
 #endif
 }
 }
+QString outputDateFolder() {
+    QString name=QLocale().toString(QDate::currentDate(),QLocale::ShortFormat);
+    // Locale date separators such as '/' cannot be used in a single folder name.
+    for(auto& ch:name)if(ch.unicode()<32||QStringLiteral("/\\:*?\"<>|").contains(ch))ch=QLatin1Char('-');
+    while(name.endsWith(' ')||name.endsWith('.'))name.chop(1);
+    return name;
+}
 int coreCount() { return std::max(1,QThread::idealThreadCount()); }
 int recommendedWorkers(int cores) {
     return std::max(1,cores/4);
@@ -23,6 +32,7 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
     validate(options);QVector<Job> result;QSet<QString> outputs;
     const int target=int(options.target);
     const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl"};
+    const QString dateFolder=layout.date_subfolders?outputDateFolder():QString{};
     static const QSet<QString> rawExtensions={"dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     auto pathKey=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
     QSet<QString> sources;for(const auto& input:inputs)sources.insert(pathKey(input));
@@ -35,6 +45,7 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         }
         QString folder=layout.source_folder?source.absolutePath():directory;
         if(folder.trimmed().isEmpty())throw std::invalid_argument("Choose an output folder");
+        if(layout.date_subfolders)folder=QDir(folder).filePath(dateFolder);
         if(layout.format_subfolders)folder=QDir(folder).filePath(suffixes[target].section('.',-1));
         QString filename=stem+"_"+suffixes[target];int n=2;
         auto outputPath=[&]{return QDir(folder).absoluteFilePath(filename);};

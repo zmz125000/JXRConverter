@@ -4,6 +4,7 @@
 #include "updater.hpp"
 #include "settings.hpp"
 #include <QStyleHints>
+#include <QStyle>
 #include <QMenu>
 #include <QClipboard>
 #include <QButtonGroup>
@@ -137,8 +138,11 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
     auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
     auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
+    auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(12,0,12,0);startButtons->addWidget(visible_,1);startButtons->addWidget(selected_,1);sideLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);sideLayout->addWidget(outputScroll);
-    auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(12,6,12,12);progressLayout->addWidget(progress_);sideLayout->addWidget(progressFrame);
+    auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(12,6,12,12);auto* progressRow=new QHBoxLayout;progressRow->addWidget(progress_,1);
+    progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();progressRow->addWidget(progressStop_);progressLayout->addLayout(progressRow);
+    connect(progressStop_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);sideLayout->addWidget(progressFrame);
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
@@ -239,7 +243,7 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return {smoothScrolling_,thumbnailAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
-        formatFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        formatFolders_,dateFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
 void MainWindow::restoreSettings() {
@@ -288,7 +292,7 @@ QWidget* MainWindow::buildControls() {
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
     custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
     customForm->addRow("JPEG / AVIF",quality_);customForm->addRow("JXL distance",distance_);avifDepth_->setToolTip("Maximum AVIF depth. 8-bit sources remain 8-bit; AVIF supports up to 12 bits per channel.");customForm->addRow("AVIF max depth",avifDepth_);customForm->addRow(downsize_);qualityLayout->addRow(custom_);layout->addWidget(qualityGroup);
-    exif_=check("Keep EXIF","keepExif");exif_->setToolTip("Processed RAW and JXR EXIF retention is not supported by the library yet.");transcode_=check("JXL lossless JPEG transcoding","jpegTranscoding");
+    exif_=check("Keep EXIF","keepExif",true);exif_->setToolTip("Processed RAW and JXR EXIF retention is not supported by the library yet.");transcode_=check("JXL lossless JPEG transcoding","jpegTranscoding");
     transcode_->setToolTip("Store eligible SDR JPEG coefficients directly in JXL without RGB decoding or additional image loss. Ignores the quality preset for these JPEGs; other inputs use their normal conversion path. Exposure or resizing disables transcoding. Enable Keep EXIF to allow original JPEG byte reconstruction.");
     layout->addWidget(exif_);layout->addWidget(transcode_);
     processing_=new QGroupBox("Pixel processing");auto* processingForm=new QFormLayout(processing_);exposure_=real(-3,3,0,0.1,"exposure");exposure_->setSuffix(" EV");
@@ -299,7 +303,7 @@ QWidget* MainWindow::buildControls() {
     convertGamut_->setToolTip("Convert scRGB to BT.2020 in Process pixels mode. Uncheck to retain scRGB for untouched linear HDR JXL and sRGB/BT.709 primaries for other outputs.");
     processingForm->addRow(convertGamut_);
     processingForm->addRow("Exposure (EV)",exposure_);processingForm->addRow("Max edge (px)",maxEdge_);processingForm->addRow(bt2020_);layout->addWidget(processing_);
-    raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawLayout->addRow("HDR mode",rawMode_);
+    raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawMode_->setCurrentIndex(1);rawLayout->addRow("HDR mode",rawMode_);
     rawCustom_=new QWidget;auto* rawForm=new QFormLayout(rawCustom_);rawForm->setContentsMargins(0,0,0,0);
     rawExposure_=real(-3,3,0,0.1,"rawExposure");wb_=combo({"Camera","Auto","Daylight","Cloudy","Shade","Tungsten","Fluorescent","Flash","Kelvin"},"rawWhiteBalance");kelvin_=spin(2000,12000,5200,"rawKelvin");kelvin_->setSingleStep(100);
     highlight_=real(0,3,0,0.1,"rawHighlightStops");shoulder_=real(0,1,0.5,0.05,"rawShoulder");nits_=spin(1000,10000,1500,"rawTargetNits");nits_->setSingleStep(100);
@@ -325,11 +329,14 @@ QWidget* MainWindow::buildControls() {
             if(paths.isEmpty()){QMessageBox::warning(this,"Cannot open output folder","Select an image to open its source folder.");return;}
             path=QFileInfo(paths.first()).absolutePath();
         }
+        if(dateFolders_->isChecked()&&!path.isEmpty())path=QDir(path).filePath(outputDateFolder());
         if(path.isEmpty()||!QDir().mkpath(path)){QMessageBox::warning(this,"Cannot open output folder","Choose a writable output folder.");return;}
         if(!QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(path).absolutePath())))QMessageBox::warning(this,"Cannot open output folder","The system file manager could not open this folder.");
     });
     formatFolders_=check("Create format subfolders","formatSubfolders");destinationLayout->addWidget(formatFolders_);
     formatFolders_->setToolTip("Group outputs by format: avif/, jxl/ and jpg/ inside the destination folder.");
+    dateFolders_=check("Create date subfolder","dateSubfolders");destinationLayout->addWidget(dateFolders_);
+    dateFolders_->setToolTip("Create today’s folder using the system’s short date format. Slashes and other filename separators become hyphens. Format subfolders go inside it.");
     sourceFolder_=check("Save to original folder","saveToSourceFolder");destinationLayout->addWidget(sourceFolder_);
     sourceFolder_->setToolTip("Save beside each source image. Format subfolders, when enabled, are created there.");
     renameConflicts_=check("Rename if conflict","renameConflicts");destinationLayout->addWidget(renameConflicts_);
@@ -341,7 +348,7 @@ QWidget* MainWindow::buildControls() {
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
     selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue · finish active files");cancel_->setObjectName("cancelQueue");
     visible_->setToolTip("Convert all visible files");selected_->setToolTip("Convert selected files");
-    auto* startButtons=new QHBoxLayout;startButtons->addWidget(visible_,1);startButtons->addWidget(selected_,1);queueLayout->insertLayout(0,startButtons);
+    // Start actions are placed outside the collapsible output settings.
     queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
     connect(mode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(targets_,&QListWidget::itemChanged,this,&MainWindow::updateMode);connect(preset_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(rawMode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(wb_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
     connect(exposure_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateMode);connect(maxEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateMode);
@@ -468,7 +475,10 @@ void MainWindow::updateCounts() {
     const int selected=selection_->selectedRows(0).size();const bool busy=queue_->busy()||(updater_&&updater_->busy()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy);
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
-    selected_->setEnabled(selected>0&&hasTargets&&!busy);visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(busy);remove_->setEnabled(selected>0&&!busy);clear_->setEnabled(!busy&&(catalog_->rowCount()>0||catalog_->scanning()));workers_->setEnabled(!busy);
+    auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
+    stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
+    progressStop_->setVisible(queue_->busy());
+    selected_->setEnabled(selected>0&&hasTargets&&!busy);visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);clear_->setEnabled(!busy&&(catalog_->rowCount()>0||catalog_->scanning()));workers_->setEnabled(!busy);
 }
 void MainWindow::showMetadata() {
     const auto selected=selection_->selectedRows(0);if(selected.isEmpty()){inspector_->clear();return;}
@@ -499,7 +509,7 @@ void MainWindow::convertFiles(bool selected) {
                 auto& inputs=inputsByTarget[int(target)];if(!inputs.contains(path))inputs.append(path);
             }
         }
-        OutputLayout layout;layout.format_subfolders=formatFolders_->isChecked();layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
+        OutputLayout layout;layout.format_subfolders=formatFolders_->isChecked();layout.date_subfolders=dateFolders_->isChecked();layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
         for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.raw)layout.raw_inputs.insert(record.path);}
         QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())),layout);
         if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");
