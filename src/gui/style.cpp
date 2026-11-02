@@ -41,6 +41,8 @@ void applyDesktopStyle(int theme) {
         QGroupBox { font-weight: 600; border: 1px solid palette(mid); border-radius: 6px; margin-top: 10px; padding: 12px 8px 8px; }
         QGroupBox::title { subcontrol-origin: margin; left: 10px; }
         QPushButton { padding: 7px; }
+        QToolButton[pushAppearance="true"] { padding: 7px; }
+        QToolButton[pushAppearance="true"]::menu-indicator { image: none; width: 0px; }
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit { padding: 5px; }
         QPushButton[primary="true"] { background: #2e8069; color: white; }
         QPushButton[primary="true"][noSelection="true"] { background: #c4e3d3; color: #567565; }

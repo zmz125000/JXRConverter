@@ -77,14 +77,37 @@ public:
 protected:
     void paintEvent(QPaintEvent*) override {QStyleOption option;option.initFrom(this);option.state|=QStyle::State_Horizontal;QPainter painter(this);style()->drawPrimitive(QStyle::PE_IndicatorToolBarSeparator,&option,&painter,this);}
 };
+// Use the same InstantPopup behavior as Recent folders, while drawing the
+// regular push-button control used by the neighboring actions.
+class PopupButton : public QToolButton {
+    QStyleOptionButton buttonOption() const {
+        QStyleOptionButton option;option.initFrom(this);option.text=text();option.icon=icon();option.iconSize=iconSize();
+        if(isDown())option.state|=QStyle::State_Sunken;else option.state|=QStyle::State_Raised;
+        if(isChecked())option.state|=QStyle::State_On;
+        return option;
+    }
+public:
+    PopupButton(){setPopupMode(QToolButton::InstantPopup);setToolButtonStyle(Qt::ToolButtonTextOnly);setProperty("pushAppearance",true);}
+    QSize sizeHint() const override {auto option=buttonOption();return style()->sizeFromContents(QStyle::CT_PushButton,&option,fontMetrics().size(Qt::TextShowMnemonic,text()),this);}
+protected:
+    void paintEvent(QPaintEvent*) override {auto option=buttonOption();QPainter painter(this);style()->drawControl(QStyle::CE_PushButton,&option,&painter,this);}
+};
 const QStringList aspectNames={"16:9","4:3","1:1","9:16 (portrait)","3:4 (portrait)"};
 const double aspectRatios[]={16.0/9,4.0/3,1,9.0/16,3.0/4};
-class WidthMatchedScrollArea : public QScrollArea {
+class WidthMatchedWidget : public QWidget {
     QWidget* reference_;
 public:
-    explicit WidthMatchedScrollArea(QWidget* reference):reference_(reference){reference->installEventFilter(this);setFixedWidth(reference->width());}
+    explicit WidthMatchedWidget(QWidget* reference):reference_(reference){reference->installEventFilter(this);setFixedWidth(reference->width());}
 protected:
-    bool eventFilter(QObject* object,QEvent* event) override {if(object==reference_&&event->type()==QEvent::Resize)setFixedWidth(reference_->width());return QScrollArea::eventFilter(object,event);}
+    bool eventFilter(QObject* object,QEvent* event) override {if(object==reference_&&event->type()==QEvent::Resize)setFixedWidth(reference_->width());return QWidget::eventFilter(object,event);}
+};
+class FloatingClearButton : public QPushButton {
+    QPlainTextEdit* edit_;
+    void anchor(){adjustSize();const auto rect=edit_->viewport()->geometry();move(rect.right()-width()-7,rect.top()+8);raise();}
+public:
+    explicit FloatingClearButton(QPlainTextEdit* edit):QPushButton("Clear",edit),edit_(edit){edit->installEventFilter(this);edit->viewport()->installEventFilter(this);anchor();}
+protected:
+    bool eventFilter(QObject* object,QEvent* event) override {if(event->type()==QEvent::Resize||event->type()==QEvent::Show||event->type()==QEvent::StyleChange)anchor();return QPushButton::eventFilter(object,event);}
 };
 QComboBox* combo(const QStringList& values,const char* name,QWidget* parent=nullptr) {auto* w=new QComboBox(parent);w->addItems(values);w->setObjectName(name);return w;}
 QSpinBox* spin(int low,int high,int initial,const char* name) {auto* w=new QSpinBox;w->setRange(low,high);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
@@ -151,11 +174,11 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* direction=new QPushButton("Ascending");direction->setObjectName("sortDirection");viewBar->addWidget(new QLabel("Sort"));viewBar->addWidget(sort_);viewBar->addWidget(direction);viewBar->addStretch();
     smoothScrolling_=new QCheckBox("Smooth scrolling");smoothScrolling_->setObjectName("smoothScrolling");
     smoothScrolling_->setToolTip("Animate scrolling in the image grid, list and details views.");viewBar->addWidget(smoothScrolling_);
-    thumbnailAspect_=new QToolButton;thumbnailAspect_->setObjectName("thumbnailAspect");thumbnailAspect_->setPopupMode(QToolButton::InstantPopup);thumbnailAspect_->setText("1:1");
+    thumbnailAspect_=new PopupButton;thumbnailAspect_->setObjectName("thumbnailAspect");thumbnailAspect_->setText("1:1");
     auto* aspectMenu=new QMenu(thumbnailAspect_);thumbnailAspect_->setMenu(aspectMenu);auto* aspectActions=new QActionGroup(this);aspectActions->setExclusive(true);
     for(int i=0;i<aspectNames.size();++i){auto* action=aspectMenu->addAction(aspectNames[i]);action->setData(i);action->setCheckable(true);action->setChecked(i==aspectIndex_);aspectActions->addAction(action);connect(action,&QAction::triggered,this,[this,i]{setThumbnailAspect(i);});}
     thumbnailAspect_->setToolTip("Thumbnail cell aspect ratio; images retain their original proportions");viewBar->addWidget(thumbnailAspect_);
-    autoAspect_=check("Auto","autoThumbnailAspect",true);autoAspect_->setToolTip("Sample the first three images on import, then up to three images in the viewport’s first row when scrolling. Mixed ratios use 1:1.");viewBar->addWidget(autoAspect_);
+    autoAspect_=check("Auto","autoThumbnailAspect",true);autoAspect_->setToolTip("Sample two images on import and in the viewport’s first row when scrolling. Ratio ranges choose the shape; disagreement keeps the current shape.");viewBar->addWidget(autoAspect_);
     aspectTimer_=new QTimer(this);aspectTimer_->setSingleShot(true);aspectTimer_->setInterval(50);connect(aspectTimer_,&QTimer::timeout,this,&MainWindow::updateAutoThumbnailAspect);
     thumbnailFit_=new QPushButton("Fit");thumbnailFit_->setObjectName("thumbnailFit");thumbnailFit_->setCheckable(true);
     thumbnailFit_->setToolTip("Fit shows the whole image. Fill crops the image to fill its thumbnail cell. Click to switch.");viewBar->addWidget(thumbnailFit_);
@@ -173,10 +196,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
     auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
-    jobButton_=new QToolButton;jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);jobButton_->setPopupMode(QToolButton::DelayedPopup);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
-    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Click to view this job; hold or hover to choose a job. Counts: finished / all / skipped / failed (images).");
-    jobHover_=new QTimer(this);jobHover_->setSingleShot(true);jobHover_->setInterval(350);jobButton_->installEventFilter(this);
-    connect(jobHover_,&QTimer::timeout,this,[this]{if(jobButton_->underMouse()&&!jobMenu_->isVisible())jobMenu_->popup(jobButton_->mapToGlobal(QPoint(0,jobButton_->height())));});
+    jobButton_=new PopupButton;jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
+    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Click to choose a job. Counts: finished / all / skipped / failed (images).");
     running_=new QPushButton("Running");running_->setObjectName("runningJob");actionsLayout->addWidget(running_);connect(running_,&QPushButton::clicked,this,[this]{const auto batch=queue_->runningBatch();if(batch>=0)showJob(batch);});
     tab("Remember",5,"statusRemember")->setToolTip("Images you clicked or individually selected; Select all does not add images");
     tab("Selected",1,"statusSelected")->setToolTip("Your selection across all views; image clicks leave it unchanged");
@@ -196,20 +217,21 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* scroll=new QScrollArea;scroll->setObjectName("conversionScroll");scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
     sidebar->addTab(scroll,"Conversion");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
-    auto* logPanel=new QWidget;auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(8,8,8,8);auto* logControls=new QHBoxLayout;logControls->addStretch();
-    auto* clearLog=new QPushButton("Clear");clearLog->setObjectName("clearLog");logControls->addWidget(clearLog);logLayout->addLayout(logControls);
-    outputLog_=new QPlainTextEdit;outputLog_->setObjectName("outputLog");outputLog_->setReadOnly(true);outputLog_->setMaximumBlockCount(5000);outputLog_->setLineWrapMode(QPlainTextEdit::NoWrap);logLayout->addWidget(outputLog_,1);sidebar->addTab(logPanel,"Log");connect(clearLog,&QPushButton::clicked,outputLog_,&QPlainTextEdit::clear);
+    auto* logPanel=new QWidget;auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(0,0,0,0);
+    outputLog_=new QPlainTextEdit;outputLog_->setObjectName("outputLog");outputLog_->setReadOnly(true);outputLog_->setMaximumBlockCount(5000);outputLog_->setLineWrapMode(QPlainTextEdit::NoWrap);logLayout->addWidget(outputLog_,1);sidebar->addTab(logPanel,"Log");
+    auto* clearLog=new FloatingClearButton(outputLog_);clearLog->setObjectName("clearLog");connect(clearLog,&QPushButton::clicked,outputLog_,&QPlainTextEdit::clear);
     connect(OutputCapture::instance(),&OutputCapture::textReady,this,[this](const QString& text){auto* bar=outputLog_->verticalScrollBar();const bool follow=bar->value()==bar->maximum();QTextCursor cursor(outputLog_->document());cursor.movePosition(QTextCursor::End);cursor.insertText(text);if(follow){outputLog_->setTextCursor(cursor);outputLog_->ensureCursorVisible();}});
     logMessage("JXRConverter "+QString::fromStdString(jxrc::version()));
     auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
     auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
+    auto* outputPanel=new WidthMatchedWidget(scroll->parentWidget());outputPanel->setObjectName("outputPanel");auto* outputLayout=new QVBoxLayout(outputPanel);outputLayout->setContentsMargins(0,0,0,0);
     auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(12,0,12,0);startButtons->addWidget(visible_,1);
     auto* openQueueOutput=new QPushButton;openQueueOutput->setObjectName("openQueueOutputFolder");openQueueOutput->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));openQueueOutput->setToolTip("Open output folder");startButtons->addWidget(openQueueOutput);connect(openQueueOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
-    startButtons->addWidget(selected_,1);sideLayout->addLayout(startButtons);
-    auto* outputScroll=new WidthMatchedScrollArea(scroll->parentWidget());outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);sideLayout->addWidget(outputScroll,0,Qt::AlignHCenter);
+    startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
+    auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(12,6,12,12);auto* progressRow=new QHBoxLayout;progressRow->addWidget(progress_,1);
     progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();progressRow->addWidget(progressStop_);progressLayout->addLayout(progressRow);
-    connect(progressStop_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);sideLayout->addWidget(progressFrame);
+    connect(progressStop_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,0,Qt::AlignHCenter);
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
@@ -700,13 +722,16 @@ void MainWindow::updateAutoThumbnailAspect() {
     if(!autoAspect_->isChecked()||!aspectSamplePending_)return;
     QVector<int> rows;
     if(aspectViewportSample_){if(viewMode_->checkedId()!=0)return;for(const auto& index:list_->firstVisibleRow())rows.append(proxy_->mapToSource(index).row());}
-    else for(int row=0;row<std::min(3,catalog_->rowCount());++row)rows.append(row);
+    else for(int row=0;row<std::min(2,catalog_->rowCount());++row)rows.append(row);
     if(rows.isEmpty())return;
     int choice=-1;
     for(const auto row:rows){const auto& record=catalog_->record(row);if(!record.inspected)return;
-        int match=2;
-        if(record.width>0&&record.height>0){const double ratio=double(record.width)/record.height;for(int i=0;i<5;++i)if(std::abs(ratio/aspectRatios[i]-1)<0.03){match=i;break;}}
-        if(choice<0)choice=match;else if(choice!=match){choice=2;break;}
+        if(record.width<=0||record.height<=0){aspectSamplePending_=false;return;}
+        const double ratio=double(record.width)/record.height;
+        // Near-square images use square cells. Landscape and portrait ranges
+        // are mirrored, with 1.6 separating 4:3 and 16:9 landscape cells.
+        const int match=ratio>=1.6?0:ratio>1.1?1:ratio<1.0/1.6?3:ratio<1.0/1.1?4:2;
+        if(choice<0)choice=match;else if(choice!=match){aspectSamplePending_=false;return;}
     }
     aspectSamplePending_=false;setThumbnailAspect(choice);
 }
@@ -787,7 +812,7 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after active conversions finish…");event->ignore();return;}event->accept();
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
-    if(watched==jobButton_){if(event->type()==QEvent::Enter)jobHover_->start();else if(event->type()==QEvent::Leave||event->type()==QEvent::MouseButtonPress)jobHover_->stop();}
+
 
     if(targets_&&watched==targets_->viewport()&&event->type()==QEvent::MouseButtonRelease) {
         auto* mouse=static_cast<QMouseEvent*>(event);

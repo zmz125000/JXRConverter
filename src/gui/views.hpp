@@ -12,7 +12,7 @@ public:
     void setPresentation(bool grid, int size, double aspect = 1.0);
     void setSmoothScrolling(bool enabled);
     void selectAll() override;
-    QModelIndexList firstVisibleRow(int count = 3) const;
+    QModelIndexList firstVisibleRow(int count = 2) const;
 signals:
     void pathsDropped(const QStringList& paths);
     void bulkSelectionChanged(bool selecting);

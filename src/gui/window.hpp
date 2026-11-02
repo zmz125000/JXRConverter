@@ -115,7 +115,7 @@ private:
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit *inspector_, *outputLog_;
     QTimer* updateTimer_;
-    QTimer *jobHover_, *jobSaveTimer_;
+    QTimer* jobSaveTimer_;
     QMenu* jobMenu_;
     QToolButton *jobButton_, *thumbnailAspect_;
     QTimer* aspectTimer_;

@@ -28,6 +28,7 @@
 #include <QScrollBar>
 #include <QScrollArea>
 #include <QGroupBox>
+#include <QLayout>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QDateEdit>
@@ -378,24 +379,26 @@ private slots:
         auto* tabs=window.findChild<QTabWidget*>("settingsTabs");auto* conversion=window.findChild<QScrollArea*>("conversionScroll");auto* output=window.findChild<QScrollArea*>("outputQueueScroll");
         auto* formats=window.findChild<QGroupBox*>("outputFormats");auto* destination=window.findChild<QGroupBox*>("outputDestination");
         QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
+        auto* panel=window.findChild<QWidget*>("outputPanel");QVERIFY(panel);QCOMPARE(panel->width(),conversion->width());QCOMPARE(window.findChild<QPushButton*>("convertVisible")->parentWidget(),panel);QVERIFY(panel->isAncestorOf(window.findChild<QProgressBar*>("conversionProgress")));
         tabs->setCurrentIndex(2);QCOMPARE(tabs->tabText(2),QString("Log"));auto* log=window.findChild<QPlainTextEdit*>("outputLog");auto* clear=window.findChild<QPushButton*>("clearLog");
-        QVERIFY(tabs->widget(2)->isAncestorOf(clear));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(2)->width()/2);
+        QVERIFY(tabs->widget(2)->isAncestorOf(clear));QCOMPARE(clear->parentWidget(),log);QCOMPARE(tabs->widget(2)->layout()->count(),1);QVERIFY(log->viewport()->geometry().contains(clear->geometry()));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(2)->width()/2);
+        log->setPlainText(QString("log entry\n").repeated(200));QTest::qWait(10);const auto position=clear->pos();log->verticalScrollBar()->setValue(0);log->verticalScrollBar()->setValue(log->verticalScrollBar()->maximum());QCOMPARE(clear->pos(),position);
         window.resize(1600,850);QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
     }
     void aspectRatioMenuAndAutoSampling() {
         appSettings().clear();MainWindow window;window.show();auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");
-        QVERIFY(automatic->isChecked());QCOMPARE(aspect->popupMode(),QToolButton::InstantPopup);QCOMPARE(aspect->menu()->actions().size(),5);
+        QVERIFY(automatic->isChecked());QVERIFY(aspect->menu());QCOMPARE(aspect->popupMode(),QToolButton::InstantPopup);QCOMPARE(aspect->height(),window.findChild<QPushButton*>("thumbnailFit")->height());QCOMPARE(aspect->menu()->actions().size(),5);
         const QStringList names={"16:9","4:3","1:1","9:16 (portrait)","3:4 (portrait)"};const double ratios[]={16.0/9,4.0/3,1,9.0/16,3.0/4};
         auto* view=window.findChild<FileListView*>();automatic->setChecked(false);
         for(int i=0;i<5;++i){auto* action=aspect->menu()->actions()[i];QCOMPARE(action->text(),names[i]);action->trigger();auto* delegate=dynamic_cast<ThumbnailDelegate*>(view->itemDelegate());QCOMPARE(delegate->aspect,ratios[i]);QCOMPARE(view->gridSize().height(),qRound(delegate->edge/ratios[i])+94);}
-        QStringList files;for(int i=0;i<3;++i)files.append(makeImage(root("auto-four-three"),QString::number(i)+".jpg",120,90,100));
+        QStringList files;for(int i=0;i<3;++i)files.append(makeImage(root("auto-four-three"),QString::number(i)+".jpg",i==0?120:i==1?150:200,i==0?90:100,100));
         window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),3);QTRY_VERIFY(inspected(*window.catalog()));QTest::qWait(70);QCOMPARE(aspect->text(),QString("3:4"));
         automatic->setChecked(true);QTRY_COMPARE(aspect->text(),QString("4:3"));
         window.catalog()->clear();QStringList mixed{makeImage(root("mixed-ar"),"a.jpg",160,90,100),makeImage(root("mixed-ar"),"b.jpg",120,90,100),makeImage(root("mixed-ar"),"c.jpg",90,120,100)};
-        window.addPaths(mixed);QTRY_COMPARE(window.catalog()->rowCount(),3);QTRY_VERIFY(inspected(*window.catalog()));QTRY_COMPARE(aspect->text(),QString("1:1"));
+        window.addPaths(mixed);QTRY_COMPARE(window.catalog()->rowCount(),3);QTRY_VERIFY(inspected(*window.catalog()));QTest::qWait(100);QCOMPARE(aspect->text(),QString("4:3"));
         // Auto off stops metadata work requested only for the initial sample.
         Catalog model;model.setBackgroundMetadata(false);model.setAspectSampling(false);model.addPaths(files);QTRY_COMPARE(model.rowCount(),3);model.setBackgroundMetadata(false);QTest::qWait(50);QCOMPARE(model.metadataJobCount(),0);QVERIFY(!model.record(0).inspected);
-        model.setAspectSampling(true);QTRY_VERIFY(inspected(model));
+        model.setAspectSampling(true);QTRY_VERIFY(model.record(0).inspected&&model.record(1).inspected);QVERIFY(!model.record(2).inspected);
     }
     void viewportAspectSamplingAndAutoPersistence() {
         appSettings().clear();QStringList files;const auto directory=root("viewport-ar");
@@ -552,7 +555,7 @@ private slots:
         selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
         selection->select(model->index(1,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
         window.catalog()->setStatus(b,"Done");window.catalog()->setStatus(c,"Failed");
-        auto tab=[&](const char* name){window.findChild<QAbstractButton*>(name)->click();};
+        auto tab=[&](const char* name){if(QString::fromLatin1(name)=="statusJob")chooseJob(window,0);else window.findChild<QAbstractButton*>(name)->click();};
         tab("statusFinished");QCOMPARE(model->rowCount(),1);QCOMPARE(selection->selectedRows().size(),1);
         QVERIFY(window.findChild<QLabel*>("catalogCounts")->text().contains("2 selected"));
         tab("statusAll");QCOMPARE(selection->selectedRows().size(),2);
@@ -599,7 +602,7 @@ private slots:
             auto single=[&](int row){bool chosen=false;QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("convertImage");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});view->customContextMenuRequested(view->visualRect(window.filterModel()->index(row,0)).center());return chosen;};
             QVERIFY(single(2));QTRY_COMPARE(done.count(),3);window.findChild<QPushButton*>("statusAll")->click();QVERIFY(single(1));QTRY_COMPARE(done.count(),4);
             QCOMPARE(menu->actions().size(),3);QVERIFY(savedJob(window,0)->isChecked());
-            window.findChild<QAbstractButton*>("statusJob")->click();QCOMPARE(window.filterModel()->rowCount(),2);
+            QVERIFY(chooseJob(window,0));QCOMPARE(window.filterModel()->rowCount(),2);
             QVERIFY(chooseJob(window,1));QCOMPARE(window.filterModel()->rowCount(),2);
             const auto selected=view->selectionModel()->selectedRows().size();
             QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(window.filterModel()->index(0,0)).center());QCOMPARE(view->selectionModel()->selectedRows().size(),1);QCOMPARE(selected,0);
@@ -608,14 +611,14 @@ private slots:
         }
         MainWindow restored;restored.show();QTRY_COMPARE(restored.catalog()->rowCount(),3);QVERIFY(!restored.queue()->busy());
         QCOMPARE(restored.findChild<QMenu*>("jobMenu")->actions().size(),3);QVERIFY(savedJob(restored,1)->isChecked());
-        restored.findChild<QAbstractButton*>("statusJob")->click();QCOMPARE(restored.filterModel()->rowCount(),2);
+        QVERIFY(chooseJob(restored,1));QCOMPARE(restored.filterModel()->rowCount(),2);
         QVERIFY(chooseJob(restored,2));QCOMPARE(restored.filterModel()->rowCount(),1);QCOMPARE(restored.filterModel()->index(0,0).data(Catalog::PathRole).toString(),a);
     }
     void selectAllRememberAndTabClear() {
         appSettings().clear();MainWindow window;window.show();
         const auto a=makeImage(root("bulk-remember"),"a.jpg",32,24,100),b=makeImage(root("bulk-remember"),"b.jpg",32,24,100),c=makeImage(root("bulk-remember"),"c.jpg",32,24,100);
         window.addPaths({a,b,c});QTRY_COMPARE(window.catalog()->rowCount(),3);auto* view=window.findChild<FileListView*>();auto* model=window.filterModel();
-        auto tab=[&](const char* name){window.findChild<QAbstractButton*>(name)->click();};
+        auto tab=[&](const char* name){if(QString::fromLatin1(name)=="statusJob")chooseJob(window,0);else window.findChild<QAbstractButton*>(name)->click();};
         window.findChild<QPushButton*>("selectAllImages")->click();tab("statusRemember");QCOMPARE(model->rowCount(),0);
         tab("statusAll");window.findChild<QPushButton*>("deselectImages")->click();view->setFocus();QTest::keyClick(view,Qt::Key_A,Qt::ControlModifier);QCOMPARE(view->selectionModel()->selectedRows().size(),3);tab("statusRemember");QCOMPARE(model->rowCount(),0);
         tab("statusAll");window.findChild<QPushButton*>("deselectImages")->click();view->selectAll();tab("statusRemember");QCOMPARE(model->rowCount(),0);
@@ -635,7 +638,7 @@ private slots:
         const auto output=root("job-folders-output");window.findChild<QLineEdit*>("outputDirectory")->setText(output);
         window.findChild<QSpinBox*>("parallelJobs")->setValue(1);window.findChild<QCheckBox*>("jobSubfolders")->setChecked(true);window.findChild<QCheckBox*>("dateSubfolders")->setChecked(true);
         QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();
-        auto* jobButton=window.findChild<QToolButton*>("statusJob");QVERIFY(jobButton->isChecked());QCOMPARE(jobButton->popupMode(),QToolButton::DelayedPopup);QCOMPARE(window.findChild<QPushButton*>("clearLibrary")->text(),QString("Cancel job"));
+        auto* jobButton=window.findChild<QToolButton*>("statusJob");QVERIFY(jobButton->isChecked());QVERIFY(jobButton->menu());QCOMPARE(jobButton->popupMode(),QToolButton::InstantPopup);QCOMPARE(jobButton->popupMode(),window.findChild<QToolButton*>("recentFolders")->popupMode());QCOMPARE(jobButton->height(),window.findChild<QPushButton*>("runningJob")->height());QCOMPARE(window.findChild<QPushButton*>("clearLibrary")->text(),QString("Cancel job"));
         window.findChild<QPushButton*>("statusAll")->click();window.findChild<QPushButton*>("runningJob")->click();QVERIFY(jobButton->isChecked());QVERIFY(savedJob(window,1)->isChecked());
         // UI edits after submission must not move the pending output.
         window.findChild<QLineEdit*>("outputDirectory")->setText(root("different-job-output"));window.findChild<QCheckBox*>("jobSubfolders")->setChecked(false);
@@ -644,7 +647,8 @@ private slots:
         QCOMPARE(jobButton->text(),QString("Job #1 (2/2/0/0)"));QCOMPARE(savedJob(window,1)->text(),jobButton->text());
         FolderReceiver receiver;QDesktopServices::setUrlHandler("file",&receiver,"open");auto restore=qScopeGuard([]{QDesktopServices::unsetUrlHandler("file");});
         auto* icon=window.findChild<QPushButton*>("openQueueOutputFolder");QVERIFY(icon);QVERIFY(!icon->icon().isNull());icon->click();QCOMPARE(receiver.opened.toLocalFile(),folder);
-        QTest::mouseMove(jobButton,jobButton->rect().center());QTRY_VERIFY(window.findChild<QMenu*>("jobMenu")->isVisible());window.findChild<QMenu*>("jobMenu")->close();
+        QTest::mouseMove(jobButton,jobButton->rect().center());QTest::qWait(450);QVERIFY(!window.findChild<QMenu*>("jobMenu")->isVisible());
+        QSignalSpy opened(jobButton->menu(),&QMenu::aboutToShow);QTimer::singleShot(100,jobButton->menu(),&QMenu::close);QTest::mouseClick(jobButton,Qt::LeftButton);QTRY_COMPARE(opened.count(),1);QTRY_VERIFY(!jobButton->menu()->isVisible());
     }
     void independentJobSelectionsAndConvertSelected() {
         appSettings().clear();MainWindow window;window.show();
