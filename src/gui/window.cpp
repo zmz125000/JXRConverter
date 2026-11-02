@@ -217,7 +217,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* selectAll=new QPushButton("Select all");selectAll->setObjectName("selectAllImages");actionsLayout->addWidget(selectAll);
     connect(selectAll,&QPushButton::clicked,this,&MainWindow::selectVisible);
     auto* deselect=new QPushButton("Deselect");deselect->setObjectName("deselectImages");actionsLayout->addWidget(deselect);connect(deselect,&QPushButton::clicked,this,&MainWindow::clearImageSelection);
-    remove_=new QPushButton("Remove selected");remove_->setObjectName("removeSelected");actionsLayout->addWidget(remove_);connect(remove_,&QPushButton::clicked,this,[this]{catalog_->removePaths(selectedPaths());});
+    remove_=new QPushButton("Remove selected");remove_->setObjectName("removeSelected");actionsLayout->addWidget(remove_);connect(remove_,&QPushButton::clicked,this,&MainWindow::removeImageSelection);
     clear_=new QPushButton("Clear");clear_->setObjectName("clearLibrary");actionsLayout->addWidget(clear_);connect(clear_,&QPushButton::clicked,this,&MainWindow::clearCurrentTab);auto* footerScroll=new QScrollArea;footerScroll->setObjectName("libraryFooterScroll");footerScroll->setFrameShape(QFrame::NoFrame);footerScroll->setWidgetResizable(true);footerScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);footerScroll->setWidget(libraryActions);footerScroll->setFixedHeight(libraryActions->sizeHint().height()+style()->pixelMetric(QStyle::PM_ScrollBarExtent)+2);layout->addWidget(footerScroll);
 
     auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
@@ -269,7 +269,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             if(!fieldIndex.isValid()){QMenu menu;auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");if(menu.exec(view->viewport()->mapToGlobal(point))==reset)resetFilters();return;}
             const int fieldColumn=fieldIndex.column();const QString fieldValue=fieldIndex.data().toString();
             auto index=fieldIndex.siblingAtColumn(0);
-            if(!collectionView()&&!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+            if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
             QMenu menu;QAction* addField=nullptr;
             if(view==table_){addField=menu.addAction("Add this to filters");addField->setObjectName("addFieldToFilters");addField->setEnabled(!fieldValue.isEmpty());addField->setToolTip(catalog_->headerData(fieldColumn,Qt::Horizontal,Qt::DisplayRole).toString()+": "+fieldValue);}
             auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
@@ -282,7 +282,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             const auto queueSelection=selectedPaths();
             auto* sendJob=menu.addAction("Send selected to new job");sendJob->setObjectName("sendSelectedToJob");sendJob->setEnabled(!selectedPaths().isEmpty()&&!updater_->installing());
             auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
-            auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
+            auto* remove=menu.addAction(statusFilter_->checkedId()==1?"Remove from selection":"Remove selected");remove->setEnabled(statusFilter_->checkedId()==1||!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
             if(action==reset)resetFilters();
             else if(addField&&action==addField){
@@ -301,7 +301,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
                 else if(action==start){dateFrom_->setDate(captured);if(dateTo_->date()<captured)dateTo_->setDate(captured);}
                 else{dateTo_->setDate(captured);if(dateFrom_->date()>captured)dateFrom_->setDate(captured);}
                 today_->setChecked(false);metadataFilters_->setChecked(true);dateEnabled_->setChecked(true);updateFilter();
-            }else if(action==open)openImage(index);else if(action==folder)QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(index.data(Catalog::PathRole).toString()).absolutePath()));else if(action==remove)catalog_->removePaths(selectedPaths());
+            }else if(action==open)openImage(index);else if(action==folder)QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(index.data(Catalog::PathRole).toString()).absolutePath()));else if(action==remove)removeImageSelection();
         });
     }
     connect(list_,&FileListView::pathsDropped,this,&MainWindow::addDroppedPaths);connect(table_,&FileTableView::pathsDropped,this,&MainWindow::addDroppedPaths);
@@ -334,9 +334,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* view:QList<QAbstractItemView*>{list_,table_})connect(view,&QAbstractItemView::clicked,this,[this](const QModelIndex& index){rememberedImages_.insert(index.data(Catalog::PathRole).toString());showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,[this]{syncSelection();updateCounts();});connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
     connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{requestAspectSample(false);});
-    connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);rememberedImages_.remove(path);for(auto& selected:jobSelections_)selected.remove(path);}});
+    connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);selectedTabImages_.remove(path);rememberedImages_.remove(path);for(auto& selected:jobSelections_)selected.remove(path);}});
     connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())aspectSamplePending_=false;updateFilter();});
-    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{aspectSamplePending_=false;loggedWarnings_.clear();selectedImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
+    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{aspectSamplePending_=false;loggedWarnings_.clear();selectedImages_.clear();selectedTabImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& first,const QModelIndex& last){
         updateCounts();showMetadata();if(autoAspect_->isChecked()&&aspectSamplePending_)aspectTimer_->start();
         for(int row=first.row();row<=last.row();++row){const auto& record=catalog_->record(row);if(record.metadataWarning.isEmpty())continue;const auto warning=record.path+"\n"+record.metadataWarning;if(!loggedWarnings_.contains(warning)){loggedWarnings_.insert(warning);logMessage("Warning: "+warning);}}
@@ -349,7 +349,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(queue_,&ConversionQueue::statusChanged,this,[this](const QString& path,const QString& state,const QString& detail){logMessage(state+": "+path+(detail.isEmpty()?QString{}:"\n"+detail));});
     connect(queue_,&ConversionQueue::progress,this,[this](int done,int total,int active){progress_->setRange(0,total);progress_->setValue(done);queueState_->setText(QString("%1 / %2 outputs finished · %3 active").arg(done).arg(total).arg(active));refreshJobs();updateCounts();});
     connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){saveJobs();queueState_->setText(QString("%1 done · %2 skipped · %3 failed · %4 cancelled").arg(success).arg(queue_->skipped()).arg(failed).arg(cancelled));logMessage(queueState_->text());updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
-    auto* deleteShortcut=new QShortcut(QKeySequence::Delete,this);connect(deleteShortcut,&QShortcut::activated,this,[this]{if(!queue_->busy()&&(list_->hasFocus()||table_->hasFocus()))catalog_->removePaths(selectedPaths());});
+    auto* deleteShortcut=new QShortcut(QKeySequence::Delete,this);connect(deleteShortcut,&QShortcut::activated,this,[this]{if((statusFilter_->checkedId()==1||!queue_->busy())&&(list_->hasFocus()||table_->hasFocus()))removeImageSelection();});
     auto* allShortcut=new QShortcut(QKeySequence::SelectAll,this);connect(allShortcut,&QShortcut::activated,this,[this]{if(list_->hasFocus()||table_->hasFocus())selectVisible();});
     for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
         auto* copy=new QShortcut(QKeySequence::Copy,view);copy->setContext(Qt::WidgetWithChildrenShortcut);
@@ -531,9 +531,9 @@ Options MainWindow::optionsForTarget(Target target) const {
     }
     validate(o);return o;
 }
-bool MainWindow::collectionView() const {return statusFilter_->checkedId()==1;}
-QSet<QString>& MainWindow::imageSelection() {return statusFilter_->checkedId()==2?jobSelections_[viewedJob_]:selectedImages_;}
+QSet<QString>& MainWindow::imageSelection() {return statusFilter_->checkedId()==1?selectedTabImages_:statusFilter_->checkedId()==2?jobSelections_[viewedJob_]:selectedImages_;}
 const QSet<QString>& MainWindow::imageSelection() const {
+    if(statusFilter_->checkedId()==1)return selectedTabImages_;
     if(statusFilter_->checkedId()!=2)return selectedImages_;
     const auto it=jobSelections_.constFind(viewedJob_);static const QSet<QString> empty;
     return it==jobSelections_.cend()?empty:it.value();
@@ -547,7 +547,7 @@ void MainWindow::syncSelection() {
     syncingSelection_=previous;
 }
 void MainWindow::changeSelection(const QItemSelection& selected,const QItemSelection& deselected) {
-    if(syncingSelection_||selectionModelChanges_||collectionView())return;
+    if(syncingSelection_||selectionModelChanges_)return;
     for(const auto& index:deselected.indexes())if(index.column()==0)imageSelection().remove(index.data(Catalog::PathRole).toString());
     for(const auto& index:selected.indexes())if(index.column()==0){const auto path=index.data(Catalog::PathRole).toString();imageSelection().insert(path);if(!bulkSelecting_)rememberedImages_.insert(path);}
     updateCounts();showMetadata();
@@ -557,6 +557,12 @@ void MainWindow::selectVisible() {
     updateFilter();showMetadata();
 }
 void MainWindow::clearImageSelection() {imageSelection().clear();updateFilter();showMetadata();}
+void MainWindow::removeImageSelection() {
+    if(statusFilter_->checkedId()==1){
+        for(const auto& path:selectedTabImages_)selectedImages_.remove(path);
+        selectedTabImages_.clear();updateFilter();showMetadata();
+    }else catalog_->removePaths(selectedPaths());
+}
 QString MainWindow::browserScrollKey() const {return QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{})+":"+QString::number(viewMode_->checkedId());}
 void MainWindow::saveBrowserScroll() {
     if(scrollView_&&!scrollKey_.isEmpty())scrollPositions_[scrollKey_]=QPoint(scrollView_->horizontalScrollBar()->value(),scrollView_->verticalScrollBar()->value());
@@ -649,7 +655,7 @@ void MainWindow::updateJobOutput(qint64 batch,const QString& input,const QString
 void MainWindow::clearCurrentTab() {
     const int tab=statusFilter_->checkedId();
     if(tab==2)return;
-    if(tab==1){clearImageSelection();return;}
+    if(tab==1){selectedImages_.clear();selectedTabImages_.clear();updateFilter();showMetadata();return;}
     if(tab==5){rememberedImages_.clear();updateFilter();return;}
     QStringList paths;for(int row=0;row<proxy_->rowCount();++row)paths.append(proxy_->index(row,0).data(Catalog::PathRole).toString());
     if(tab==0&&catalog_->scanning())catalog_->clear();else catalog_->removePaths(paths);
@@ -707,6 +713,7 @@ void MainWindow::addPaths(const QStringList& paths) {
 }
 
 void MainWindow::updateFilter() {
+    selectedTabImages_.intersect(selectedImages_);
     jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
     const auto key=browserScrollKey();const bool changed=key!=scrollKey_;if(changed)saveBrowserScroll();
     Filter f;const int tab=statusFilter_->checkedId();f.status=(tab==3||tab==4)?tab:0;
@@ -723,8 +730,8 @@ void MainWindow::updateFilter() {
     const bool dates=metadataFilters_->isChecked()&&dateEnabled_->isChecked()&&!f.today;
     dateEnabled_->setEnabled(!f.today);dateFrom_->setEnabled(dates);dateTo_->setEnabled(dates);
     const bool wasSyncing=syncingSelection_;syncingSelection_=true;proxy_->setFilter(f);
-    list_->setSelectionMode(collectionView()?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
-    table_->setSelectionMode(collectionView()?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
+    list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     syncSelection();syncingSelection_=wasSyncing;updateBackgroundMetadata();updateCounts();
     if(changed){scrollKey_=key;scrollView_=qobject_cast<QAbstractItemView*>(views_->currentWidget());restoreBrowserScroll();}
 }
@@ -783,7 +790,7 @@ void MainWindow::updateCounts() {
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
     progressStop_->setVisible(queue_->busy());
-    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
+    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy());remove_->setText(statusFilter_->checkedId()==1?"Remove from selection":"Remove selected");remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);

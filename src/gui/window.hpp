@@ -60,11 +60,11 @@ private:
     void changeSelection(const QItemSelection&, const QItemSelection&);
     void selectVisible();
     void clearImageSelection();
+    void removeImageSelection();
     void clearCurrentTab();
     void openOutputFolder();
     void showJob(qint64 number);
     void updateJobOutput(qint64, const QString&, const QString&, const QString&);
-    bool collectionView() const;
     QString browserScrollKey() const;
     void saveBrowserScroll();
     void restoreBrowserScroll();
@@ -131,7 +131,7 @@ private:
     QProgressBar* progress_;
     QStringList recentFolders_, recentFiles_, lastFiles_;
     QString appliedSearch_;
-    QSet<QString> loggedWarnings_, selectedImages_, rememberedImages_;
+    QSet<QString> loggedWarnings_, selectedImages_, selectedTabImages_, rememberedImages_;
     QHash<qint64,QSet<QString>> jobSelections_;
     struct OutputProgress {QString input, state;};
     struct SavedJob { qint64 number; QStringList files; QHash<QString,OutputProgress> outputs; QString folder; };
