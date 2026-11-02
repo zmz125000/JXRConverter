@@ -563,7 +563,7 @@ private slots:
             window.findChild<QAbstractButton*>("statusJob")->click();QCOMPARE(window.filterModel()->rowCount(),2);
             QVERIFY(chooseJob(window,1));QCOMPARE(window.filterModel()->rowCount(),2);
             const auto selected=view->selectionModel()->selectedRows().size();
-            QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(window.filterModel()->index(0,0)).center());QCOMPARE(view->selectionModel()->selectedRows().size(),selected);
+            QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(window.filterModel()->index(0,0)).center());QCOMPARE(view->selectionModel()->selectedRows().size(),1);QCOMPARE(selected,0);
             window.findChild<QPushButton*>("statusRemember")->click();window.findChild<QPushButton*>("statusSelected")->click();QVERIFY(savedJob(window,1)->isChecked());
             QFile file(configDirectory()+"/jobs.json");QVERIFY(file.open(QIODevice::ReadOnly));const auto json=QJsonDocument::fromJson(file.readAll()).object();QCOMPARE(json.value("jobs").toArray().size(),2);QCOMPARE(json.value("temporary").toArray().size(),2);
         }
@@ -606,6 +606,38 @@ private slots:
         FolderReceiver receiver;QDesktopServices::setUrlHandler("file",&receiver,"open");auto restore=qScopeGuard([]{QDesktopServices::unsetUrlHandler("file");});
         auto* icon=window.findChild<QPushButton*>("openQueueOutputFolder");QVERIFY(icon);QVERIFY(!icon->icon().isNull());icon->click();QCOMPARE(receiver.opened.toLocalFile(),folder);
         QTest::mouseMove(jobButton,jobButton->rect().center());QTRY_VERIFY(window.findChild<QMenu*>("jobMenu")->isVisible());window.findChild<QMenu*>("jobMenu")->close();
+    }
+    void independentJobSelectionsAndConvertSelected() {
+        appSettings().clear();MainWindow window;window.show();
+        const auto directory=root("job-selections"),output=root("job-selection-output");
+        const auto a=makeImage(directory,"a.jpg",64,48,100),b=makeImage(directory,"b.jpg",64,48,100),c=makeImage(directory,"c.jpg",64,48,100);
+        window.addPaths({a,b,c});QTRY_COMPARE(window.catalog()->rowCount(),3);window.findChild<QLineEdit*>("outputDirectory")->setText(output);
+        auto* view=window.findChild<FileListView*>();auto* model=window.filterModel();auto* selection=view->selectionModel();
+        selection->select(model->index(2,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();
+        // Selecting work in an already running job promotes its pending output
+        // without creating another batch or submitting the output twice.
+        selection->select(model->index(2,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        QVERIFY(window.findChild<QPushButton*>("convertSelected")->isEnabled());window.findChild<QPushButton*>("convertSelected")->click();
+        QCOMPARE(window.queue()->total(),3);QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),2);
+        window.findChild<QPushButton*>("deselectImages")->click();QTRY_COMPARE(done.count(),1);
+        QCOMPARE(view->selectionMode(),QAbstractItemView::ExtendedSelection);QCOMPARE(selection->selectedRows().size(),0);
+        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(model->index(0,0)).center());
+        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,view->visualRect(model->index(1,0)).center());QCOMPARE(selection->selectedRows().size(),2);
+        window.findChild<QPushButton*>("statusSelected")->click();QCOMPARE(model->rowCount(),1);QCOMPARE(model->index(0,0).data(Catalog::PathRole).toString(),c);
+        QVERIFY(chooseJob(window,1));QCOMPARE(selection->selectedRows().size(),2);
+        window.findChild<QLineEdit*>("instantFilter")->setText("a.jpg");QCOMPARE(selection->selectedRows().size(),1);window.findChild<QLineEdit*>("instantFilter")->clear();QCOMPARE(selection->selectedRows().size(),2);
+        window.findChild<QPushButton*>("deselectImages")->click();QCOMPARE(selection->selectedRows().size(),0);window.findChild<QPushButton*>("selectAllImages")->click();QCOMPARE(selection->selectedRows().size(),3);
+        window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,2)->isChecked());QCOMPARE(selection->selectedRows().size(),0);
+        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(model->index(2,0)).center());QCOMPARE(selection->selectedRows().size(),1);
+        QVERIFY(chooseJob(window,1));QCOMPARE(selection->selectedRows().size(),3);QVERIFY(chooseJob(window,2));QCOMPARE(selection->selectedRows().size(),1);
+        const auto jobs=window.findChild<QMenu*>("jobMenu")->actions().size();QVERIFY(QFile::remove(output+"/c_sdr.avif"));
+        window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),3);
+        QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(output+"/c_sdr.avif"));QVERIFY(savedJob(window,2)->isChecked());
+        QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),jobs);QCOMPARE(model->rowCount(),3);QCOMPARE(selection->selectedRows().size(),1);
+        QCOMPARE(savedJob(window,2)->text(),QString("Job #2 (1/3/2/0)"));QCOMPARE(savedJob(window,1)->text(),QString("Job #1 (3/3/0/0)"));
+        window.findChild<QPushButton*>("statusSelected")->click();QCOMPARE(model->rowCount(),1);QCOMPARE(model->index(0,0).data(Catalog::PathRole).toString(),c);
+        QVERIFY(chooseJob(window,2));window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),4);QVERIFY(savedJob(window,3));
     }
     void jobCountsAcrossOutputsAndRestore() {
         appSettings().clear();const auto file=makeImage(root("job-counts"),"photo.jpg",64,48,100);

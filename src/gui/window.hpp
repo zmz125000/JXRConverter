@@ -53,6 +53,8 @@ private:
     void applySearch();
     void resetFilters();
     void syncSelection();
+    QSet<QString>& imageSelection();
+    const QSet<QString>& imageSelection() const;
     void changeSelection(const QItemSelection&, const QItemSelection&);
     void selectVisible();
     void clearImageSelection();
@@ -67,7 +69,7 @@ private:
     void loadJobs();
     void saveJobs();
     void refreshJobs();
-    void recordJob(const QVector<Job>&, bool temporary);
+    void recordJob(const QVector<Job>&, bool temporary, bool reuse = false);
     QString jobText(qint64 number) const;
     QList<QWidget*> persistentControls() const;
     void restoreSettings();
@@ -81,7 +83,7 @@ private:
     void updateCounts();
     void showMetadata();
     void convertFiles(bool selected);
-    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false);
+    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false);
     void checkForUpdates();
     void logMessage(const QString&);
     QVector<Target> selectedTargets() const;
@@ -119,6 +121,7 @@ private:
     QStringList recentFolders_, recentFiles_, lastFiles_;
     QString appliedSearch_;
     QSet<QString> loggedWarnings_, selectedImages_, rememberedImages_;
+    QHash<qint64,QSet<QString>> jobSelections_;
     struct OutputProgress {QString input, state;};
     struct SavedJob { qint64 number; QStringList files; QHash<QString,OutputProgress> outputs; QString folder; };
     QVector<SavedJob> savedJobs_;

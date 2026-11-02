@@ -284,9 +284,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         for(int row=first;row<=last;++row){const auto ext=QFileInfo(catalog_->record(row).path).suffix().toLower();if(ext=="jxr"||ext=="wdp"||ext=="hdp"){thumbnailAspect_->setChecked(true);break;}}
         updateAutoThumbnailAspect();
     });
-    connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);rememberedImages_.remove(path);}});
+    connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);rememberedImages_.remove(path);for(auto& selected:jobSelections_)selected.remove(path);}});
     connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())thumbnailAspectSampleChecked_=false;updateFilter();});
-    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;loggedWarnings_.clear();selectedImages_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
+    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;loggedWarnings_.clear();selectedImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& first,const QModelIndex& last){
         updateCounts();showMetadata();updateAutoThumbnailAspect();
         for(int row=first.row();row<=last.row();++row){const auto& record=catalog_->record(row);if(record.metadataWarning.isEmpty())continue;const auto warning=record.path+"\n"+record.metadataWarning;if(!loggedWarnings_.contains(warning)){loggedWarnings_.insert(warning);logMessage("Warning: "+warning);}}
@@ -480,26 +480,32 @@ Options MainWindow::optionsForTarget(Target target) const {
     }
     validate(o);return o;
 }
-bool MainWindow::collectionView() const {const int tab=statusFilter_->checkedId();return tab==1||tab==2;}
+bool MainWindow::collectionView() const {return statusFilter_->checkedId()==1;}
+QSet<QString>& MainWindow::imageSelection() {return statusFilter_->checkedId()==2?jobSelections_[viewedJob_]:selectedImages_;}
+const QSet<QString>& MainWindow::imageSelection() const {
+    if(statusFilter_->checkedId()!=2)return selectedImages_;
+    const auto it=jobSelections_.constFind(viewedJob_);static const QSet<QString> empty;
+    return it==jobSelections_.cend()?empty:it.value();
+}
 void MainWindow::syncSelection() {
     if(selectionModelChanges_||!selection_)return;
     const bool previous=syncingSelection_;syncingSelection_=true;
     QItemSelection visible;
-    if(!selectedImages_.isEmpty())for(int row=0;row<proxy_->rowCount();++row){const auto index=proxy_->index(row,0);if(selectedImages_.contains(index.data(Catalog::PathRole).toString()))visible.select(index,index.siblingAtColumn(Catalog::ColumnCount-1));}
+    if(!imageSelection().isEmpty())for(int row=0;row<proxy_->rowCount();++row){const auto index=proxy_->index(row,0);if(imageSelection().contains(index.data(Catalog::PathRole).toString()))visible.select(index,index.siblingAtColumn(Catalog::ColumnCount-1));}
     selection_->select(visible,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
     syncingSelection_=previous;
 }
 void MainWindow::changeSelection(const QItemSelection& selected,const QItemSelection& deselected) {
     if(syncingSelection_||selectionModelChanges_||collectionView())return;
-    for(const auto& index:deselected.indexes())if(index.column()==0)selectedImages_.remove(index.data(Catalog::PathRole).toString());
-    for(const auto& index:selected.indexes())if(index.column()==0){const auto path=index.data(Catalog::PathRole).toString();selectedImages_.insert(path);if(!bulkSelecting_)rememberedImages_.insert(path);}
+    for(const auto& index:deselected.indexes())if(index.column()==0)imageSelection().remove(index.data(Catalog::PathRole).toString());
+    for(const auto& index:selected.indexes())if(index.column()==0){const auto path=index.data(Catalog::PathRole).toString();imageSelection().insert(path);if(!bulkSelecting_)rememberedImages_.insert(path);}
     updateCounts();showMetadata();
 }
 void MainWindow::selectVisible() {
-    for(int row=0;row<proxy_->rowCount();++row){const auto path=proxy_->index(row,0).data(Catalog::PathRole).toString();selectedImages_.insert(path);}
+    for(int row=0;row<proxy_->rowCount();++row){const auto path=proxy_->index(row,0).data(Catalog::PathRole).toString();imageSelection().insert(path);}
     updateFilter();showMetadata();
 }
-void MainWindow::clearImageSelection() {selectedImages_.clear();updateFilter();showMetadata();}
+void MainWindow::clearImageSelection() {imageSelection().clear();updateFilter();showMetadata();}
 QString MainWindow::browserScrollKey() const {return QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{})+":"+QString::number(viewMode_->checkedId());}
 void MainWindow::saveBrowserScroll() {
     if(scrollView_&&!scrollKey_.isEmpty())scrollPositions_[scrollKey_]=QPoint(scrollView_->horizontalScrollBar()->value(),scrollView_->verticalScrollBar()->value());
@@ -547,9 +553,10 @@ void MainWindow::refreshJobs() {
     jobButton_->setText(jobText(viewedJob_));
 }
 void MainWindow::showJob(qint64 number) {viewedJob_=number;statusFilter_->button(2)->setChecked(true);refreshJobs();saveJobs();updateFilter();}
-void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary) {
+void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse) {
     SavedJob* saved=&temporaryJob_;
-    if(!temporary){savedJobs_.append({nextJob_++,{},{},{}});saved=&savedJobs_.last();}
+    if(reuse){for(auto& job:savedJobs_)if(job.number==viewedJob_)saved=&job;}
+    else if(!temporary){savedJobs_.append({nextJob_++,{},{},{}});saved=&savedJobs_.last();}
     for(const auto& job:jobs){if(!saved->files.contains(job.input))saved->files.append(job.input);saved->outputs.insert(job.output,{job.input,"Queued"});}
     if(!jobs.isEmpty())saved->folder=QFileInfo(jobs.first().output).absolutePath();
     showJob(saved->number);
@@ -636,10 +643,10 @@ void MainWindow::updateFilter() {
     }
     const bool dates=metadataFilters_->isChecked()&&dateEnabled_->isChecked()&&!f.today;
     dateEnabled_->setEnabled(!f.today);dateFrom_->setEnabled(dates);dateTo_->setEnabled(dates);
-    syncingSelection_=true;proxy_->setFilter(f);syncingSelection_=false;
+    const bool wasSyncing=syncingSelection_;syncingSelection_=true;proxy_->setFilter(f);
     list_->setSelectionMode(collectionView()?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
     table_->setSelectionMode(collectionView()?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
-    syncSelection();updateBackgroundMetadata();updateCounts();
+    syncSelection();syncingSelection_=wasSyncing;updateBackgroundMetadata();updateCounts();
     if(changed){scrollKey_=key;scrollView_=qobject_cast<QAbstractItemView*>(views_->currentWidget());restoreBrowserScroll();}
 }
 void MainWindow::updateBackgroundMetadata() {
@@ -674,15 +681,15 @@ void MainWindow::updateAutoThumbnailAspect() {
     thumbnailAspectSampleChecked_=true;
     if(wide)thumbnailAspect_->setChecked(true);
 }
-QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(selectedImages_.contains(path))out.append(path);return out;}
+QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
 void MainWindow::updateCounts() {
-    const int selected=selectedImages_.size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
+    const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
     progressStop_->setVisible(queue_->busy());
-    selected_->setEnabled(selected>0&&hasTargets&&!busy);visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);clear_->setText(statusFilter_->checkedId()==2?"Cancel job":"Clear");
+    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);clear_->setText(statusFilter_->checkedId()==2?"Cancel job":"Clear");
     clear_->setToolTip(statusFilter_->checkedId()==2?"Cancel this job’s pending outputs; active conversions finish":"Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?queue_->hasPendingBatch(viewedJob_):statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());workers_->setEnabled(!busy);
@@ -700,10 +707,10 @@ void MainWindow::showMetadata() {
 }
 void MainWindow::convertFiles(bool selected) {
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
-    convertPaths(paths,selectedTargets());
+    convertPaths(paths,selectedTargets(),false,false,false,selected&&statusFilter_->checkedId()==2);
 }
-void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append) {
-    if(paths.isEmpty()||(!priority&&!append&&queue_->busy())||(updater_&&updater_->installing()))return;
+void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob) {
+    if(paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
     try {
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
@@ -722,8 +729,8 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
                 auto& inputs=inputsByTarget[int(target)];if(!inputs.contains(path))inputs.append(path);
             }
         }
-        const qint64 batch=priority?0:nextJob_;
-        OutputLayout layout;if(jobFolders_->isChecked())layout.job_subfolder=QDate::currentDate().toString(Qt::ISODate)+(priority?"-Temporary":"-Job-"+QString::number(batch));layout.format_subfolders=formatFolders_->isChecked();layout.date_subfolders=dateFolders_->isChecked();layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
+        const qint64 batch=reuseJob?viewedJob_:priority?0:nextJob_;
+        OutputLayout layout;if(jobFolders_->isChecked())layout.job_subfolder=QDate::currentDate().toString(Qt::ISODate)+(batch==0?"-Temporary":"-Job-"+QString::number(batch));layout.format_subfolders=formatFolders_->isChecked();layout.date_subfolders=dateFolders_->isChecked();layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
         for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.raw)layout.raw_inputs.insert(record.path);}
         QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())),layout);
         if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");
@@ -733,8 +740,8 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
             if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
         }
         for(auto& job:jobs)job.batch=batch;
-        recordJob(jobs,priority);
-        if(priority)queue_->enqueueNext(std::move(jobs),workers_->value());
+        recordJob(jobs,priority,reuseJob);
+        if(priority||reuseJob)queue_->enqueueNext(std::move(jobs),workers_->value());
         else if(append)queue_->enqueue(std::move(jobs),workers_->value());
         else queue_->start(std::move(jobs),workers_->value());
         updateCounts();
