@@ -11,6 +11,8 @@ copy cannot override the selected release.
 | libjxl | 0.12.0 | [Release](https://github.com/libjxl/libjxl/releases/tag/v0.12.0) |
 | libaom | 3.15.3 | [Tag](https://aomedia.googlesource.com/aom/+/refs/tags/v3.15.3) |
 | libavif | 1.4.2 | [Release](https://github.com/AOMediaCodec/libavif/releases/tag/v1.4.2) |
+| libheif | 1.23.7 | [Release](https://github.com/strukturag/libheif/releases/tag/v1.23.7) |
+| libde265 | 1.1.3 | [Release](https://github.com/strukturag/libde265/releases/tag/v1.1.3) |
 | LibRaw | 0.22.3 | [Release](https://github.com/LibRaw/LibRaw/releases/tag/0.22.3) |
 | JPEG XR | 0.3.1 | [Tag](https://github.com/bvibber/jpegxr/tree/0.3.1) |
 | libpng | 1.6.59 | [Tag](https://github.com/pnggroup/libpng/tree/v1.6.59) |
@@ -107,3 +109,7 @@ updates cannot silently keep an older cached release.
 The GUI and CLI share the `jxrc` engine by default. The source/license audit and
 source release process are documented in [release-audit.md](release-audit.md) and
 [redistribution.md](redistribution.md).
+
+HEIC decoding uses libheif with the bundled libde265 HEVC decoder. Encoder
+backends, runtime plugin loading, command-line examples and GUI integrations
+are disabled. The native engine retains both libraries’ notices.

@@ -38,7 +38,7 @@ QString dimensions(const Record& r) {
 }
 }
 bool supportedFile(const QString& path) {
-    static const QSet<QString> extensions = {"png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
+    static const QSet<QString> extensions = {"png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     return extensions.contains(QFileInfo(path).suffix().toLower());
 }
 namespace {

@@ -132,7 +132,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(proxy_,&QAbstractItemModel::layoutChanged,this,modelChanged);
     catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
-    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
+    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open image folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
     auto* recent=new QToolButton;recent->setObjectName("recentFolders");recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
@@ -882,7 +882,7 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
         QMap<int,QStringList> inputsByTarget;
         for(const auto& path:paths) {
             const auto extension=QFileInfo(path).suffix().toLower();
-            const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif"&&extension!="png"&&extension!="webp"&&extension!="tif"&&extension!="tiff"&&extension!="bmp"&&extension!="gif";
+            const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif"&&extension!="heic"&&extension!="heif"&&extension!="hif"&&extension!="png"&&extension!="webp"&&extension!="tif"&&extension!="tiff"&&extension!="bmp"&&extension!="gif";
             for(auto target:targets) {
                 const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap;
                 if(hdrTarget&&!hdrGroup&&!exactTargets) {

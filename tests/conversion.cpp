@@ -19,6 +19,8 @@ namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 #include <vector>
 
 #include "regular_fixtures.hpp"
+#include "heic_fixtures.hpp"
+#include "heif_decode.h"
 #include "exif_jxr_fixture.hpp"
 
 namespace fs=std::filesystem;
@@ -467,6 +469,35 @@ static void exif_retention(const fs::path& dir) {
         check(image->exifData()["Exif.Image.Make"].toString()=="JXRC","Preserved TIFF EXIF lost");
     }
 }
+static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
+    const auto sdr=dir/"sdr.heic",apple=dir/"apple.heic",oppo=dir/"oppo.heic";write(sdr,heic_sdr_fixture);write(apple,heic_apple_fixture);
+    check(is_heif_input(heic_sdr_fixture.data(),heic_sdr_fixture.size()),"HEIC brand detection");
+    auto info=jxrc::inspect(sdr);check(info.width==2&&info.height==2&&!info.hdr&&info.bits==8,"HEIC source inspection");
+    const auto source=decode_heif(heic_apple_fixture.data(),heic_apple_fixture.size());
+    check(!source.gain.pixels.empty()&&std::abs(source.max_boost-std::exp2(1.5909f))<.001f,"Apple mixed-endian headroom/gain map");
+    auto preview=jxrc::preview(apple,1);check(preview.width==1&&preview.height==1&&preview.rgba.size()==4,"HEIC gain-map preview");
+    auto jpeg=bytes(jpeg_gain);auto* decoder=uhdr_create_decoder();check(decoder,"Cannot allocate gain fixture decoder");
+    std::unique_ptr<uhdr_codec_private_t,decltype(&uhdr_release_decoder)> owner(decoder,uhdr_release_decoder);
+    uhdr_compressed_image_t compressed{jpeg.data(),jpeg.size(),jpeg.size(),UHDR_CG_UNSPECIFIED,UHDR_CT_UNSPECIFIED,UHDR_CR_FULL_RANGE};
+    check(uhdr_dec_set_image(decoder,&compressed).error_code==UHDR_CODEC_OK&&uhdr_dec_probe(decoder).error_code==UHDR_CODEC_OK,"Gain fixture probe");
+    const auto* map=uhdr_dec_get_gainmap_image(decoder);const auto* metadata=uhdr_dec_get_gainmap_metadata(decoder);check(map&&metadata,"Gain fixture metadata");
+    auto proxdr=heic_sdr_fixture;proxdr.resize(proxdr.size()+84);const auto* mapBytes=static_cast<const uint8_t*>(map->data);proxdr.insert(proxdr.end(),mapBytes,mapBytes+map->data_sz);proxdr.resize(proxdr.size()+16);
+    const size_t at=proxdr.size();proxdr.resize(at+144+12);
+    auto putFloat=[&](size_t offset,float value){uint32_t code;std::memcpy(&code,&value,4);for(unsigned i=0;i<4;++i)proxdr[at+offset+i]=uint8_t(code>>(8*i));};
+    putFloat(16,metadata->max_content_boost[0]);putFloat(132,metadata->hdr_capacity_max);for(const auto c:std::string("jxrslocal.hdr"))proxdr.push_back(uint8_t(c));write(oppo,proxdr);
+    check(jxrc::inspect(oppo).gainmap&&jxrc::inspect(apple).gainmap,"HEIC gain-map header inspection");
+    for(const auto& input:{sdr,apple,oppo})for(auto target:{jxrc::Target::jpeg,jxrc::Target::avif}){
+        jxrc::Options options;options.target=target;options.quality.preset=jxrc::Preset::lossless;
+        const auto preserved=dir/(input.stem().string()+"-preserve-"+std::to_string(int(target)));
+        const auto processed=dir/(input.stem().string()+"-auto-"+std::to_string(int(target)));
+        const auto result=jxrc::convert(input,preserved,options);check(result.gainmap==(input!=sdr),"HEIC source gain map lost");
+        options.mode=jxrc::Mode::process;const auto automatic=jxrc::convert(input,processed,options);
+        check(automatic.gainmap==result.gainmap&&bytes(processed)==bytes(preserved),"HEIC automatic source export changed the base/map");
+    }
+    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.exposure=1;
+    jxrc::convert(apple,dir/"apple-rendered.jxl",options);check(jxrc::inspect(dir/"apple-rendered.jxl").hdr,"HEIC float32 pixel-processing path");
+}
+
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
@@ -506,6 +537,28 @@ int main(int argc,char** argv) try {
     jxrc::Options o;o.target=jxrc::Target::avif_gainmap;o.quality.preset=jxrc::Preset::lossless;
     auto r=jxrc::convert(gain,dir/"preserved.avif",o);check(r.gainmap,"JPEG to AVIF gain map lost");
     o.target=jxrc::Target::jpeg_gainmap;r=jxrc::convert(dir/"preserved.avif",dir/"preserved.jpg",o);check(r.gainmap,"AVIF to JPEG gain map lost");
+    for(const auto& input:{gain,dir/"preserved.avif",dir/"fixture6"})for(auto target:{jxrc::Target::jpeg,jxrc::Target::avif}){
+        jxrc::Options automatic;automatic.target=target;automatic.quality.preset=jxrc::Preset::lossless;
+        const auto name=input.filename().string()+"-"+std::to_string(int(target));
+        const auto preserved=dir/(name+"-preserve"),processed=dir/(name+"-auto");
+        check(jxrc::convert(input,preserved,automatic).gainmap,"Plain target lost source gain map in Preserve mode");
+        automatic.mode=jxrc::Mode::process;check(jxrc::convert(input,processed,automatic).gainmap,"Plain target flattened source gain map");
+        check(bytes(preserved)==bytes(processed),"Automatic source base/gain map was processed");
+        automatic.exposure=1;check(!jxrc::convert(input,dir/(name+"-exposure"),automatic).gainmap,"Exposure bypassed pixel processing");
+    }
+    // Per-channel ISO metadata must survive AVIF -> JPEG; Ultra HDR's XMP
+    // writer cannot represent it, so this output must use its ISO packet.
+    {
+        auto avif=bytes(dir/"fixture6");std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> decoder(avifDecoderCreate(),avifDecoderDestroy);
+        check(decoder&&avifDecoderSetIOMemory(decoder.get(),avif.data(),avif.size())==AVIF_RESULT_OK&&avifDecoderParse(decoder.get())==AVIF_RESULT_OK,"Multichannel source parse");
+        const auto* map=decoder->image->gainMap;check(map,"Missing multichannel source map");
+        auto jpeg=bytes(dir/"fixture6-0-auto");std::unique_ptr<uhdr_codec_private_t,decltype(&uhdr_release_decoder)> output(uhdr_create_decoder(),uhdr_release_decoder);
+        uhdr_compressed_image_t compressed{jpeg.data(),jpeg.size(),jpeg.size(),UHDR_CG_UNSPECIFIED,UHDR_CT_UNSPECIFIED,UHDR_CR_FULL_RANGE};
+        check(output&&uhdr_dec_set_image(output.get(),&compressed).error_code==UHDR_CODEC_OK&&uhdr_dec_probe(output.get()).error_code==UHDR_CODEC_OK,"Multichannel JPEG map parse");
+        const auto* metadata=uhdr_dec_get_gainmap_metadata(output.get());check(metadata,"Multichannel JPEG metadata lost");
+        for(unsigned c=0;c<3;++c)check(std::abs(std::log2(metadata->max_content_boost[c])-double(map->gainMapMax[c].n)/map->gainMapMax[c].d)<.0001,"Per-channel gain-map range changed");
+    }
+    heif_gainmaps(dir,gain);
     o.target=jxrc::Target::jxl;fails([&]{jxrc::convert(gain,dir/"lost.jxl",o);});check(!fs::exists(dir/"lost.jxl"),"Failed output published");
     o.target=jxrc::Target::avif;r=jxrc::convert(pq,dir/"pq.avif",o);check(r.transfer==16,"Preserved PQ transfer");
     // Linear JXL stores samples normalized to its declared intensity; process round trip restores absolute values.

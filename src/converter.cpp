@@ -4,6 +4,7 @@
 #include "codec_api.h"
 #include "working_pixels.h"
 #include "input_format.h"
+#include "heif_decode.h"
 #include "regular_decode.h"
 #include "exif_metadata.h"
 #include "hdr_parallel.h"
@@ -76,6 +77,7 @@ struct Staging {
 int kind(const std::vector<uint8_t>& b) {
     if(b.size()>2&&b[0]==255&&b[1]==216)return 0;
     if(is_avif_input(b.data(),b.size()))return 1;
+    if(is_heif_input(b.data(),b.size()))return 7;
     if(b.size()>=2&&((b[0]==255&&b[1]==10)||(b.size()>=12&&!std::memcmp(b.data(),"\0\0\0\x0cJXL \r\n\x87\n",12))))return 3;
     if(b.size()>=4&&b[0]=='I'&&b[1]=='I'&&b[2]==0xbc&&b[3]==1)return 4;
     if(is_regular_image(b.data(),b.size()))return 6;
@@ -179,7 +181,7 @@ struct ConversionSession::Impl {
     std::vector<uint8_t> bytes,exif;
     std::vector<float> linear,raw_sdr;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
-    bool half_jxr=false,scrgb=false,integer_sdr=false;
+    bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false;
     uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
     int format=-1;
     bool ready=false;
@@ -215,7 +217,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     }
     if(cache.format<0){
         auto source=read(input);const int format=kind(source);
-        if(format!=6 && format!=5){const auto info=inspect_bytes(source);cache.bits=info.bits;cache.input_width=info.width;cache.input_height=info.height;cache.half_jxr=format==4&&info.hdr&&info.bits==16;cache.integer_sdr=!info.hdr&&(format==0||format==1||(format==3&&is_integer_jxl(source.data(),source.size())));}
+        if(format!=6 && format!=5){const auto info=inspect_bytes(source);cache.gainmap=info.gainmap;cache.bits=info.bits;cache.input_width=info.width;cache.input_height=info.height;cache.half_jxr=format==4&&info.hdr&&info.bits==16;cache.integer_sdr=!info.hdr&&(format==0||format==1||format==7||(format==3&&is_integer_jxl(source.data(),source.size())));}
         cache.bytes=std::move(source);cache.format=format;
     }
     const auto& bytes=cache.bytes;const int format=cache.format;Staging stage(output);
@@ -231,13 +233,17 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         } else direct_sdr=cache.integer_sdr;
     }
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
+    // Plain JPEG/AVIF targets keep an existing SDR base and gain map when
+    // no pixel edit is requested, independently of the selected process mode.
+    const bool direct_gainmap=cache.gainmap && !o.exposure && !o.max_edge &&
+        (o.target==Target::jpeg||o.target==Target::avif);
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
     bool source_done=false;
-    if(direct_sdr || direct_jxl || (o.mode==Mode::preserve && format!=4)) {
-        require(format==0||format==1||format==3||format==6,"Source preservation supports JPEG, AVIF, JXL and regular raster images; use --mode process for RAW/JXR");
+    if(direct_sdr || direct_gainmap || direct_jxl || (o.mode==Mode::preserve && format!=4)) {
+        require(format==0||format==1||format==3||format==6||format==7,"Source preservation supports JPEG, AVIF, HEIC, JXL and regular raster images; use --mode process for RAW/JXR");
         int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:2;
         int rc=0;
         if(o.jpeg_transcoding && format==0) {
@@ -280,6 +286,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
             if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
+            else if(format==7)rc=decode_heif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.keep_exif?&exif:nullptr);
             else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):o.extended_bt2020),o.keep_exif?&exif:nullptr);
             else if(format==4) {
                 if((linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve))
@@ -309,7 +316,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 const size_t offset=4+(uint32_t(exif[0])<<24|uint32_t(exif[1])<<16|uint32_t(exif[2])<<8|exif[3]);
                 require(offset<=exif.size(),"Invalid JXL EXIF offset");exif.erase(exif.begin(),exif.begin()+offset);
             }
-            const int orient=format==6?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,format==0&&o.keep_exif?&exif:nullptr);
+            const int orient=format==7?1:format==6?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,format==0&&o.keep_exif?&exif:nullptr);
             require(orient>=1&&orient<=8,"Unsupported image orientation/crop");
             if(orient!=1) {
                 const unsigned dw=orient>=5?h:w,dh=orient>=5?w:h;
@@ -396,6 +403,7 @@ Preview preview_bytes(const std::vector<uint8_t>& bytes,unsigned edge,ImageInfo*
     std::vector<uint16_t> linear;std::vector<uint8_t> raw_pixels;
     unsigned w=0,h=0,raster_orientation=1;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;bool hdr=false;int gain=0,transfer=0,rc=0;
     if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,edge);
+    else if(format==7)rc=decode_heif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,edge);
     else if(format==1)rc=decode_avif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,edge,nullptr);
     else if(format==3)rc=decode_jxl_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,false,edge,false,nullptr,nullptr);
     else if(format==4)rc=decode_jxr_memory(bytes.data(),bytes.size(),linear,w,h,&gamut,std::min(edge,768u));
@@ -431,7 +439,7 @@ Preview preview_bytes(const std::vector<uint8_t>& bytes,unsigned edge,ImageInfo*
     require(rc==0&&w&&h&&linear.size()==size_t(w)*h*4,"Thumbnail decode failed");
     if(cancelled&&cancelled())throw std::runtime_error("Preview cancelled");
     scale_rgba_f16_max_edge(linear,w,h,edge);
-    const int orient=(format==6||format==5)?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,nullptr);
+    const int orient=format==7?1:(format==6||format==5)?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,nullptr);
     require(orient>=1&&orient<=8,"Unsupported thumbnail orientation/crop");
     Preview output;output.width=orient>=5?h:w;output.height=orient>=5?w:h;output.rgba.resize(size_t(w)*h*4);
     for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {

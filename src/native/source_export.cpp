@@ -2,6 +2,7 @@
 #include "hdr_encode.h"
 #include "hdr_parallel.h"
 #include "regular_decode.h"
+#include "heif_decode.h"
 
 #include "ultrahdr/jpegdecoderhelper.h"
 #include "ultrahdr/jpegencoderhelper.h"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cstdio>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -543,7 +545,8 @@ int write_gainmap_jpeg(avifImage* image,const char* path,StillEncodeQuality qual
     uhdr_compressed_image_t b{base.data(),base.size(),base.size(),gamut(image->colorPrimaries),UHDR_CT_SRGB,UHDR_CR_FULL_RANGE};
     uhdr_compressed_image_t g{original_map?const_cast<uint8_t*>(original_map):map.data(),original_map?original_map_size:map.size(),original_map?original_map_size:map.size(),gamut(image->gainMap->altColorPrimaries),UHDR_CT_LINEAR,UHDR_CR_FULL_RANGE};
     if(!ok(uhdr_enc_set_compressed_image(enc.get(),&b,UHDR_BASE_IMG)) || !ok(uhdr_enc_set_gainmap_image(enc.get(),&g,&metadata)))return -87;
-    if(!ok(uhdr_encode(enc.get())))return -88;
+    const auto status=uhdr_encode(enc.get());
+    if(!ok(status)){std::fprintf(stderr,"Gain-map JPEG packaging failed: %s\n",status.has_detail?status.detail:"no codec detail");return -88;}
     const auto* bytes=uhdr_get_encoded_stream(enc.get());if(!bytes)return -88;
     FILE* f=fopen(path,"wb");if(!f)return -83;
     const bool wrote=fwrite(bytes->data,1,bytes->data_sz,f)==bytes->data_sz;
@@ -589,6 +592,29 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
     return rc==0?1:rc;
 }
 } // namespace
+
+std::unique_ptr<avifImage,decltype(&avifImageDestroy)> decode_heif_avif(const uint8_t* data,size_t size,unsigned edge,const uint8_t** original_map,size_t* original_map_size) {
+    auto source=decode_heif(data,size,edge);const auto& base=source.base;
+    if(original_map)*original_map=source.encoded_gain;
+    if(original_map_size)*original_map_size=source.encoded_gain_size;
+    // Pack the original integer RGB codes with identity/full range at their
+    // native depth; output quality is applied only by the requested encoder.
+    const StillEncodeQuality exact(0);
+    auto image=from_rgb(base.width,base.height,base.pixels.data(),base.bits>8,base.bits,base.primaries,base.transfer,exact);
+    if(!image)throw std::runtime_error("Cannot pack HEIC source pixels");
+    if(!base.icc.empty()&&avifImageSetProfileICC(image.get(),base.icc.data(),base.icc.size())!=AVIF_RESULT_OK)throw std::runtime_error("Cannot retain HEIC ICC");
+    if(!base.exif.empty()&&avifImageSetMetadataExif(image.get(),base.exif.data(),base.exif.size())!=AVIF_RESULT_OK)throw std::runtime_error("Cannot retain HEIC EXIF");
+    if(!source.gain.pixels.empty()){
+        const auto& gain=source.gain;auto map=from_rgb(gain.width,gain.height,gain.pixels.data(),false,8,2,2,exact,true,true);
+        image->gainMap=avifGainMapCreate();if(!map||!image->gainMap)throw std::runtime_error("Cannot allocate HEIC gain map");
+        image->gainMap->image=map.release();uhdr_gainmap_metadata_t metadata{};
+        for(unsigned c=0;c<3;++c){metadata.min_content_boost[c]=1;metadata.max_content_boost[c]=source.max_boost;metadata.gamma[c]=1;}
+        metadata.hdr_capacity_min=1;metadata.hdr_capacity_max=source.display_ratio;metadata.use_base_cg=1;
+        if(!from_uhdr_metadata(metadata,image->gainMap,base.primaries))throw std::runtime_error("Cannot retain HEIC gain-map metadata");
+        gain_map_cicp(image.get());
+    }
+    return image;
+}
 
 // 0=not handled; 1=encoded; negative=real error, never silently discard a detected gain map.
 int convert_source(const uint8_t* data, size_t size, int kind, int target,
@@ -645,6 +671,10 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
             }
             original_map=static_cast<const uint8_t*>(map->data);original_map_size=map->data_sz;
         }
+    } else if(kind==7) {
+        image=decode_heif_avif(data,size,0,&original_map,&original_map_size);
+        if(target==1&&image->gainMap)return -96;
+        if(image->exif.size)exif.assign(image->exif.data,image->exif.data+image->exif.size);
     } else if(kind==3) {
         bool unsupported=false;
         int encoded=0;int info[5]{};
@@ -662,13 +692,14 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
     quality.exif=exif.data();quality.exif_size=exif.size();
     // AVIF's stored transforms are authoritative; applying EXIF to an already transformed
     // source would overwrite them. Keep the source metadata directly in that case.
-    if(kind==1 && target==2) {
+    if((kind==1||kind==7) && target==2) {
         if(!keep_exif)avifRWDataFree(&source_image->exif);
         quality.exif=nullptr;quality.exif_size=0;
     }
     int info[5]{};const int result=write_source(source_image,target,path.get(),quality,info,original_map,original_map_size);
     std::copy(info,info+5,out_info);return result;
-} catch(...) {return -99;}
+} catch(const std::exception& error) {std::fprintf(stderr,"Source conversion failed: %s\n",error.what());return -99;}
+catch(...) {return -99;}
 
 
 int source_orientation(const uint8_t* data,size_t size,int kind,std::vector<uint8_t>* exif) {

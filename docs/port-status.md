@@ -24,14 +24,17 @@ The reference is LocalViewer commit `e74a70c2811a1e6a80841ea975ba171e219cf306`.
 | Grid/list/details, sizing, multi-selection | Qt desktop added |
 | CPU-scaled parallel batch conversion | Added with per-call codec thread budgets |
 
-Preserve mode supports JPEG, AVIF, JXL, PNG, WebP, TIFF, BMP and GIF input. Process mode adds JPEG XR and
+Preserve mode supports JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP and GIF input. Process mode adds JPEG XR and
 LibRaw sensor formats (including DNG and the camera formats enabled by LibRaw).
 JPEG ICC, JXL CMS, AVIF transfer/gain-map conversion, and working RGB primaries
 use the native pipeline. JPEG/AVIF orientation is applied during processing;
 JXL's decoder applies its orientation. AVIF clean-aperture crops are rejected
 until portable crop support is added.
 
-Remaining decoder scope: HEIF/HEIC, JPEG 2000, and the
+HEIC uses native libheif/libde265 decoding, including integer source RGB,
+Apple auxiliary HDR maps and ProXDR JPEG maps. Plain JPEG/AVIF targets
+automatically retain the source base and map at 0 EV with no resizing.
+Remaining decoder scope: JPEG 2000 and the
 other formats previously supplied by Android. Unsupported inputs fail; they do
 not silently export a thumbnail or an SDR substitute. RAW thumbnails first try the embedded camera JPEG through LibRaw, matching
 LocalViewer, then use a reduced-size demosaic when the preview is missing or

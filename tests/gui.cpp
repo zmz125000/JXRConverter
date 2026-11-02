@@ -666,8 +666,16 @@ private slots:
             QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());QVERIFY(savedJob(window,1));
             QVERIFY(chooseJob(window,1));window.findChild<QPushButton*>("statusAll")->click();
             auto* jobs=window.findChild<QToolButton*>("statusJob");bool opened=false,activated=false;
-            QTimer::singleShot(0,&window,[&]{opened=jobs->menu()->isVisible();activated=jobs->isChecked()&&savedJob(window,1)->isChecked();jobs->menu()->close();});
-            QTest::mouseClick(jobs,Qt::LeftButton);QVERIFY(opened);QVERIFY(activated);QCOMPARE(window.filterModel()->rowCount(),1);
+            // InstantPopup may enter a nested event loop before the menu is
+            // visible. Observe visibility instead of assuming the first timer
+            // callback happens after the platform has shown the popup.
+            QTimer popupObserver;popupObserver.setInterval(10);
+            connect(&popupObserver,&QTimer::timeout,&window,[&]{
+                if(!jobs->menu()->isVisible())return;
+                opened=true;activated=jobs->isChecked()&&savedJob(window,1)->isChecked();popupObserver.stop();jobs->menu()->close();
+            });
+            popupObserver.start();QTimer::singleShot(5000,jobs->menu(),&QMenu::close);
+            QTest::mouseClick(jobs,Qt::LeftButton);QTRY_VERIFY_WITH_TIMEOUT(opened,5000);QVERIFY(activated);QCOMPARE(window.filterModel()->rowCount(),1);
             window.findChild<QPushButton*>("statusAll")->click();jump->setChecked(true);
             window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),2);
             QVERIFY(jobs->isChecked());QVERIFY(savedJob(window,2)->isChecked());

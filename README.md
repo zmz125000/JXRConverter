@@ -91,7 +91,7 @@ On Windows, provide Qt 6 Widgets with a matching compiler and architecture.
 Exiv2 is built automatically unless the system-library option is selected. Platform packaging
 and macOS/Windows GUI execution still need validation.
 
-Native inputs include JPEG, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and
+Native inputs include JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and
 LibRaw camera formats. Regular raster decoding is independent of OS/Qt decoders.
 HDR PNG input supports full-range cICP PQ/HLG with BT.709, BT.2020 or Display P3
 primaries, including 8/16-bit samples. Processing uses float32; source-preserving
@@ -105,7 +105,12 @@ add the Android-only formats listed in [port status](docs/port-status.md).
 
 Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV**
 multiplies linear RGB by 1/8; **+3 EV** multiplies it by 8. Processing still decodes
-and re-encodes the image at 0 EV; use preservation mode to preserve source values.
+and re-encodes the image at 0 EV, with source-preserving fast paths where eligible.
+JPEG/AVIF gain-map photos and Apple/ProXDR HEIC photos exported to the ordinary
+JPEG or AVIF target keep the SDR base plus gain map when exposure is 0 and resizing
+is disabled, including in Process pixels mode. Exposure or resizing requests use
+the float32 HDR render path instead. JPEG recompression remains lossy; this is
+base/map retention, not a promise of identical compressed bytes.
 For RAW gain-map exports, adjust the separate Custom RAW exposure instead.
 **Extended BT.2020 · JXL decoding** converts floating-point linear-sRGB JXL's
 extended colors into BT.2020 before clipping negative channels, preserving more

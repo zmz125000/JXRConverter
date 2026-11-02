@@ -8,7 +8,7 @@ namespace {
 void help() {
     std::cout << "jxrconvert " << jxrc::version() << R"( - LocalViewer image conversion library/CLI
 Usage: jxrconvert INPUT OUTPUT --target TARGET [OPTIONS]
-Inputs: JPEG, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and LibRaw formats
+Inputs: JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and LibRaw formats
 Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, avif-gainmap
   --mode preserve|process       Default: preserve; no automatic processing fallback
   --preset lossless|high|medium|low|custom    Default: high
@@ -38,6 +38,8 @@ RAW controls (process mode):
   --raw-linear-hdr              Bypass camera look in HDR
 Lossless is a codec preset; JPEG remains lossy. Preserve retains source transfer,
 profiles and transferable gain maps; it does not promise bit-identical RGB.
+Plain JPEG/AVIF targets also retain existing base + gain maps in process mode
+when exposure is zero and resizing is disabled.
 )";
 }
 float number(const std::string& s) {

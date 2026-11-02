@@ -1,4 +1,5 @@
 #include "working_pixels.h"
+#include "heif_decode.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
  * AVIF still decode via libavif → Ultra HDR JPEG (libultrahdr).
@@ -406,75 +407,22 @@ bool apply_iso_gain_map(const avifImage* image, std::vector<Sample>& out_rgba, i
  * @return 0 OK, non-zero on failure. Sets out_has_gainmap if libavif reports a gain map.
  */
 template<class Sample>
-int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
-                              unsigned& w, unsigned& h, int* out_has_gainmap,
-                              int* out_transfer /* 16=PQ, 18=HLG, else other */,
-                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr) {
-    if (out_exif) out_exif->clear();
-    if (out_has_gainmap) *out_has_gainmap = 0;
-    if (out_transfer) *out_transfer = 0;
-    if (out_cg) *out_cg = UHDR_CG_BT_709;
-    if (!data || len == 0) return -1;
-
-    avifDecoder* dec = avifDecoderCreate();
-    if (!dec) return -2;
-    dec->imageSizeLimit = 80000000;
-    dec->ignoreExif = out_exif ? AVIF_FALSE : AVIF_TRUE;
-    dec->ignoreXMP = AVIF_TRUE;
-    // Default decode skips the gain-map item. ISO 21496-1 AVIF needs those pixels.
-    dec->imageContentToDecode = AVIF_IMAGE_CONTENT_ALL;
-    // dav1d API 7 uses this as the tile-thread pool (one still, so frame delay stays 1).
-    dec->maxThreads = avif_decode_threads();
-    avifResult r = avifDecoderSetIOMemory(dec, data, len);
-    if (r != AVIF_RESULT_OK) {
-        ALOGE("avifDecoderSetIOMemory: %s", avifResultToString(r));
-        avifDecoderDestroy(dec);
-        return -3;
-    }
-    r = avifDecoderParse(dec);
-    if (r != AVIF_RESULT_OK && out_exif) {
-        // Optional malformed EXIF must not turn a previously readable AVIF into an error.
-        dec->ignoreExif = AVIF_TRUE;
-        r = avifDecoderParse(dec);
-    }
-    if (r != AVIF_RESULT_OK) {
-        ALOGE("avifDecoderParse: %s", avifResultToString(r));
-        avifDecoderDestroy(dec);
-        return -4;
-    }
-    if (out_exif && dec->image && dec->image->exif.data && dec->image->exif.size <= 1024 * 1024) {
-        const auto& exif = dec->image->exif;
-        size_t offset = 0;
-        if (avifGetExifTiffHeaderOffset(exif.data, exif.size, &offset) == AVIF_RESULT_OK && offset < exif.size) {
-            out_exif->assign(exif.data + offset, exif.data + exif.size);
-        }
-    }
-
-    r = avifDecoderNextImage(dec);
-    if (r != AVIF_RESULT_OK) {
-        ALOGE("avifDecoderNextImage: %s", avifResultToString(r));
-        avifDecoderDestroy(dec);
-        return -5;
-    }
-
-    avifImage* image = dec->image;
+int linearize_avif_image(avifImage* image,std::vector<Sample>& out_rgba,unsigned& w,unsigned& h,
+                        int* out_has_gainmap,int* out_transfer,uhdr_color_gamut_t* out_cg,unsigned max_edge) {
+    avifResult r=AVIF_RESULT_OK;
     if (!image || image->width == 0 || image->height == 0) {
-        avifDecoderDestroy(dec);
         return -6;
     }
     if (image->width > 16384 || image->height > 16384) {
-        avifDecoderDestroy(dec);
         return -7;
     }
     if (!scale_avif_to_max_edge(image, max_edge)) {
-        avifDecoderDestroy(dec);
         return -11;
     }
     w = image->width;
     h = image->height;
 
     if (apply_iso_gain_map(image, out_rgba, out_has_gainmap, out_transfer, out_cg)) {
-        avifDecoderDestroy(dec);
         return 0;
     }
     // An advertised HDR rendition must not silently become an SDR base when
@@ -482,7 +430,6 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     if (image->gainMap && image->gainMap->image &&
         unsigned_frac(image->gainMap->alternateHdrHeadroom) > 0.05f) {
         ALOGE("Cannot reconstruct the AVIF HDR gain map");
-        avifDecoderDestroy(dec);
         return -12;
     }
 
@@ -504,20 +451,18 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     avifRGBImageSetDefaults(&rgb, image);
     rgb.format = AVIF_RGB_FORMAT_RGBA;
     rgb.depth = 16;
-    rgb.maxThreads = dec->maxThreads;
+    rgb.maxThreads = avif_decode_threads();
     rgb.chromaUpsampling = AVIF_CHROMA_UPSAMPLING_BEST_QUALITY;
 
     r = avifRGBImageAllocatePixels(&rgb);
     if (r != AVIF_RESULT_OK) {
         ALOGE("avifRGBImageAllocatePixels: %s", avifResultToString(r));
-        avifDecoderDestroy(dec);
         return -8;
     }
     r = avifImageYUVToRGB(image, &rgb);
     if (r != AVIF_RESULT_OK) {
         ALOGE("avifImageYUVToRGB: %s", avifResultToString(r));
         avifRGBImageFreePixels(&rgb);
-        avifDecoderDestroy(dec);
         return -9;
     }
 
@@ -541,7 +486,6 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
                 working_format<Sample>(), skcms_AlphaFormat_Unpremul, &destination, w);
         }
         avifRGBImageFreePixels(&rgb);
-        avifDecoderDestroy(dec);
         if (!ok) {
             ALOGE("AVIF ICC conversion failed");
             return -13;
@@ -552,7 +496,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     }
 
     const auto& linear = avif_linear_lut(tc);
-    hdr_parallel_pixels(h, hdr_pixel_jobs(pixels, dec->maxThreads), [&](size_t begin, size_t end, unsigned) {
+    hdr_parallel_pixels(h, hdr_pixel_jobs(pixels, avif_decode_threads()), [&](size_t begin, size_t end, unsigned) {
         for (size_t y = begin; y < end; y++) {
             const uint16_t* row = reinterpret_cast<const uint16_t*>(row_base + static_cast<size_t>(y) * row_bytes);
             for (unsigned x = 0; x < w; x++) {
@@ -606,7 +550,6 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
                 &destination, pixels);
         if (!ok) {
             avifRGBImageFreePixels(&rgb);
-            avifDecoderDestroy(dec);
             return -14;
         }
         cg = UHDR_CG_BT_2100;
@@ -618,8 +561,63 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
           need_bt2020_to_709 ? 1 : 0, out_has_gainmap ? *out_has_gainmap : 0);
 
     avifRGBImageFreePixels(&rgb);
-    avifDecoderDestroy(dec);
     return 0;
+}
+
+template<class Sample>
+int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
+                              unsigned& w, unsigned& h, int* out_has_gainmap,
+                              int* out_transfer /* 16=PQ, 18=HLG, else other */,
+                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr) {
+    if (out_exif) out_exif->clear();
+    if (out_has_gainmap) *out_has_gainmap = 0;
+    if (out_transfer) *out_transfer = 0;
+    if (out_cg) *out_cg = UHDR_CG_BT_709;
+    if (!data || len == 0) return -1;
+
+    avifDecoder* dec = avifDecoderCreate();
+    if (!dec) return -2;
+    dec->imageSizeLimit = 80000000;
+    dec->ignoreExif = out_exif ? AVIF_FALSE : AVIF_TRUE;
+    dec->ignoreXMP = AVIF_TRUE;
+    // Default decode skips the gain-map item. ISO 21496-1 AVIF needs those pixels.
+    dec->imageContentToDecode = AVIF_IMAGE_CONTENT_ALL;
+    // dav1d API 7 uses this as the tile-thread pool (one still, so frame delay stays 1).
+    dec->maxThreads = avif_decode_threads();
+    avifResult r = avifDecoderSetIOMemory(dec, data, len);
+    if (r != AVIF_RESULT_OK) {
+        ALOGE("avifDecoderSetIOMemory: %s", avifResultToString(r));
+        avifDecoderDestroy(dec);
+        return -3;
+    }
+    r = avifDecoderParse(dec);
+    if (r != AVIF_RESULT_OK && out_exif) {
+        // Optional malformed EXIF must not turn a previously readable AVIF into an error.
+        dec->ignoreExif = AVIF_TRUE;
+        r = avifDecoderParse(dec);
+    }
+    if (r != AVIF_RESULT_OK) {
+        ALOGE("avifDecoderParse: %s", avifResultToString(r));
+        avifDecoderDestroy(dec);
+        return -4;
+    }
+    if (out_exif && dec->image && dec->image->exif.data && dec->image->exif.size <= 1024 * 1024) {
+        const auto& exif = dec->image->exif;
+        size_t offset = 0;
+        if (avifGetExifTiffHeaderOffset(exif.data, exif.size, &offset) == AVIF_RESULT_OK && offset < exif.size) {
+            out_exif->assign(exif.data + offset, exif.data + exif.size);
+        }
+    }
+
+    r = avifDecoderNextImage(dec);
+    if (r != AVIF_RESULT_OK) {
+        ALOGE("avifDecoderNextImage: %s", avifResultToString(r));
+        avifDecoderDestroy(dec);
+        return -5;
+    }
+
+    const int result=linearize_avif_image(dec->image,out_rgba,w,h,out_has_gainmap,out_transfer,out_cg,max_edge);
+    avifDecoderDestroy(dec);return result;
 }
 
 }  // namespace
@@ -633,6 +631,21 @@ int decode_avif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16
 int decode_avif_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,
     int* gain,int* transfer,uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif) {
     return decode_avif_impl(data,size,rgba,w,h,gain,transfer,gamut,0,exif);
+}
+
+template<class Sample>
+int decode_heif_linear(const uint8_t* data,size_t size,std::vector<Sample>& rgba,unsigned& w,unsigned& h,
+    uhdr_color_gamut_t* gamut,unsigned edge,std::vector<uint8_t>* exif) {
+    auto image=decode_heif_avif(data,size,edge);
+    if(exif){exif->clear();if(image->exif.size)exif->assign(image->exif.data,image->exif.data+image->exif.size);}
+    int gain=0,transfer=0;
+    return linearize_avif_image(image.get(),rgba,w,h,&gain,&transfer,gamut,edge);
+}
+int decode_heif_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif) {
+    return decode_heif_linear(data,size,rgba,w,h,gamut,0,exif);
+}
+int decode_heif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,unsigned edge) {
+    return decode_heif_linear(data,size,rgba,w,h,gamut,edge,nullptr);
 }
 
 // PNG samples have already been expanded by libpng, without gamma conversion.

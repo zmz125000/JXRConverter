@@ -1,6 +1,7 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
 #include "input_format.h"
+#include "heif_decode.h"
 #include "regular_decode.h"
 #include "ultrahdr/jpegdecoderhelper.h"
 #include <avif/avif.h>
@@ -54,6 +55,8 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         out.hdr=out.gainmap||image->transferCharacteristics==16||image->transferCharacteristics==18;
         out.primaries=image->icc.size?"ICC":image->colorPrimaries==9?"BT.2020":image->colorPrimaries==12?"Display P3":"BT.709";
         int orientation=source_orientation(bytes.data(),bytes.size(),1,nullptr);if(orientation>=5)std::swap(out.width,out.height);
+    } else if(is_heif_input(bytes.data(),bytes.size())) {
+        out=inspect_heif(bytes.data(),bytes.size());
     } else if(bytes.size()>=2&&((bytes[0]==255&&bytes[1]==10)||(bytes.size()>=12&&!std::memcmp(bytes.data(),"\0\0\0\x0cJXL \r\n\x87\n",12)))) {
         auto dec=JxlDecoderMake(nullptr);
         if(!dec||JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING)!=JXL_DEC_SUCCESS)throw std::runtime_error("Cannot allocate JXL inspector");

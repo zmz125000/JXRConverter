@@ -9,6 +9,7 @@ The codec dependencies can remain linked into the shared JXRConverter engine:
 | Dependency | Selected license / notices |
 |---|---|
 | Exiv2 | GPL v2 or later, compatible with this GPLv3 application |
+| libheif, libde265 | LGPL v3 or later; corresponding sources and build scripts available for rebuilding/relinking |
 | LibRaw | LGPL v2.1 option, with the complete application/library sources and build scripts supplied for rebuilding/relinking; the CDDL alternative is not selected |
 | Ultra HDR | Apache-2.0/MIT and retained third-party notices |
 | libjpeg-turbo | IJG, BSD and zlib notices |

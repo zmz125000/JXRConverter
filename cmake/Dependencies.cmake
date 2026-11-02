@@ -106,6 +106,20 @@ string(REPLACE "${jxrc_uhdr_cpu}" "unsigned int GetCPUCoreCount() { return jxrc_
 if(jxrc_uhdr_patched STREQUAL jxrc_uhdr_source)
     message(FATAL_ERROR "Ultra HDR CPU-budget adaptation no longer matches the pinned source")
 endif()
+# Ultra HDR’s XMP writer cannot express per-channel or alternate-space maps.
+# Keep both packets for compatible maps, and emit ISO only for the others.
+string(FIND "${jxrc_uhdr_patched}" "uhdr_error_info_t JpegR::appendGainMap(" jxrc_append_begin)
+string(FIND "${jxrc_uhdr_patched}" "uhdr_error_info_t JpegR::getJPEGRInfo(" jxrc_append_end)
+if(jxrc_append_begin LESS 0 OR jxrc_append_end LESS 0)
+    message(FATAL_ERROR "Ultra HDR gain-map metadata adaptation no longer matches")
+endif()
+math(EXPR jxrc_append_length "${jxrc_append_end}-${jxrc_append_begin}")
+string(SUBSTRING "${jxrc_uhdr_patched}" 0 ${jxrc_append_begin} jxrc_append_prefix)
+string(SUBSTRING "${jxrc_uhdr_patched}" ${jxrc_append_begin} ${jxrc_append_length} jxrc_append_body)
+string(SUBSTRING "${jxrc_uhdr_patched}" ${jxrc_append_end} -1 jxrc_append_suffix)
+string(REPLACE "kWriteXmpMetadata" "writeXmpMetadata" jxrc_append_body "${jxrc_append_body}")
+string(REPLACE "uhdr_compressed_image_t* dest) {" "uhdr_compressed_image_t* dest) {\n  const bool writeXmpMetadata = kWriteXmpMetadata && metadata->use_base_cg && metadata->are_all_channels_identical();" jxrc_append_body "${jxrc_append_body}")
+set(jxrc_uhdr_patched "${jxrc_append_prefix}${jxrc_append_body}${jxrc_append_suffix}")
 set(jxrc_uhdr_patched "#include \"${CMAKE_CURRENT_LIST_DIR}/../src/native/hdr_parallel.h\"\n${jxrc_uhdr_patched}")
 file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/jxrc_uhdr_jpegr.cpp" CONTENT "${jxrc_uhdr_patched}" @ONLY)
 get_target_property(jxrc_uhdr_objects core SOURCES)
@@ -202,3 +216,36 @@ list(APPEND jxr_sources "${jxr}/image/sys/perfTimerANSI.c" "${jxr}/jxrgluelib/JX
 add_library(jxrc_jxr STATIC ${jxr_sources})
 target_include_directories(jxrc_jxr PUBLIC "${jxr}" "${jxr}/common/include" "${jxr}/image/sys" "${jxr}/jxrgluelib")
 target_compile_definitions(jxrc_jxr PUBLIC __ANSI__ DISABLE_PERF_MEASUREMENT)
+
+# Native HEIC decoding, with a built-in HEVC decoder (no OS image API or plugins).
+jxrc_source(libde265 https://github.com/strukturag/libde265.git v1.1.3)
+set(ENABLE_DECODER OFF CACHE BOOL "" FORCE)
+set(ENABLE_ENCODER OFF CACHE BOOL "" FORCE)
+set(ENABLE_SHERLOCK265 OFF CACHE BOOL "" FORCE)
+# libaom already owns the generic upstream "dist" convenience target.
+file(READ "${libde265_SOURCE_DIR}/CMakeLists.txt" jxrc_de265_cmake)
+string(REPLACE "add_custom_target(dist" "add_custom_target(jxrc_de265_dist" jxrc_de265_namespaced "${jxrc_de265_cmake}")
+if(NOT jxrc_de265_cmake STREQUAL jxrc_de265_namespaced)
+    file(WRITE "${libde265_SOURCE_DIR}/CMakeLists.txt" "${jxrc_de265_namespaced}")
+endif()
+add_subdirectory("${libde265_SOURCE_DIR}" "${libde265_BINARY_DIR}" EXCLUDE_FROM_ALL)
+target_include_directories(de265 PUBLIC "$<BUILD_INTERFACE:${libde265_SOURCE_DIR}>" "$<BUILD_INTERFACE:${libde265_BINARY_DIR}>")
+target_compile_definitions(de265 INTERFACE LIBDE265_STATIC_BUILD)
+jxrc_source(libheif https://github.com/strukturag/libheif.git v1.23.7)
+# Upstream's find module accepts a CMake target as its library. This avoids
+# accidentally finding a system libde265 while building the pinned decoder.
+set(LIBDE265_INCLUDE_DIR "${libde265_SOURCE_DIR}" CACHE PATH "" FORCE)
+set(LIBDE265_LIBRARY de265 CACHE STRING "" FORCE)
+set(ENABLE_PLUGIN_LOADING OFF CACHE BOOL "" FORCE)
+set(WITH_LIBDE265 ON CACHE BOOL "" FORCE)
+set(WITH_LIBDE265_PLUGIN OFF CACHE BOOL "" FORCE)
+foreach(codec X265 KVAZAAR UVG266 VVDEC VVENC X264 OpenH264_DECODER DAV1D AOM_DECODER AOM_ENCODER SvtEnc RAV1E JPEG_DECODER JPEG_ENCODER OpenJPEG_DECODER OpenJPEG_ENCODER FFMPEG_DECODER OPENJPH_ENCODER WEBCODECS LIBSHARPYUV UNCOMPRESSED_CODEC)
+    set(WITH_${codec} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(WITH_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(WITH_GDK_PIXBUF OFF CACHE BOOL "" FORCE)
+set(BUILD_DOCUMENTATION OFF CACHE BOOL "" FORCE)
+add_subdirectory("${libheif_SOURCE_DIR}" "${libheif_BINARY_DIR}" EXCLUDE_FROM_ALL)
+
+# Upstream public build includes assume a standalone source layout.
+target_include_directories(heif INTERFACE "$<BUILD_INTERFACE:${libheif_SOURCE_DIR}/libheif/api>" "$<BUILD_INTERFACE:${libheif_BINARY_DIR}>")

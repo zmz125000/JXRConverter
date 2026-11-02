@@ -26,3 +26,13 @@ budgets; its original licenses and notices are retained.
 HDR PNG source support follows LocalViewer commit
 bbbeba5db374936c624951e491cc7b828397d673, adapted for the portable libpng
 decoder, float32 processing and source-preserving JXL/AVIF exports.
+
+Native HEIC decoding uses libheif and libde265 (LGPL v3 or later). Apple and
+ProXDR gain-map interpretation follows LocalViewer's HeifContainer.kt,
+AppleGainMapDecode.kt, SourceEncodedResult.kt and OppoProxdr.kt, with native
+integer RGB decoding and MakerNote-local byte-order handling. The libde265
+"dist" convenience target is namespaced during configuration to coexist with
+libaom; decoding code is unchanged.
+Ultra HDR's generated build-tree appendGainMap implementation emits ISO-only
+metadata when a map cannot be represented by its XMP writer (per-channel values
+or alternate application space); compatible maps still receive both packets.
