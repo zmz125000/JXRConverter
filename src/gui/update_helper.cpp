@@ -1,5 +1,6 @@
 // Standalone helper: no Qt or codec DLLs are held open while replacing them.
 #include <filesystem>
+#include "update_paths.hpp"
 #include <cstdlib>
 #include <fstream>
 #include <set>
@@ -18,17 +19,8 @@
 #endif
 namespace fs=std::filesystem;
 namespace {
-bool local(const fs::path& p) {
-    if(p.empty()||p.is_absolute()||p.has_root_name())return false;
-    for(const auto& part:p)if(part=="..")return false;
-    return true;
-}
-void safeParent(const fs::path& root,const fs::path& relative) {
-    fs::path at=root;
-    for(const auto& part:relative.parent_path()) {
-        at/=part;if(fs::is_symlink(fs::symlink_status(at)))throw std::runtime_error("Install path contains a directory symlink");
-    }
-}
+using jxrc_update::local;
+using jxrc_update::safeParent;
 void waitForParent(unsigned long pid) {
 #ifdef _WIN32
     HANDLE process=OpenProcess(SYNCHRONIZE,FALSE,pid);
@@ -72,26 +64,33 @@ bool launch(const fs::path& exe,const fs::path& root) {
 struct Change {fs::path relative;bool hadOld=false,installed=false;};
 int apply(unsigned long pid,const fs::path& root,const fs::path& source,const fs::path& executable,const fs::path& temp,const fs::path& manifestPath) {
     if(!local(executable)||!local(manifestPath)||!fs::is_directory(root)||!fs::is_directory(source)||!fs::is_regular_file(source/executable))return 2;
+    jxrc_update::validateRoots(root,source,temp);
     const fs::path backup=root/(".jxrc-update-backup-"+std::to_string(pid));
     std::vector<Change> changes;bool createdBackup=false,parentExited=false;
     try {
         waitForParent(pid);parentExited=true;
+        // Validate the entire inventory and payload before changing files.
+        const auto inventory=jxrc_update::readManifest(root,manifestPath);
+        std::set<fs::path> incoming,obsolete;
+        for(const auto& entry:fs::recursive_directory_iterator(source))
+            if(!entry.is_directory()||entry.is_symlink()) {
+                const auto relative=entry.path().lexically_relative(source);
+                if(!jxrc_update::packagePath(relative,jxrc_update::startsWith(jxrc_update::lower(manifestPath.generic_u8string()),"contents/")))throw std::runtime_error("Unsafe package path");
+                const auto sourceStatus=entry.symlink_status();
+                if(!fs::is_regular_file(sourceStatus)&&!fs::is_symlink(sourceStatus))throw std::runtime_error("Package contains a special file");
+                if(fs::is_symlink(sourceStatus)) {
+                    const auto link=fs::read_symlink(entry.path());
+                    if(link.is_absolute()||!local((relative.parent_path()/link).lexically_normal()))throw std::runtime_error("Unsafe package symlink");
+                }
+                safeParent(root,relative);
+                const auto targetStatus=fs::symlink_status(root/relative);
+                if(fs::exists(targetStatus)&&!fs::is_regular_file(targetStatus)&&!fs::is_symlink(targetStatus))throw std::runtime_error("A directory or special file conflicts with an update file");
+                incoming.insert(relative);
+            }
+        for(const auto& relative:inventory)if(!incoming.count(relative))obsolete.insert(relative);
         if(fs::exists(backup))throw std::runtime_error("An earlier update backup must be recovered first");
         if(!fs::create_directory(backup))throw std::runtime_error("Cannot create the update backup");
         createdBackup=true;
-        std::set<fs::path> incoming,obsolete;
-        for(const auto& entry:fs::recursive_directory_iterator(source))
-            if(!entry.is_directory()||entry.is_symlink())incoming.insert(entry.path().lexically_relative(source));
-        {
-            // Close the inventory before replacing files. Windows cannot rename
-            // package-files.txt while this stream still holds it open.
-            std::ifstream manifest(root/manifestPath);std::string line;
-            while(std::getline(manifest,line)) {
-                if(!line.empty() && line.back()=='\r')line.pop_back();
-                const fs::path relative=fs::u8path(line);
-                if(local(relative)&&!incoming.count(relative))obsolete.insert(relative);
-            }
-        }
         // Older portable releases predate the package manifest.
         for(const char* name:{"vc_redist.x64.exe","vc_redist.arm64.exe","vc_redist.x86.exe","dxcompiler.dll","dxil.dll","d3dcompiler_47.dll"})
             if(!incoming.count(name)&&fs::is_regular_file(root/name))obsolete.insert(name);

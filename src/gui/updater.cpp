@@ -97,6 +97,7 @@ void Updater::fetch(const QUrl& url,const QString& destination,qint64 limit,std:
 }
 void Updater::start() {
     if(busy_)return;
+    if(QDir(root_).isRoot()){fail("Updating from a drive root is not allowed. Move the app to a dedicated folder first.");return;}
     if(!QFileInfo(root_+"/"+helperRelative_).isFile()) {
         fail("The update helper is missing. Extract the complete release package before updating.");return;
     }
