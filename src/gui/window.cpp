@@ -2,6 +2,10 @@
 #include "views.hpp"
 #include "style.hpp"
 #include "updater.hpp"
+#include "output_capture.hpp"
+#include <QStandardPaths>
+#include <QTextCursor>
+#include <QScrollBar>
 #include "settings.hpp"
 #include <QStyleHints>
 #include <QStyle>
@@ -69,6 +73,7 @@ QCheckBox* check(const QString& text,const char* name,bool initial=false) {auto*
 QStringList urlPaths(const QMimeData* mime) {QStringList out;for(const auto& url:mime->urls())if(url.isLocalFile())out<<url.toLocalFile();return out;}
 }
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog(this)),proxy_(new CatalogFilter(this)),queue_(new ConversionQueue(this)) {
+    OutputCapture::instance();
     setWindowTitle("JXRConverter " + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
     proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);selection_=new QItemSelectionModel(proxy_,this);
     catalog_->setBackgroundMetadata(false);
@@ -85,6 +90,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
     wheelChanges_->setToolTip("Allow the mouse wheel to change dropdowns and numeric inputs. Off lets you scroll past controls without changing conversion settings.");toolbar->addWidget(wheelChanges_);
+    checkUpdates_=check("Check for updates","checkForUpdates",true);checkUpdates_->setToolTip("Check at startup and on every hour. Updates are installed only when you click Update.");toolbar->addWidget(checkUpdates_);
     auto* splitter=new QSplitter;setCentralWidget(splitter);
     auto* browser=new QWidget;auto* layout=new QVBoxLayout(browser);layout->setContentsMargins(16,16,16,10);layout->setSpacing(10);
     auto* searchRow=new QHBoxLayout;search_=new QLineEdit;search_->setObjectName("search");search_->setPlaceholderText("Search files and metadata · press Enter");search_->setClearButtonEnabled(true);auto* searchButton=new QPushButton("Search");searchRow->addWidget(search_,1);searchRow->addWidget(searchButton);layout->addLayout(searchRow);
@@ -144,6 +150,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
     sidebar->addTab(scroll,"Conversion");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
+    outputLog_=new QPlainTextEdit;outputLog_->setObjectName("outputLog");outputLog_->setReadOnly(true);outputLog_->setMaximumBlockCount(5000);outputLog_->setLineWrapMode(QPlainTextEdit::NoWrap);sidebar->addTab(outputLog_,"Output");
+    connect(OutputCapture::instance(),&OutputCapture::textReady,this,[this](const QString& text){auto* bar=outputLog_->verticalScrollBar();const bool follow=bar->value()==bar->maximum();QTextCursor cursor(outputLog_->document());cursor.movePosition(QTextCursor::End);cursor.insertText(text);if(follow){outputLog_->setTextCursor(cursor);outputLog_->ensureCursorVisible();}});
+    logMessage("JXRConverter "+QString::fromStdString(jxrc::version()));
     auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
     auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
     auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(12,0,12,0);startButtons->addWidget(visible_,1);startButtons->addWidget(selected_,1);sideLayout->addLayout(startButtons);
@@ -157,6 +166,11 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     updater_=new Updater(this);auto* updateButton=new QPushButton("Update");updateButton->setObjectName("updateApplication");toolbar->addWidget(updateButton);
     connect(updateButton,&QPushButton::clicked,this,[this]{if(!queue_->busy())updater_->start();});
     connect(updater_,&Updater::statusChanged,updateButton,&QPushButton::setText);
+    connect(updater_,&Updater::message,this,&MainWindow::logMessage);
+    connect(updater_,&Updater::updateAvailableChanged,this,[updateButton](bool available){updateButton->setProperty("primary",available);updateButton->style()->unpolish(updateButton);updateButton->style()->polish(updateButton);updateButton->update();});
+    updateTimer_=new QTimer(this);updateTimer_->setObjectName("hourlyUpdateCheck");updateTimer_->setSingleShot(true);updateTimer_->setTimerType(Qt::PreciseTimer);
+    connect(updateTimer_,&QTimer::timeout,this,&MainWindow::checkForUpdates);
+    connect(checkUpdates_,&QCheckBox::toggled,this,[this](bool on){if(on)checkForUpdates();else updateTimer_->stop();});
     connect(updater_,&Updater::busyChanged,this,[this,updateButton](bool busy){updateButton->setEnabled(!busy);updateCounts();});
     auto* theme=combo({"Auto","Light","Dark"},"theme");toolbar->addWidget(theme);
     theme->setCurrentIndex(appSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
@@ -172,12 +186,18 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             auto index=view->indexAt(point);if(!index.isValid())return;index=index.siblingAtColumn(0);
             if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
             QMenu menu;auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
+            const QString currentImage=index.data(Catalog::PathRole).toString();
+            auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!queue_->busy()&&!updater_->installing()&&!selectedTargets().isEmpty());
+            auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!queue_->busy()&&!updater_->installing());
+            for(int i=0;i<targets_->count();++i){const auto* item=targets_->item(i);auto* action=convertTo->addAction(item->text());action->setObjectName("convertTarget"+item->data(Qt::UserRole).toString());action->setData(item->data(Qt::UserRole));action->setEnabled(item->flags()&Qt::ItemIsEnabled);}
             const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.imageDate().date();const QString cameraName=record.camera,formatName=record.format;const int depth=record.bits;camera->setEnabled(!cameraName.isEmpty());bits->setEnabled(depth>0);date->setEnabled(captured.isValid());start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
             const auto queueSelection=selectedPaths();
             auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
             auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
-            if(action==cancelSelected){queue_->cancelPendingFor(queueSelection);}
+            if(action==convertImage){convertPaths({currentImage},selectedTargets());}
+            else if(action&&action->parent()==convertTo){convertPaths({currentImage},{Target(action->data().toInt())},true);}
+            else if(action==cancelSelected){queue_->cancelPendingFor(queueSelection);}
             else if(action==camera||action==format||action==bits){
                 QString term=action==camera?"camera:\""+QString(cameraName).replace('"', ' ')+"\"":action==format?"format:\""+formatName+"\"":"bits:"+QString::number(depth);
                 search_->setText((search_->text()+" "+term).trimmed());applySearch();
@@ -216,13 +236,17 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         updateAutoThumbnailAspect();
     });
     connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())thumbnailAspectSampleChecked_=false;});
-    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;updateCounts();showMetadata();});
-    connect(catalog_,&QAbstractItemModel::dataChanged,this,[this]{updateCounts();showMetadata();updateAutoThumbnailAspect();});
+    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;loggedWarnings_.clear();updateCounts();showMetadata();});
+    connect(catalog_,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& first,const QModelIndex& last){
+        updateCounts();showMetadata();updateAutoThumbnailAspect();
+        for(int row=first.row();row<=last.row();++row){const auto& record=catalog_->record(row);if(record.metadataWarning.isEmpty())continue;const auto warning=record.path+"\n"+record.metadataWarning;if(!loggedWarnings_.contains(warning)){loggedWarnings_.insert(warning);logMessage("Warning: "+warning);}}
+    });
     connect(catalog_,&Catalog::scanStateChanged,this,[this](bool scanning){statusBar()->showMessage(scanning?"Scanning folders…":"Folder scan complete",scanning?0:4000);updateCounts();});
-    connect(catalog_,&Catalog::scanError,this,[this](const QString& error){statusBar()->showMessage(error,6000);});
+    connect(catalog_,&Catalog::scanError,this,[this](const QString& error){statusBar()->showMessage(error,6000);logMessage("Scan error: "+error);});
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
+    connect(queue_,&ConversionQueue::statusChanged,this,[this](const QString& path,const QString& state,const QString& detail){logMessage(state+": "+path+(detail.isEmpty()?QString{}:"\n"+detail));});
     connect(queue_,&ConversionQueue::progress,this,[this](int done,int total,int active){progress_->setRange(0,total);progress_->setValue(done);queueState_->setText(QString("%1 / %2 outputs finished · %3 active").arg(done).arg(total).arg(active));updateCounts();});
-    connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){queueState_->setText(QString("%1 done · %2 skipped · %3 failed · %4 cancelled").arg(success).arg(queue_->skipped()).arg(failed).arg(cancelled));updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
+    connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){queueState_->setText(QString("%1 done · %2 skipped · %3 failed · %4 cancelled").arg(success).arg(queue_->skipped()).arg(failed).arg(cancelled));logMessage(queueState_->text());updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
     auto* deleteShortcut=new QShortcut(QKeySequence::Delete,this);connect(deleteShortcut,&QShortcut::activated,this,[this]{if(!queue_->busy()&&(list_->hasFocus()||table_->hasFocus()))catalog_->removePaths(selectedPaths());});
     auto* allShortcut=new QShortcut(QKeySequence::SelectAll,this);connect(allShortcut,&QShortcut::activated,this,[this]{if(list_->hasFocus())list_->selectAll();else if(table_->hasFocus())table_->selectAll();});
     for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
@@ -236,6 +260,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
     restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     updateMode();updateFilter();updatePresentation();updateCounts();
+    QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
     QTimer::singleShot(0,this,[this]{if(loadFolder_->isChecked()&&!recentFolders_.isEmpty())addPaths({recentFolders_.first()});if(loadFiles_->isChecked())addPaths(lastFiles_);});
 }
 MainWindow::~MainWindow() {
@@ -253,7 +278,7 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {smoothScrolling_,thumbnailAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
+    return {checkUpdates_,smoothScrolling_,thumbnailAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
         formatFolders_,dateFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
@@ -329,6 +354,9 @@ QWidget* MainWindow::buildControls() {
     connect(targetSlider,&QSlider::valueChanged,nits_,&QSpinBox::setValue);connect(nits_,&QSpinBox::valueChanged,targetSlider,&QSlider::setValue);
     boostTarget_->setToolTip("HDR highlight target for Boost highlights and Custom modes. Shoulder controls how strongly highlights approach this target. Source headroom mode uses the source's headroom instead.");
     rawLayout->addRow("HDR boost target",boostTarget_);rawLayout->addRow("HDR shoulder",shoulderRow);rawLayout->addRow(rawCustom_);layout->addWidget(raw_);
+    for(auto* widget:raw_->findChildren<QWidget*>())if(qobject_cast<QComboBox*>(widget)||qobject_cast<QAbstractSpinBox*>(widget)||qobject_cast<QCheckBox*>(widget)||qobject_cast<QSlider*>(widget))widget->setProperty("rawDefault",widget->property(settingProperty(widget)));
+    auto* resetRaw=new QPushButton("Reset RAW rendering");resetRaw->setObjectName("resetRaw");rawLayout->addRow(resetRaw);
+    connect(resetRaw,&QPushButton::clicked,this,[this]{for(auto* widget:raw_->findChildren<QWidget*>())if(widget->property("rawDefault").isValid())widget->setProperty(settingProperty(widget),widget->property("rawDefault"));updateMode();});
     queuePanel_=new QWidget;auto* queueLayout=new QVBoxLayout(queuePanel_);queueLayout->setContentsMargins(14,0,14,10);queueLayout->setSpacing(8);
     auto* destination=new QGroupBox("Output queue");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
     auto* folderButtons=new QHBoxLayout;
@@ -400,7 +428,7 @@ Options MainWindow::options() const {
 Options MainWindow::optionsForTarget(Target target) const {
     Options o;o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=target;o.quality.preset=Preset(preset_->currentIndex());
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()?12:10;o.quality.downsize_gainmap=downsize_->isChecked();
-    o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isEnabled()&&transcode_->isChecked()&&target==Target::jxl;
+    o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isChecked()&&target==Target::jxl&&(o.mode==Mode::preserve||(!exposure_->value()&&!maxEdge_->value()));
     if(o.mode==Mode::process) {
         o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.convert_gamut=convertGamut_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.shoulder=static_cast<float>(shoulder_->value());
         if(o.raw.hdr_mode!=RawHdrMode::source)o.raw.target_nits=static_cast<float>(nits_->value());
@@ -484,8 +512,8 @@ void MainWindow::updateAutoThumbnailAspect() {
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& index:selection_->selectedRows(0))out<<index.data(Catalog::PathRole).toString();return out;}
 void MainWindow::updateCounts() {
-    const int selected=selection_->selectedRows(0).size();const bool busy=queue_->busy()||(updater_&&updater_->busy()),hasTargets=!selectedTargets().isEmpty();
-    if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy);
+    const int selected=selection_->selectedRows(0).size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
+    if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
@@ -503,9 +531,12 @@ void MainWindow::showMetadata() {
 }
 void MainWindow::convertFiles(bool selected) {
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
-    if(paths.isEmpty()||queue_->busy()||(updater_&&updater_->busy()))return;
+    convertPaths(paths,selectedTargets());
+}
+void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets) {
+    if(paths.isEmpty()||queue_->busy()||(updater_&&updater_->installing()))return;
     try {
-        const auto targets=selectedTargets();if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
+        if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         QMap<int,QStringList> inputsByTarget;
         for(const auto& path:paths) {
@@ -513,7 +544,7 @@ void MainWindow::convertFiles(bool selected) {
             const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif"&&extension!="png"&&extension!="webp"&&extension!="tif"&&extension!="tiff"&&extension!="bmp"&&extension!="gif";
             for(auto target:targets) {
                 const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap;
-                if(hdrTarget&&!hdrGroup) {
+                if(hdrTarget&&!hdrGroup&&!exactTargets) {
                     if(!acceptSdr_->isChecked())continue;
                     if(target==Target::jpeg_gainmap)target=Target::jpeg;
                     else if(target==Target::jxl_linear||target==Target::jxl_pq)target=Target::jxl;
@@ -532,7 +563,14 @@ void MainWindow::convertFiles(bool selected) {
             if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
         }
         queue_->start(std::move(jobs),workers_->value());updateCounts();
-    } catch(const std::exception& e){QMessageBox::warning(this,"Cannot start conversion",QString::fromUtf8(e.what()));}
+    } catch(const std::exception& e){logMessage("Cannot start conversion: "+QString::fromUtf8(e.what()));QMessageBox::warning(this,"Cannot start conversion",QString::fromUtf8(e.what()));}
+}
+void MainWindow::logMessage(const QString& message) {outputLog_->appendPlainText("["+QTime::currentTime().toString("HH:mm:ss")+"] "+message);}
+void MainWindow::checkForUpdates() {
+    if(!checkUpdates_->isChecked()){updateTimer_->stop();return;}
+    // Test windows retain the scheduler but never contact the real release API.
+    if(!QStandardPaths::isTestModeEnabled())updater_->check();
+    const auto now=QTime::currentTime();updateTimer_->start(3600000-now.minute()*60000-now.second()*1000-now.msec());
 }
 void MainWindow::closeEvent(QCloseEvent* event) {
     if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after active conversions finish…");event->ignore();return;}event->accept();

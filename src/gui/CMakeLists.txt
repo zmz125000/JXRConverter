@@ -1,5 +1,5 @@
 find_package(Qt6 6.4 REQUIRED COMPONENTS Widgets Network Test)
-add_library(jxrc_desktop STATIC catalog.cpp catalog.hpp queue.cpp queue.hpp views.cpp views.hpp window.cpp window.hpp style.cpp style.hpp updater.cpp updater.hpp)
+add_library(jxrc_desktop STATIC output_capture.cpp output_capture.hpp catalog.cpp catalog.hpp queue.cpp queue.hpp views.cpp views.hpp window.cpp window.hpp style.cpp style.hpp updater.cpp updater.hpp)
 set_target_properties(jxrc_desktop PROPERTIES AUTOMOC ON)
 target_include_directories(jxrc_desktop PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(jxrc_desktop PUBLIC jxrc Qt6::Widgets Qt6::Network ${JXRC_EXIV2_TARGET})

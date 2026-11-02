@@ -38,10 +38,40 @@
 #include <atomic>
 #include <future>
 #include "window.hpp"
+#include "updater.hpp"
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
+#include <QSysInfo>
+#include <QTabWidget>
+#include <QPlainTextEdit>
+#include <cstdio>
+#include <cstring>
 #include "settings.hpp"
 #include "style.hpp"
 #include "views.hpp"
 using namespace jxrc::gui;
+
+class ReleaseReply : public QNetworkReply {
+    QByteArray body_;qint64 offset_=0;
+public:
+    ReleaseReply(const QNetworkRequest& request,QByteArray body,bool fail,QObject* parent):QNetworkReply(parent),body_(std::move(body)) {
+        setRequest(request);setUrl(request.url());setOperation(QNetworkAccessManager::GetOperation);setAttribute(QNetworkRequest::HttpStatusCodeAttribute,200);open(QIODevice::ReadOnly|QIODevice::Unbuffered);
+        QTimer::singleShot(0,this,[this,fail]{if(isFinished())return;if(fail)setError(QNetworkReply::HostNotFoundError,"Test network failure");else emit readyRead();setFinished(true);emit finished();});
+    }
+    void abort() override {if(!isFinished()){setError(QNetworkReply::OperationCanceledError,"Cancelled");setFinished(true);emit finished();}}
+    qint64 bytesAvailable() const override {return body_.size()-offset_+QNetworkReply::bytesAvailable();}
+protected:
+    qint64 readData(char* data,qint64 maximum) override {if(offset_==body_.size())return -1;const auto count=std::min(maximum,qint64(body_.size())-offset_);std::memcpy(data,body_.constData()+offset_,size_t(count));offset_+=count;return count;}
+};
+class ReleaseNetwork : public QNetworkAccessManager {
+public:
+    QByteArray response;bool fail=false;int requests=0;
+protected:
+    QNetworkReply* createRequest(Operation,const QNetworkRequest& request,QIODevice*) override {++requests;return new ReleaseReply(request,response,fail,this);}
+};
 
 class GuiTests : public QObject {
     Q_OBJECT
@@ -324,6 +354,55 @@ private slots:
         }
         window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
+    }
+    void outputLogRawResetAndUpdateSchedule() {
+        appSettings().clear();MainWindow window;window.show();
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");QCOMPARE(tabs->tabText(2),QString("Output"));
+        auto* output=window.findChild<QPlainTextEdit*>("outputLog");QVERIFY(output->isReadOnly());QCOMPARE(output->maximumBlockCount(),5000);
+        std::fputs("Native stdout marker\n",stdout);std::fflush(stdout);std::fputs("Native stderr marker\n",stderr);std::fflush(stderr);qWarning("Qt warning marker");
+        QTRY_VERIFY(output->toPlainText().contains("Native stdout marker"));QTRY_VERIFY(output->toPlainText().contains("Native stderr marker"));QTRY_VERIFY(output->toPlainText().contains("Qt warning marker"));
+        auto* automatic=window.findChild<QCheckBox*>("checkForUpdates");QVERIFY(automatic->isChecked());
+        auto* timer=window.findChild<QTimer*>("hourlyUpdateCheck");QTRY_VERIFY(timer->isActive());QVERIFY(timer->interval()>0&&timer->interval()<=3600000);QCOMPARE(timer->timerType(),Qt::PreciseTimer);
+        automatic->setChecked(false);QVERIFY(!timer->isActive());automatic->setChecked(true);QVERIFY(timer->isActive());
+        auto* updater=window.findChild<Updater*>();updater->updateAvailableChanged(true);QVERIFY(window.findChild<QPushButton*>("updateApplication")->property("primary").toBool());updater->updateAvailableChanged(false);QVERIFY(!window.findChild<QPushButton*>("updateApplication")->property("primary").toBool());
+        window.findChild<QComboBox*>("rawMode")->setCurrentIndex(2);window.findChild<QComboBox*>("rawWhiteBalance")->setCurrentIndex(8);
+        window.findChild<QSpinBox*>("rawKelvin")->setValue(7500);window.findChild<QDoubleSpinBox*>("rawExposure")->setValue(1.5);window.findChild<QDoubleSpinBox*>("rawShoulder")->setValue(.8);window.findChild<QSpinBox*>("rawTargetNits")->setValue(5000);window.findChild<QCheckBox*>("rawCameraLook")->setChecked(false);
+        window.findChild<QPushButton*>("resetRaw")->click();
+        QCOMPARE(window.findChild<QComboBox*>("rawMode")->currentIndex(),1);QCOMPARE(window.findChild<QComboBox*>("rawWhiteBalance")->currentIndex(),0);QCOMPARE(window.findChild<QDoubleSpinBox*>("rawExposure")->value(),0.);QCOMPARE(window.findChild<QSpinBox*>("rawKelvin")->value(),5200);QCOMPARE(window.findChild<QSlider*>("rawShoulderSlider")->value(),50);QCOMPARE(window.findChild<QSlider*>("rawTargetNitsSlider")->value(),1500);QVERIFY(window.findChild<QCheckBox*>("rawCameraLook")->isChecked());
+        const auto input=makeImage(root("log"),"input.jpg",64,48,100);window.addPaths({input});QTRY_COMPARE(window.catalog()->rowCount(),1);
+        QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);jxrc::Options invalid;invalid.target=jxrc::Target(999);
+        window.queue()->start({{input,root("log/bad-output"),invalid}},1,1);QTRY_COMPARE(finished.count(),1);QCOMPARE(finished[0][1].toInt(),1);QVERIFY(output->toPlainText().contains("Failed: "+input));
+    }
+    void silentUpdateChecks() {
+        auto* network=new ReleaseNetwork;Updater updater(nullptr,network);QSignalSpy status(&updater,&Updater::statusChanged),messages(&updater,&Updater::message);
+        network->response=QJsonDocument(QJsonObject{{"tag_name",QString::fromStdString(jxrc::version())}}).toJson();updater.check();QVERIFY(updater.busy());QVERIFY(!updater.installing());QTRY_VERIFY(!updater.busy());QCOMPARE(status.last()[0].toString(),QString("Latest"));QVERIFY(!updater.updateAvailable());
+#ifdef Q_OS_WIN
+        const QString system="Windows",extension=".zip";
+#elif defined(Q_OS_MACOS)
+        const QString system="Darwin",extension=".tar.gz";
+#else
+        const QString system="Linux",extension=".tar.gz";
+#endif
+        const QString name="JXRConverter-999.0.0-"+system+"-"+QSysInfo::buildCpuArchitecture()+"-desktop"+extension;
+        network->response=QJsonDocument(QJsonObject{{"tag_name","v999.0.0"},{"assets",QJsonArray{QJsonObject{{"name",name},{"browser_download_url","https://example.invalid/package"}},QJsonObject{{"name","SHA256SUMS.txt"},{"browser_download_url","https://example.invalid/checksums"}}}}}).toJson();
+        updater.check();QTRY_VERIFY(!updater.busy());QVERIFY(updater.updateAvailable());QCOMPARE(status.last()[0].toString(),QString("Update available"));QCOMPARE(network->requests,2);
+        network->fail=true;updater.check();QTRY_VERIFY(!updater.busy());QVERIFY(messages.last()[0].toString().contains("Test network failure"));QVERIFY(!QApplication::activeModalWidget());QCOMPARE(network->requests,3);
+    }
+    void contextImageConversion() {
+        appSettings().clear();MainWindow window;window.show();
+        const auto a=makeImage(root("context-convert"),"a.jpg",64,48,100),b=makeImage(root("context-convert"),"b.jpg",64,48,100);window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
+        window.findChild<QLineEdit*>("outputDirectory")->setText(root("context-output"));
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==4?Qt::Checked:Qt::Unchecked);
+        auto* view=window.findChild<FileListView*>();view->selectAll();QCOMPARE(view->selectionModel()->selectedRows().size(),2);
+        const auto index=window.filterModel()->index(1,0);QTRY_VERIFY(!view->visualRect(index).isEmpty());QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
+        bool chosen=false;
+        QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("convertImage");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});
+        view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(chosen);QTRY_COMPARE(finished.count(),1);QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(root("context-output")+"/b_sdr.avif"));QVERIFY(!QFileInfo::exists(root("context-output")+"/a_sdr.avif"));
+        for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==2?Qt::Checked:Qt::Unchecked);
+        chosen=false;
+        QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* submenu=menu->findChild<QMenu*>("convertTo");auto* action=submenu?submenu->findChild<QAction*>("convertTarget5"):nullptr;chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(submenu->menuAction());QTest::keyClick(menu,Qt::Key_Right);submenu->setActiveAction(action);QTest::keyClick(submenu,Qt::Key_Return);}else menu->close();});
+        view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(chosen);QTRY_COMPARE(finished.count(),2);QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(root("context-output")+"/b_pq.avif"));QCOMPARE(jxrc::inspect(std::filesystem::u8path((root("context-output")+"/b_pq.avif").toStdString())).transfer,std::string("PQ"));
+        QCOMPARE(window.options().target,jxrc::Target::jxl);
     }
     void imageDateFallbackAndSingleDayMenu() {
         appSettings().clear();

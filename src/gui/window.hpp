@@ -19,6 +19,7 @@ class QPushButton;
 class QSlider;
 class QSpinBox;
 class QStackedWidget;
+class QTimer;
 class QWidget;
 namespace jxrc::gui {
 class Updater;
@@ -58,6 +59,9 @@ private:
     void updateCounts();
     void showMetadata();
     void convertFiles(bool selected);
+    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false);
+    void checkForUpdates();
+    void logMessage(const QString&);
     QVector<Target> selectedTargets() const;
     Options optionsForTarget(Target target) const;
     QStringList selectedPaths() const;
@@ -78,15 +82,17 @@ private:
     QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_;
     QDoubleSpinBox *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
-    QCheckBox *smoothScrolling_, *loadFolder_, *loadFiles_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *dateFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
+    QCheckBox *smoothScrolling_, *loadFolder_, *loadFiles_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *dateFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
     QPushButton *thumbnailAspect_, *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_;
     QLabel *counts_, *queueState_, *threadBudget_;
-    QPlainTextEdit* inspector_;
+    QPlainTextEdit *inspector_, *outputLog_;
+    QTimer* updateTimer_;
     QProgressBar* progress_;
     QStringList recentFolders_, recentFiles_, lastFiles_;
     QString appliedSearch_;
+    QSet<QString> loggedWarnings_;
     bool closeWhenIdle_ = false;
     bool thumbnailAspectSampleChecked_ = false;
     Qt::SortOrder sortOrder_ = Qt::AscendingOrder;

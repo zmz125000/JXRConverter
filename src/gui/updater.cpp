@@ -37,7 +37,8 @@ QString architecture(QString value) {
     return value;
 }
 }
-Updater::Updater(QWidget* parent):QObject(parent),window_(parent),network_(new QNetworkAccessManager(this)) {
+Updater::Updater(QWidget* parent,QNetworkAccessManager* network):QObject(parent),window_(parent),network_(network?network:new QNetworkAccessManager(this)) {
+    if(network)network->setParent(this);
     root_=QCoreApplication::applicationDirPath();relativeGui_=QFileInfo(QCoreApplication::applicationFilePath()).fileName();
     helperRelative_=helperName();manifestRelative_="share/JXRConverter/package-files.txt";
 #ifdef Q_OS_MACOS
@@ -66,8 +67,9 @@ Updater::~Updater() {
     }
 }
 void Updater::fail(const QString& error) {
-    busy_=false;emit busyChanged(false);emit statusChanged("Update");
-    QMessageBox::warning(window_,"Update",error);
+    busy_=false;emit busyChanged(false);emit statusChanged(available_?"Update available":"Update");
+    emit message("Update: "+error);
+    if(!checkingOnly_)QMessageBox::warning(window_,"Update",error);
 }
 void Updater::fetch(const QUrl& url,const QString& destination,qint64 limit,std::function<void()> next) {
     if(url.scheme()!="https"){fail("The release contains an invalid download URL.");return;}
@@ -86,7 +88,7 @@ void Updater::fetch(const QUrl& url,const QString& destination,qint64 limit,std:
         if(file->write(bytes)!=bytes.size()){*writeError=file->errorString();reply->abort();}
     });
     connect(reply,&QNetworkReply::downloadProgress,this,[this](qint64 done,qint64 total){
-        if(busy_&&total>0)emit statusChanged(QString("Updating %1%").arg(done*100/total));
+        if(busy_&&!checkingOnly_&&total>0)emit statusChanged(QString("Updating %1%").arg(done*100/total));
     });
     connect(reply,&QNetworkReply::finished,this,[this,reply,file,writeError,next=std::move(next)]{
         const QString error=!writeError->isEmpty()?*writeError:reply->error()!=QNetworkReply::NoError?reply->errorString():QString{};
@@ -95,17 +97,22 @@ void Updater::fetch(const QUrl& url,const QString& destination,qint64 limit,std:
         if(!file->commit()){fail(file->errorString());return;}next();
     });
 }
-void Updater::start() {
+void Updater::start() { begin(true); }
+void Updater::check() { begin(false); }
+void Updater::begin(bool install) {
     if(busy_)return;
-    if(QDir(root_).isRoot()){fail("Updating from a drive root is not allowed. Move the app to a dedicated folder first.");return;}
-    if(!QFileInfo(root_+"/"+helperRelative_).isFile()) {
+    checkingOnly_=!install;
+    if(install&&QDir(root_).isRoot()){fail("Updating from a drive root is not allowed. Move the app to a dedicated folder first.");return;}
+    if(install&&!QFileInfo(root_+"/"+helperRelative_).isFile()) {
         fail("The update helper is missing. Extract the complete release package before updating.");return;
     }
-    QTemporaryDir writable(root_+"/.jxrc-write-check-XXXXXX");
-    if(!writable.isValid()){fail("The application folder is not writable. Move the extracted package to a folder you own before updating.");return;}
+    if(install) {
+        QTemporaryDir writable(root_+"/.jxrc-write-check-XXXXXX");
+        if(!writable.isValid()){fail("The application folder is not writable. Move the extracted package to a folder you own before updating.");return;}
+    }
     temp_=std::make_unique<QTemporaryDir>(QDir::tempPath()+"/jxrc-update-XXXXXX");
     if(!temp_->isValid()){fail("Cannot create the update workspace.");return;}
-    busy_=true;emit busyChanged(true);emit statusChanged("Checking update…");
+    busy_=true;emit busyChanged(true);emit statusChanged("Checking update…");emit message("Checking for updates…");
     const QString release=temp_->path()+"/release.json";
     fetch(QUrl("https://api.github.com/repos/" JXRC_UPDATE_REPOSITORY "/releases/latest"),release,4*1024*1024,[this,release]{
         QFile file(release);if(!file.open(QIODevice::ReadOnly)){fail(file.errorString());return;}downloadRelease(file.readAll());
@@ -120,7 +127,7 @@ void Updater::downloadRelease(const QByteArray& data) {
         fail("No stable release is available.");return;
     }
     if(QVersionNumber::fromString(version)<=QVersionNumber::fromString(QString::fromStdString(jxrc::version()))) {
-        busy_=false;emit busyChanged(false);emit statusChanged("Latest");return;
+        available_=false;emit updateAvailableChanged(false);busy_=false;emit busyChanged(false);emit statusChanged("Latest");emit message("The installed version is the latest release.");return;
     }
     QString system=QStringLiteral(JXRC_PACKAGE_SYSTEM);
 #ifdef Q_OS_WIN
@@ -140,6 +147,9 @@ void Updater::downloadRelease(const QByteArray& data) {
         assetName_=name;assetUrl_=QUrl(asset.value("browser_download_url").toString());
     }
     if(assetName_.isEmpty()||!checksumUrl_.isValid()){fail("This release has no matching desktop package and checksum file.");return;}
+    available_=true;emit updateAvailableChanged(true);
+    emit message("Update available: "+version);
+    if(checkingOnly_){busy_=false;emit busyChanged(false);emit statusChanged("Update available");return;}
     archive_=temp_->path()+"/"+assetName_;checksum_=temp_->path()+"/SHA256SUMS.txt";
     emit statusChanged("Downloading update…");
     fetch(checksumUrl_,checksum_,1024*1024,[this]{fetch(assetUrl_,archive_,512LL*1024*1024,[this]{verifyAndExtract();});});
