@@ -46,6 +46,8 @@
 #include <QJsonArray>
 #include <QSysInfo>
 #include <QTabWidget>
+#include <QToolButton>
+#include <QLabel>
 #include <QPlainTextEdit>
 #include <cstdio>
 #include <cstring>
@@ -434,6 +436,45 @@ private slots:
         view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(enabled);
         QVERIFY(window.findChild<QCheckBox*>("dateFilter")->isChecked());
         QCOMPARE(window.findChild<QDateEdit*>("dateFrom")->date(),modified.date());QCOMPARE(window.findChild<QDateEdit*>("dateTo")->date(),modified.date());QCOMPARE(window.filterModel()->rowCount(),1);
+    }
+    void contextFiltersAndLibraryLayout() {
+        appSettings().clear();MainWindow window;window.show();
+        QCOMPARE(window.windowTitle(),"JXRConverter v"+QString::fromStdString(jxrc::version()));
+        auto* footer=window.findChild<QWidget*>("libraryActions");
+        QCOMPARE(window.findChild<QLabel*>("catalogCounts")->parentWidget(),footer);
+        const auto directory=root("field-filters");
+        const auto a=makeImage(directory,"a.jpg",32,24,100),b=makeImage(directory,"b.jpg",64,48,400);
+        window.findChild<QPushButton*>("statusFailed")->click();window.addPaths({directory});
+        QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());
+        QTRY_COMPARE(window.catalog()->rowCount(),2);window.catalog()->setBackgroundMetadata(true);QTRY_VERIFY(inspected(*window.catalog()));
+        auto* recent=window.findChild<QToolButton*>("recentFolders");QVERIFY(recent);QVERIFY(recent->menu());
+        QCOMPARE(recent->popupMode(),QToolButton::InstantPopup);
+        QMetaObject::invokeMethod(recent->menu(),"aboutToShow");
+        QCOMPARE(recent->menu()->actions().first()->text(),QFileInfo(directory).canonicalFilePath());
+        auto* mode=window.findChild<QButtonGroup*>("viewMode");mode->button(2)->click();
+        auto* table=window.findChild<FileTableView*>();auto* search=window.findChild<QLineEdit*>("search");
+        auto choose=[&](const QPoint& point,const QString& name){
+            bool chosen=false;
+            QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>(name);chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});
+            table->customContextMenuRequested(point);return chosen;
+        };
+        const auto field=window.filterModel()->index(0,Catalog::Iso);table->scrollTo(field);QTest::qWait(10);
+        QVERIFY(choose(table->visualRect(field).center(),"addFieldToFilters"));
+        QCOMPARE(search->text(),QString("iso:\"100\""));QCOMPARE(window.filterModel()->rowCount(),1);
+        QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),a);
+        window.findChild<QLineEdit*>("instantFilter")->setText("nothing");window.findChild<QCheckBox*>("todayFilter")->setChecked(true);
+        window.findChild<QPushButton*>("statusFailed")->click();
+        QVERIFY(choose(QPoint(-1,-1),"resetFilters"));QCOMPARE(window.filterModel()->rowCount(),2);
+        QVERIFY(search->text().isEmpty());QVERIFY(window.findChild<QLineEdit*>("instantFilter")->text().isEmpty());
+        QVERIFY(!window.findChild<QCheckBox*>("todayFilter")->isChecked());QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());
+        // Every displayed Details field supports an exact field-specific query.
+        for(int column=0;column<Catalog::ColumnCount;++column){
+            const auto value=window.catalog()->index(0,column).data().toString();if(value.isEmpty())continue;
+            Filter f;f.search=catalogFieldKey(column)+":\""+value+"\"";window.filterModel()->setFilter(f);
+            QVERIFY2(window.filterModel()->rowCount()>0,qPrintable(f.search));
+        }
+        window.findChild<QPushButton*>("statusFailed")->click();window.addPaths({b});
+        QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());QCOMPARE(window.filterModel()->rowCount(),2);
     }
     void libraryFooterAndStatusFilters() {
         appSettings().clear();MainWindow window;window.show();

@@ -87,6 +87,7 @@ private:
     std::function<bool(const QModelIndex&)> thumbnailVisible_;
     int scanning_ = 0;
 };
+QString catalogFieldKey(int column);
 struct Filter {
     QString search, text, format, range;
     int status = 0; // All, Ready, Queued (including running), Finished (Done/Skipped), Failed.

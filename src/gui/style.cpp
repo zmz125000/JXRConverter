@@ -37,6 +37,7 @@ void applyDesktopStyle(int theme) {
     app.setPalette(p);
     app.setStyleSheet(R"(
         QToolBar { spacing: 8px; padding: 8px; }
+        QToolButton#recentFolders::menu-indicator { image: none; width: 0px; }
         QGroupBox { font-weight: 600; border: 1px solid palette(mid); border-radius: 6px; margin-top: 10px; padding: 12px 8px 8px; }
         QGroupBox::title { subcontrol-origin: margin; left: 10px; }
         QPushButton { padding: 7px; }

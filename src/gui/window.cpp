@@ -70,18 +70,19 @@ QComboBox* combo(const QStringList& values,const char* name,QWidget* parent=null
 QSpinBox* spin(int low,int high,int initial,const char* name) {auto* w=new QSpinBox;w->setRange(low,high);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
 QDoubleSpinBox* real(double low,double high,double initial,double step,const char* name) {auto* w=new QDoubleSpinBox;w->setRange(low,high);w->setDecimals(2);w->setSingleStep(step);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
 QCheckBox* check(const QString& text,const char* name,bool initial=false) {auto* w=new QCheckBox(text);w->setObjectName(name);w->setChecked(initial);return w;}
+QString quotedSearchValue(QString value) {value.replace('\\',"\\\\");value.replace('"',"\\\"");return "\""+value+"\"";}
 QStringList urlPaths(const QMimeData* mime) {QStringList out;for(const auto& url:mime->urls())if(url.isLocalFile())out<<url.toLocalFile();return out;}
 }
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog(this)),proxy_(new CatalogFilter(this)),queue_(new ConversionQueue(this)) {
     OutputCapture::instance();
-    setWindowTitle("JXRConverter " + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
+    setWindowTitle("JXRConverter v" + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
     proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);selection_=new QItemSelectionModel(proxy_,this);
     catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
     auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open image folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
-    auto* recent=new QToolButton;recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
+    auto* recent=new QToolButton;recent->setObjectName("recentFolders");recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
     connect(recentMenu,&QMenu::aboutToShow,this,[this,recentMenu]{recentMenu->clear();for(const auto& path:recentFolders_){auto* action=recentMenu->addAction(path);connect(action,&QAction::triggered,this,[this,path]{addPaths({path});});}
         auto* filesMenu=recentMenu->addMenu("Recent dropped files");for(const auto& path:recentFiles_){auto* action=filesMenu->addAction(path);connect(action,&QAction::triggered,this,[this,path]{addPaths({path});});}
     });
@@ -133,8 +134,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     list_->setModel(proxy_);table_->setModel(proxy_);list_->setSelectionModel(selection_);table_->setSelectionModel(selection_);
     table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);for(int column:{Catalog::Captured,Catalog::Created,Catalog::Modified,Catalog::ExifDate})table_->setColumnWidth(column,170);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
     views_->addWidget(list_);views_->addWidget(table_);layout->addWidget(views_,1);
-    counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");layout->addWidget(counts_);
-    auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addStretch();
+    counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");
+    auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addWidget(counts_);actionsLayout->addStretch();
     statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
     const QStringList statusNames={"All","Ready","Queued","Finished","Failed"};
     for(int i=0;i<statusNames.size();++i){auto* button=new QPushButton(statusNames[i]);button->setObjectName("status"+statusNames[i]);button->setCheckable(true);statusFilter_->addButton(button,i);actionsLayout->addWidget(button);}
@@ -183,9 +184,15 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
         view->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(view,&QWidget::customContextMenuRequested,this,[this,view,openImage](const QPoint& point){
-            auto index=view->indexAt(point);if(!index.isValid())return;index=index.siblingAtColumn(0);
+            const auto fieldIndex=view->indexAt(point);
+            if(!fieldIndex.isValid()){QMenu menu;auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");if(menu.exec(view->viewport()->mapToGlobal(point))==reset)resetFilters();return;}
+            const int fieldColumn=fieldIndex.column();const QString fieldValue=fieldIndex.data().toString();
+            auto index=fieldIndex.siblingAtColumn(0);
             if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
-            QMenu menu;auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
+            QMenu menu;QAction* addField=nullptr;
+            if(view==table_){addField=menu.addAction("Add this to filters");addField->setObjectName("addFieldToFilters");addField->setEnabled(!fieldValue.isEmpty());addField->setToolTip(catalog_->headerData(fieldColumn,Qt::Horizontal,Qt::DisplayRole).toString()+": "+fieldValue);}
+            auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
+            auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
             const QString currentImage=index.data(Catalog::PathRole).toString();
             auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!queue_->busy()&&!updater_->installing()&&!selectedTargets().isEmpty());
             auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!queue_->busy()&&!updater_->installing());
@@ -195,11 +202,16 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
             auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
-            if(action==convertImage){convertPaths({currentImage},selectedTargets());}
+            if(action==reset)resetFilters();
+            else if(addField&&action==addField){
+                const auto key=catalogFieldKey(fieldColumn);const auto term=key+":"+quotedSearchValue(fieldValue);
+                search_->setText((search_->text()+" "+term).trimmed());applySearch();
+            }
+            else if(action==convertImage){convertPaths({currentImage},selectedTargets());}
             else if(action&&action->parent()==convertTo){convertPaths({currentImage},{Target(action->data().toInt())},true);}
             else if(action==cancelSelected){queue_->cancelPendingFor(queueSelection);}
             else if(action==camera||action==format||action==bits){
-                QString term=action==camera?"camera:\""+QString(cameraName).replace('"', ' ')+"\"":action==format?"format:\""+formatName+"\"":"bits:"+QString::number(depth);
+                const QString term=action==camera?"camera:"+quotedSearchValue(cameraName):action==format?"format:"+quotedSearchValue(formatName):"bits:"+QString::number(depth);
                 search_->setText((search_->text()+" "+term).trimmed());applySearch();
             }else if(action==date||action==start||action==end){
                 if(action==date){dateFrom_->setDate(captured);dateTo_->setDate(captured);}
@@ -220,7 +232,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* d:{dateFrom_,dateTo_})connect(d,&QDateEdit::dateChanged,this,&MainWindow::updateFilter);
     connect(today_,&QCheckBox::toggled,this,&MainWindow::updateFilter);
     connect(metadataFilters_,&QCheckBox::toggled,this,[this,filterScroll](bool on){filterScroll->setVisible(on);instant_->setPlaceholderText(on?"Search filenames, camera, lens, EXIF tags or values…":"Instant filter · e.g. sunset");updateFilter();});
-    connect(reset,&QPushButton::clicked,this,[this]{instant_->clear();format_->clear();range_->setCurrentIndex(0);minImageEdge_->setValue(0);megapixels_->setValue(0);dateEnabled_->setChecked(false);today_->setChecked(false);dateFrom_->setDate(QDate::currentDate().addDays(-1));dateTo_->setDate(QDate::currentDate());});
+    connect(reset,&QPushButton::clicked,this,&MainWindow::resetFilters);
     // Refresh Today across local midnight, including when the application stays open.
     auto* dateRefresh=new QTimer(this);dateRefresh->setInterval(30000);connect(dateRefresh,&QTimer::timeout,this,[this]{if(today_->isChecked())updateFilter();});dateRefresh->start();
     connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);updateBackgroundMetadata();});
@@ -437,6 +449,12 @@ Options MainWindow::optionsForTarget(Target target) const {
     validate(o);return o;
 }
 void MainWindow::applySearch() {appliedSearch_=search_->text();updateFilter();}
+void MainWindow::resetFilters() {
+    search_->clear();appliedSearch_.clear();instant_->clear();format_->clear();range_->setCurrentIndex(0);
+    minImageEdge_->setValue(0);megapixels_->setValue(0);dateEnabled_->setChecked(false);today_->setChecked(false);
+    dateFrom_->setDate(QDate::currentDate().addDays(-1));dateTo_->setDate(QDate::currentDate());
+    statusFilter_->button(0)->setChecked(true);updateFilter();
+}
 void MainWindow::loadHistory() {
     QFile file(configDirectory()+"/history.json");
     if(!file.open(QIODevice::ReadOnly))return;
@@ -466,7 +484,7 @@ void MainWindow::addPaths(const QStringList& paths) {
     bool changed=false;
     for(const auto& path:paths){const QFileInfo info(path);if(info.isDir()){const auto canonical=info.canonicalFilePath();recentFolders_.removeAll(canonical);recentFolders_.prepend(canonical);changed=true;}}
     if(changed){while(recentFolders_.size()>30)recentFolders_.removeLast();saveHistory();}
-    if(!paths.isEmpty())catalog_->addPaths(paths,recursive_->isChecked());
+    if(!paths.isEmpty()){statusFilter_->button(0)->setChecked(true);updateFilter();catalog_->addPaths(paths,recursive_->isChecked());}
 }
 
 void MainWindow::updateFilter() {

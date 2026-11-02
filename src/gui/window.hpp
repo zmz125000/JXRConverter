@@ -47,6 +47,7 @@ private:
     void loadHistory();
     void saveHistory();
     void applySearch();
+    void resetFilters();
     QList<QWidget*> persistentControls() const;
     void restoreSettings();
     void saveSettings() const;
