@@ -388,7 +388,13 @@ private slots:
         tabs->setCurrentIndex(2);QCOMPARE(tabs->tabText(2),QString("Log"));auto* log=window.findChild<QPlainTextEdit*>("outputLog");auto* clear=window.findChild<QPushButton*>("clearLog");
         QVERIFY(tabs->widget(2)->isAncestorOf(clear));QCOMPARE(clear->parentWidget(),log);QCOMPARE(tabs->widget(2)->layout()->count(),1);QVERIFY(log->viewport()->geometry().contains(clear->geometry()));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(2)->width()/2);
         log->setPlainText(QString("log entry\n").repeated(200));QTest::qWait(10);const auto position=clear->pos();log->verticalScrollBar()->setValue(0);log->verticalScrollBar()->setValue(log->verticalScrollBar()->maximum());QCOMPARE(clear->pos(),position);
-        window.resize(1600,850);QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());QCOMPARE(progress->width(),destination->width());
+        window.resize(1600,850);
+        // Qt defers resizing hidden tab pages until they are shown. The output
+        // panel follows the shared page container even while Log is active.
+        QTRY_COMPARE(output->width(),conversion->parentWidget()->width());
+        QCOMPARE(panel->width(),conversion->parentWidget()->width());
+        tabs->setCurrentIndex(0);
+        QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());QCOMPARE(progress->width(),destination->width());
     }
     void aspectRatioMenuAndAutoSampling() {
         appSettings().clear();MainWindow window;window.show();auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");
@@ -591,8 +597,10 @@ private slots:
         tab("statusFinished");QCOMPARE(model->rowCount(),1);QCOMPARE(selection->selectedRows().size(),1);
         QVERIFY(window.findChild<QLabel*>("catalogCounts")->text().contains("2 selected"));
         tab("statusAll");QCOMPARE(selection->selectedRows().size(),2);
-        tab("statusSelected");QCOMPARE(model->rowCount(),2);QCOMPARE(view->selectionMode(),QAbstractItemView::NoSelection);
-        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,view->visualRect(model->index(0,0)).center());QCOMPARE(model->rowCount(),2);QCOMPARE(selection->selectedRows().size(),2);
+        tab("statusSelected");QCOMPARE(model->rowCount(),2);QCOMPARE(view->selectionMode(),QAbstractItemView::ExtendedSelection);QVERIFY(selection->selectedRows().isEmpty());
+        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,view->visualRect(model->index(0,0)).center());QCOMPARE(model->rowCount(),2);QCOMPARE(selection->selectedRows().size(),1);
+        tab("statusAll");QCOMPARE(selection->selectedRows().size(),2);
+        tab("statusSelected");QCOMPARE(selection->selectedRows().size(),1);
         tab("statusRemember");QCOMPARE(model->rowCount(),2);QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(model->index(1,0)).center());
         tab("statusSelected");QCOMPARE(model->rowCount(),1);
         tab("statusAll");selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
@@ -602,7 +610,16 @@ private slots:
         tab("statusFinished");window.catalog()->setStatus(b,"Failed");QCOMPARE(model->rowCount(),0);
         tab("statusAll");QTRY_COMPARE(selection->selectedRows().size(),2);
         window.findChild<QButtonGroup*>("viewMode")->button(2)->click();QCOMPARE(window.findChild<FileTableView*>()->selectionModel()->selectedRows().size(),2);
-        tab("statusSelected");window.findChild<QPushButton*>("deselectImages")->click();QCOMPARE(model->rowCount(),0);
+        tab("statusSelected");window.findChild<QPushButton*>("deselectImages")->click();QCOMPARE(model->rowCount(),2);QVERIFY(selection->selectedRows().isEmpty());
+        // Removing a local highlight changes the global selection, not the library.
+        selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        auto* remove=window.findChild<QPushButton*>("removeSelected");QCOMPARE(remove->text(),QString("Remove from selection"));remove->click();
+        QCOMPARE(model->rowCount(),1);QCOMPARE(window.catalog()->rowCount(),3);
+        tab("statusAll");QCOMPARE(selection->selectedRows().size(),1);
+        tab("statusSelected");selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        auto* details=window.findChild<FileTableView*>();details->setFocus();QTest::keyClick(details,Qt::Key_Delete);
+        QCOMPARE(model->rowCount(),0);QCOMPARE(window.catalog()->rowCount(),3);
+        tab("statusAll");QVERIFY(selection->selectedRows().isEmpty());
         tab("statusRemember");QCOMPARE(model->rowCount(),2);
     }
     void libraryTabScrollPositions() {
