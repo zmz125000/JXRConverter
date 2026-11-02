@@ -28,6 +28,7 @@ public:
     explicit ConversionQueue(QObject* parent = nullptr, Convert converter = {});
     ~ConversionQueue() override;
     void start(QVector<Job> jobs, int parallelism, int cores = coreCount());
+    void enqueueNext(QVector<Job> jobs, int parallelism, int cores = coreCount());
     void cancelPending();
     void cancelPendingFor(const QStringList& inputs);
     bool hasPendingFor(const QStringList& inputs) const;
@@ -46,7 +47,9 @@ private:
     int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, skipped_ = 0, limit_ = 1;
     QThreadPool pool_;
     Convert converter_;
+    unsigned threadBudget_ = 1;
     QSet<QString> activeInputs_;
+    QHash<QString,QString> activeOutputs_;
     QHash<QString,std::shared_ptr<ConversionSession>> sessions_;
     QHash<QString, int> remaining_, fileCancelled_, fileSkipped_, fileSucceeded_;
     QHash<QString, QString> fileErrors_;

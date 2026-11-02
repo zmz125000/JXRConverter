@@ -322,7 +322,7 @@ void Catalog::fitThumbnailCache() {
         cache_.insert(it.key(),new QImage(it.value()),std::max<qint64>(1,(it.value().sizeInBytes()+1023)/1024));
 }
 void Catalog::pumpThumbnails() {
-    // Six submitted thumbnail jobs total, with parallel decoding and up to three concurrent reads. Queued
+    // Six submitted thumbnail jobs total, with parallel decoding and up to two concurrent reads. Queued
     // jobs carry cancellation tokens so scrolling never decodes stale cells.
     for(const auto& path:visibleThumbnails_) {
         if(thumbnailJobs_.size()>=ThumbnailBudget)break;

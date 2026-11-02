@@ -194,8 +194,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
             auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
             const QString currentImage=index.data(Catalog::PathRole).toString();
-            auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!queue_->busy()&&!updater_->installing()&&!selectedTargets().isEmpty());
-            auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!queue_->busy()&&!updater_->installing());
+            auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!updater_->installing()&&!selectedTargets().isEmpty());
+            auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!updater_->installing());
             for(int i=0;i<targets_->count();++i){const auto* item=targets_->item(i);auto* action=convertTo->addAction(item->text());action->setObjectName("convertTarget"+item->data(Qt::UserRole).toString());action->setData(item->data(Qt::UserRole));action->setEnabled(item->flags()&Qt::ItemIsEnabled);}
             const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.imageDate().date();const QString cameraName=record.camera,formatName=record.format;const int depth=record.bits;camera->setEnabled(!cameraName.isEmpty());bits->setEnabled(depth>0);date->setEnabled(captured.isValid());start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
             const auto queueSelection=selectedPaths();
@@ -207,8 +207,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
                 const auto key=catalogFieldKey(fieldColumn);const auto term=key+":"+quotedSearchValue(fieldValue);
                 search_->setText((search_->text()+" "+term).trimmed());applySearch();
             }
-            else if(action==convertImage){convertPaths({currentImage},selectedTargets());}
-            else if(action&&action->parent()==convertTo){convertPaths({currentImage},{Target(action->data().toInt())},true);}
+            else if(action==convertImage){convertPaths({currentImage},selectedTargets(),false,true);}
+            else if(action&&action->parent()==convertTo){convertPaths({currentImage},{Target(action->data().toInt())},true,true);}
             else if(action==cancelSelected){queue_->cancelPendingFor(queueSelection);}
             else if(action==camera||action==format||action==bits){
                 const QString term=action==camera?"camera:"+quotedSearchValue(cameraName):action==format?"format:"+quotedSearchValue(formatName):"bits:"+QString::number(depth);
@@ -551,8 +551,8 @@ void MainWindow::convertFiles(bool selected) {
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
     convertPaths(paths,selectedTargets());
 }
-void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets) {
-    if(paths.isEmpty()||queue_->busy()||(updater_&&updater_->installing()))return;
+void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority) {
+    if(paths.isEmpty()||(!priority&&queue_->busy())||(updater_&&updater_->installing()))return;
     try {
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
@@ -580,7 +580,9 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
             if(inputs.contains(QFileInfo(job.output).absoluteFilePath().toCaseFolded()))throw std::invalid_argument("Output would replace an input file");
             if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
         }
-        queue_->start(std::move(jobs),workers_->value());updateCounts();
+        if(priority)queue_->enqueueNext(std::move(jobs),workers_->value());
+        else queue_->start(std::move(jobs),workers_->value());
+        updateCounts();
     } catch(const std::exception& e){logMessage("Cannot start conversion: "+QString::fromUtf8(e.what()));QMessageBox::warning(this,"Cannot start conversion",QString::fromUtf8(e.what()));}
 }
 void MainWindow::logMessage(const QString& message) {outputLog_->appendPlainText("["+QTime::currentTime().toString("HH:mm:ss")+"] "+message);}

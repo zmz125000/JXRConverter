@@ -236,7 +236,7 @@ private slots:
     }
     void boundedReadsAndParallelDecoding() {
         const auto path=makeImage(root("parallel-thumbs"),"photo.jpg",128,64,100);
-        QSemaphore sourceReadSlots(3),readEntered,readRelease,decodeEntered,decodeRelease;
+        QSemaphore sourceReadSlots(2),readEntered,readRelease,decodeEntered,decodeRelease;
         auto run=[&] {
             int checks=0;
             return readThumbnail(path,48,[&] {
@@ -250,7 +250,7 @@ private slots:
         };
         std::vector<std::future<QImage>> jobs;
         for(int i=0;i<6;++i)jobs.push_back(std::async(std::launch::async,run));
-        const bool parallelReads=readEntered.tryAcquire(3,3000);
+        const bool parallelReads=readEntered.tryAcquire(2,3000);
         const bool exceededReadLimit=readEntered.tryAcquire(1,50);
         readRelease.release(6);
         const bool parallelDecoding=decodeEntered.tryAcquire(6,3000);
@@ -260,14 +260,14 @@ private slots:
         for(const auto& image:images)QCOMPARE(image.size(),QSize(48,24));
 
         // Cancellation while waiting for a read slot must prevent file opens.
-        sourceReadSlots.acquire(3);std::atomic_bool cancel{false};QSemaphore started;
+        sourceReadSlots.acquire(2);std::atomic_bool cancel{false};QSemaphore started;
         auto waiting=std::async(std::launch::async,[&] {
             started.release();
             try{readThumbnail(root("missing.jpg"),48,[&]{return cancel.load();},nullptr,&sourceReadSlots);}
             catch(const std::exception& e){return QString::fromUtf8(e.what());}
             return QString{};
         });
-        const bool launched=started.tryAcquire(1,3000);cancel.store(true);sourceReadSlots.release(3);
+        const bool launched=started.tryAcquire(1,3000);cancel.store(true);sourceReadSlots.release(2);
         const auto error=waiting.get();QVERIFY(launched);QVERIFY(error.contains("cancelled"));
     }
     void cancellableImageReads() {
@@ -595,6 +595,29 @@ private slots:
         peak=0;invalidBudget=0;jobs.removeAt(3);queue.start(jobs,2,8);queue.cancelPending();QTRY_COMPARE(done.count(),2);
         QCOMPARE(done[1][0].toInt(),2);QCOMPARE(done[1][2].toInt(),4);QVERIFY(peak.load()<=2);QCOMPARE(invalidBudget.load(),0);
         QCOMPARE(recommendedWorkers(16),4);QCOMPARE(recommendedWorkers(7),1);QCOMPARE(recommendedWorkers(2),1);QCOMPARE(recommendedWorkers(0),1);
+    }
+    void singleImageQueuePriority() {
+        QSemaphore gate;QStringList outputs;QVector<unsigned> threads;
+        ConversionQueue queue(nullptr,[&](const std::filesystem::path&,const std::filesystem::path& output,const jxrc::Options& options){
+            if(output.filename()=="active")gate.acquire();
+            outputs.append(QString::fromStdString(output.filename().string()));threads.append(options.threads);return jxrc::Result{};
+        });
+        const auto directory=root("priority");
+        const Job active{"a",directory+"/active",{}},pending{"b",directory+"/pending",{}},last{"c",directory+"/last",{}};
+        const Job extra{"c",directory+"/extra",{}},activeExtra{"a",directory+"/active-extra",{}};
+        QSignalSpy done(&queue,&ConversionQueue::batchFinished),progress(&queue,&ConversionQueue::progress);
+        queue.start({active,pending,last},1,4);
+        queue.enqueueNext({last,extra,last},6,24);const int afterPromotion=queue.total();
+        queue.enqueueNext({active,activeExtra},6,24);const int afterActive=queue.total();
+        // Release before assertions so a failure cannot strand the worker.
+        gate.release();QCOMPARE(afterPromotion,4);QCOMPARE(afterActive,5);
+        QTRY_COMPARE(done.count(),1);
+        QCOMPARE(outputs,QStringList({"active","active-extra","last","extra","pending"}));
+        for(auto count:threads)QCOMPARE(count,4u);
+        QCOMPARE(done[0][0].toInt(),5);QCOMPARE(done[0][1].toInt(),0);QCOMPARE(done[0][2].toInt(),0);
+        QCOMPARE(progress.last()[0].toInt(),5);QCOMPARE(progress.last()[1].toInt(),5);
+        // An idle queue starts a fresh batch, using the requested worker budget.
+        queue.enqueueNext({pending},1,2);QTRY_COMPARE(done.count(),2);QCOMPARE(queue.total(),1);QCOMPARE(threads.last(),2u);
     }
     void cancelSelectedPendingOutputs() {
         QSemaphore activeGate;

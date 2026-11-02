@@ -16,6 +16,16 @@ std::filesystem::path nativePath(const QString& value) {
     return std::filesystem::u8path(value.toUtf8().constData());
 #endif
 }
+void orderJobs(QVector<Job>& jobs) {
+    // Keep each source's targets together to bound prepared-pixel memory by
+    // worker count. RAW has SDR, HDR, and paired HDR/SDR render families.
+    QHash<QString,int> order;for(const auto& job:jobs)if(!order.contains(job.input))order.insert(job.input,order.size());
+    auto family=[](Target t){return t==Target::jpeg_gainmap||t==Target::avif_gainmap?2:t==Target::jpeg||t==Target::jxl||t==Target::avif?0:1;};
+    std::stable_sort(jobs.begin(),jobs.end(),[&](const Job& a,const Job& b){
+        return a.input==b.input?family(a.options.target)<family(b.options.target):order[a.input]<order[b.input];
+    });
+}
+
 }
 QString outputDateFolder() {
     QString name=QLocale().toString(QDate::currentDate(),QLocale::ShortFormat);
@@ -64,20 +74,38 @@ ConversionQueue::~ConversionQueue() { pool_.clear();pool_.waitForDone(); }
 void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     if(busy())throw std::logic_error("A conversion batch is already running");
     if(jobs.isEmpty())return;
-    // Keep each source's targets together to bound prepared-pixel memory by
-    // worker count. RAW has SDR, HDR, and paired HDR/SDR render families.
-    QHash<QString,int> order;for(const auto& job:jobs)if(!order.contains(job.input))order.insert(job.input,order.size());
-    auto family=[](Target t){return t==Target::jpeg_gainmap||t==Target::avif_gainmap?2:t==Target::jpeg||t==Target::jxl||t==Target::avif?0:1;};
-    std::stable_sort(jobs.begin(),jobs.end(),[&](const Job& a,const Job& b){
-        return a.input==b.input?family(a.options.target)<family(b.options.target):order[a.input]<order[b.input];
-    });
-    sessions_.clear();activeInputs_.clear();
+    orderJobs(jobs);
+    sessions_.clear();activeInputs_.clear();activeOutputs_.clear();
     jobs_=std::move(jobs);next_=active_=finished_=succeeded_=failed_=cancelled_=skipped_=0;
     limit_=std::clamp(parallelism,1,std::max(1,cores));pool_.setMaxThreadCount(limit_);
-    const unsigned budget=std::max(1,cores/limit_);
+    threadBudget_=std::max(1,cores/limit_);
     remaining_.clear();fileCancelled_.clear();fileSkipped_.clear();fileSucceeded_.clear();fileErrors_.clear();
     for(const auto& job:jobs_)++remaining_[job.input];
-    for(auto& job:jobs_){job.options.threads=budget;emit statusChanged(job.input,"Queued",job.output);}
+    for(auto& job:jobs_){job.options.threads=threadBudget_;emit statusChanged(job.input,"Queued",job.output);}
+    pump();
+}
+void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
+    if(!busy()){start(std::move(jobs),parallelism,cores);return;}
+    if(jobs.isEmpty())return;
+    orderJobs(jobs);
+    QSet<QString> inputs;for(const auto& job:jobs)inputs.insert(job.input);
+    QVector<Job> priority,rest;
+    // Promote existing outputs rather than submitting them twice. Running
+    // outputs finish in place; new targets reuse the same source session.
+    for(int i=next_;i<jobs_.size();++i)
+        (inputs.contains(jobs_[i].input)?priority:rest).append(jobs_[i]);
+    QVector<Job> added;
+    for(auto& job:jobs) {
+        if(activeOutputs_.value(job.input)==job.output)continue;
+        const bool pending=std::any_of(priority.cbegin(),priority.cend(),[&](const Job& other){return other.input==job.input&&other.output==job.output;});
+        if(pending)continue;
+        job.options.threads=threadBudget_;
+        if(!remaining_.value(job.input)){fileErrors_.remove(job.input);fileCancelled_.remove(job.input);fileSkipped_.remove(job.input);fileSucceeded_.remove(job.input);}
+        priority.append(job);added.append(job);++remaining_[job.input];
+    }
+    orderJobs(priority);
+    jobs_.resize(next_);jobs_+=priority;jobs_+=rest;
+    for(const auto& job:added)if(!activeInputs_.contains(job.input))emit statusChanged(job.input,"Queued",job.output);
     pump();
 }
 bool ConversionQueue::hasPendingFor(const QStringList& inputs) const {
@@ -112,7 +140,7 @@ void ConversionQueue::pump() {
         if(!job.options.overwrite && std::filesystem::exists(outputStatus)) {
             ++skipped_;++finished_;finishFile(job,{},false,true);continue;
         }
-        ++active_;activeInputs_.insert(job.input);
+        ++active_;activeInputs_.insert(job.input);activeOutputs_.insert(job.input,job.output);
         std::shared_ptr<ConversionSession> session;
         if(!converter_) {
             auto& stored=sessions_[job.input];
@@ -125,7 +153,7 @@ void ConversionQueue::pump() {
             try {const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);skipped=result.skipped;}catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
             QMetaObject::invokeMethod(this,[this,job,error,skipped] {
-                --active_;activeInputs_.remove(job.input);++finished_;
+                --active_;activeInputs_.remove(job.input);activeOutputs_.remove(job.input);++finished_;
                 if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
                 finishFile(job,error,false,skipped);
                 pump();

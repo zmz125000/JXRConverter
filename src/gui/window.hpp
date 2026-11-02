@@ -60,7 +60,7 @@ private:
     void updateCounts();
     void showMetadata();
     void convertFiles(bool selected);
-    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false);
+    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false);
     void checkForUpdates();
     void logMessage(const QString&);
     QVector<Target> selectedTargets() const;

@@ -69,7 +69,7 @@ private:
     QVector<Record> records_;
     QSet<QString> known_;
     QThreadPool scans_, workers_;
-    QSemaphore sourceReadSlots_{3}; // At most three source handles, shared by thumbnails and metadata.
+    QSemaphore sourceReadSlots_{2}; // At most two source handles, shared by thumbnails and metadata.
     static constexpr int ThumbnailBudget = 6;
     std::shared_ptr<std::atomic_bool> epoch_ = std::make_shared<std::atomic_bool>(true);
     std::shared_ptr<std::atomic_bool> metadataToken_;
