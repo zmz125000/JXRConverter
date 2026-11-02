@@ -202,7 +202,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
     cancelJob_=new QPushButton("Cancel job");cancelJob_->setObjectName("cancelJob");cancelJob_->setToolTip("Cancel this job’s pending outputs; active conversions finish");actionsLayout->addWidget(cancelJob_);cancelJob_->hide();connect(cancelJob_,&QPushButton::clicked,this,[this]{queue_->cancelBatch(viewedJob_);updateCounts();});
     jobButton_=new PopupButton;jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
-    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Click to choose a job. Counts: finished / all / skipped / failed (images).");
+    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Show the selected job and choose a job. Counts: finished / all / skipped / failed (images).");
+    connect(jobMenu_,&QMenu::aboutToShow,this,[this]{showJob(viewedJob_);});
     running_=new QPushButton("Running");running_->setObjectName("runningJob");actionsLayout->addWidget(running_);connect(running_,&QPushButton::clicked,this,[this]{const auto batch=queue_->runningBatch();if(batch>=0)showJob(batch);});
     tab("Remember",5,"statusRemember")->setToolTip("Images you clicked or individually selected; Select all does not add images");
     tab("Selected",1,"statusSelected")->setToolTip("Your selection across all views; image clicks leave it unchanged");
@@ -383,7 +384,7 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
-        formatFolders_,dateFolders_,jobFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        formatFolders_,dateFolders_,jobFolders_,jumpToJob_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
 void MainWindow::restoreSettings() {
@@ -472,6 +473,7 @@ QWidget* MainWindow::buildControls() {
     dateFolders_=check("Create date subfolder","dateSubfolders");destinationLayout->addWidget(dateFolders_);
     dateFolders_->setToolTip("Create today’s folder using the system’s short date format. Slashes and other filename separators become hyphens. Format subfolders go inside it.");
     jobFolders_=check("Create job subfolder","jobSubfolders");destinationLayout->addWidget(jobFolders_);jobFolders_->setToolTip("Save in YYYY-MM-DD-Job-N (or YYYY-MM-DD-Temporary). This replaces the separate date subfolder for this batch.");
+    jumpToJob_=check("Jump to job tab","jumpToJobTab");destinationLayout->addWidget(jumpToJob_);jumpToJob_->setToolTip("Show a conversion’s job when it is queued. Off keeps the current image-list tab and job.");
     sourceFolder_=check("Save to original folder","saveToSourceFolder");destinationLayout->addWidget(sourceFolder_);
     sourceFolder_->setToolTip("Save beside each source image. Format subfolders, when enabled, are created there.");
     renameConflicts_=check("Rename if conflict","renameConflicts");destinationLayout->addWidget(renameConflicts_);
@@ -693,7 +695,8 @@ void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse) {
     else if(!temporary){savedJobs_.append({nextJob_++,{},{},{}});saved=&savedJobs_.last();}
     for(const auto& job:jobs){if(!saved->files.contains(job.input))saved->files.append(job.input);saved->outputs.insert(job.output,{job.input,"Queued"});}
     if(!jobs.isEmpty())saved->folder=QFileInfo(jobs.first().output).absolutePath();
-    showJob(saved->number);
+    if(jumpToJob_->isChecked())showJob(saved->number);
+    else{refreshJobs();saveJobs();updateFilter();}
 }
 void MainWindow::updateJobOutput(qint64 batch,const QString& input,const QString& output,const QString& state) {
     auto update=[&](SavedJob& job){auto it=job.outputs.find(output);if(it!=job.outputs.end()&&it->input==input&&(it->state=="Queued"||it->state=="Running"))it->state=state;};

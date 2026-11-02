@@ -414,7 +414,7 @@ private slots:
     void portraitGateAndToolbarJobActions() {
         appSettings().clear();
         {
-            MainWindow window;window.show();auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");auto* portrait=window.findChild<QCheckBox*>("portraitThumbnailAspect");auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");
+            MainWindow window;window.findChild<QCheckBox*>("jumpToJobTab")->setChecked(true);window.show();auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");auto* portrait=window.findChild<QCheckBox*>("portraitThumbnailAspect");auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");
             QVERIFY(automatic->x()<portrait->x());QVERIFY(portrait->x()<aspect->x());QVERIFY(!portrait->isChecked());
             auto* clear=window.findChild<QAction*>("clearJobs");QVERIFY(clear);auto* toolbar=window.findChild<QToolBar*>();QVERIFY(qobject_cast<QToolButton*>(toolbar->widgetForAction(clear)));
             auto* first=savedJob(window,0);QVERIFY(first->actionGroup());QVERIFY(first->actionGroup()->isExclusive());
@@ -656,10 +656,28 @@ private slots:
         window.findChild<QPushButton*>("statusFinished")->click();
         QCOMPARE(window.findChild<QButtonGroup*>("viewMode")->checkedId(),2);QCOMPARE(window.findChild<FileTableView*>()->columnWidth(Catalog::Name),310);
     }
+    void optionalJobNavigationAndPopup() {
+        appSettings().clear();
+        {
+            MainWindow window;window.show();auto* jump=window.findChild<QCheckBox*>("jumpToJobTab");QVERIFY(jump);QVERIFY(!jump->isChecked());
+            const auto file=makeImage(root("job-navigation"),"a.jpg",64,48,100);window.addPaths({file});QTRY_COMPARE(window.catalog()->rowCount(),1);
+            window.findChild<QLineEdit*>("outputDirectory")->setText(root("job-navigation-output"));
+            QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);
+            QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());QVERIFY(savedJob(window,1));
+            QVERIFY(chooseJob(window,1));window.findChild<QPushButton*>("statusAll")->click();
+            auto* jobs=window.findChild<QToolButton*>("statusJob");bool opened=false,activated=false;
+            QTimer::singleShot(0,&window,[&]{opened=jobs->menu()->isVisible();activated=jobs->isChecked()&&savedJob(window,1)->isChecked();jobs->menu()->close();});
+            QTest::mouseClick(jobs,Qt::LeftButton);QVERIFY(opened);QVERIFY(activated);QCOMPARE(window.filterModel()->rowCount(),1);
+            window.findChild<QPushButton*>("statusAll")->click();jump->setChecked(true);
+            window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),2);
+            QVERIFY(jobs->isChecked());QVERIFY(savedJob(window,2)->isChecked());
+        }
+        MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("jumpToJobTab")->isChecked());
+    }
     void jobFileListsAndRestore() {
         appSettings().clear();const auto a=makeImage(root("job-history"),"a.jpg",64,48,100),b=makeImage(root("job-history"),"b.jpg",64,48,100),c=makeImage(root("job-history"),"c.jpg",64,48,100);
         {
-            MainWindow window;window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(true);window.show();window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
+            MainWindow window;window.findChild<QCheckBox*>("jumpToJobTab")->setChecked(true);window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(true);window.show();window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
             window.findChild<QLineEdit*>("outputDirectory")->setText(root("job-history-output"));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
             window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);
             auto* menu=window.findChild<QMenu*>("jobMenu");QCOMPARE(menu->actions().size(),2);QVERIFY(savedJob(window,1)->isChecked());QCOMPARE(savedJob(window,1)->text(),QString("Job #1 (2/2/0/0)"));
@@ -730,7 +748,7 @@ private slots:
         tab("statusFailed");QCOMPARE(model->rowCount(),1);QCOMPARE(model->index(0,0).data(Catalog::PathRole).toString(),c);
     }
     void jobFoldersRunningAndSnapshot() {
-        appSettings().clear();MainWindow window;window.show();
+        appSettings().clear();MainWindow window;window.findChild<QCheckBox*>("jumpToJobTab")->setChecked(true);window.show();
         const auto a=makeImage(root("job-folders"),"a.jpg",64,48,100),b=makeImage(root("job-folders"),"b.jpg",64,48,100);
         window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
         const auto output=root("job-folders-output");window.findChild<QLineEdit*>("outputDirectory")->setText(output);
@@ -749,7 +767,7 @@ private slots:
         QSignalSpy opened(jobButton->menu(),&QMenu::aboutToShow);QTimer::singleShot(100,jobButton->menu(),&QMenu::close);QTest::mouseClick(jobButton,Qt::LeftButton);QTRY_COMPARE(opened.count(),1);QTRY_VERIFY(!jobButton->menu()->isVisible());
     }
     void independentJobSelectionsAndConvertSelected() {
-        appSettings().clear();MainWindow window;window.show();
+        appSettings().clear();MainWindow window;window.findChild<QCheckBox*>("jumpToJobTab")->setChecked(true);window.show();
         const auto directory=root("job-selections"),output=root("job-selection-output");
         const auto a=makeImage(directory,"a.jpg",64,48,100),b=makeImage(directory,"b.jpg",64,48,100),c=makeImage(directory,"c.jpg",64,48,100);
         window.addPaths({a,b,c});QTRY_COMPARE(window.catalog()->rowCount(),3);window.findChild<QLineEdit*>("outputDirectory")->setText(output);
