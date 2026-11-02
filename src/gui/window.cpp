@@ -165,7 +165,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     minImageEdge_->setToolTip("Minimum longest edge, independent of portrait/landscape. Combined with the minimum MP filter; both must match.");
     megapixels_=real(0,1000,0,1,"minMegapixels");megapixels_->setSuffix(" MP+");megapixels_->setSpecialValueText("Any MP");
     for(auto* w:QList<QWidget*>{minImageEdge_,megapixels_}){w->ensurePolished();w->setMinimumWidth(w->sizeHint().width());imageLimits->addWidget(w);}
-    auto* filterScroll=new QScrollArea;filterScroll->setWidgetResizable(true);filterScroll->setFrameShape(QFrame::NoFrame);filterScroll->setWidget(advanced);filterScroll->setFixedHeight(90);layout->addWidget(filterScroll);filterScroll->hide();
+    auto* filterScroll=new QScrollArea;filterScroll->setObjectName("metadataFilterScroll");filterScroll->setWidgetResizable(true);filterScroll->setFrameShape(QFrame::NoFrame);filterScroll->setWidget(advanced);filterScroll->setFixedHeight(90);layout->addWidget(filterScroll);filterScroll->hide();
     auto* dates=new QHBoxLayout;advancedLayout->addLayout(dates);dateEnabled_=check("Capture date","dateFilter");dateFrom_=new QDateEdit(QDate::currentDate().addDays(-1));dateTo_=new QDateEdit(QDate::currentDate());dateFrom_->setObjectName("dateFrom");dateTo_->setObjectName("dateTo");
     for(auto* date:{dateFrom_,dateTo_}){date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setEnabled(false);}
     dates->addWidget(dateEnabled_);dates->addWidget(dateFrom_);dates->addWidget(new QLabel("to"));dates->addWidget(dateTo_);
@@ -189,7 +189,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     viewBar->addWidget(new QLabel("Minimum size"));
     size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(100,500);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(200);size_->setFixedWidth(140);
     size_->setToolTip("Minimum grid cell width in dp (100–500). Like LocalViewer, columns adapt to this minimum plus fixed gaps, and cells stretch evenly to fill the available width.");viewBar->addWidget(size_);
-    auto* sizeValue=new QLabel("200 dp");sizeValue->setMinimumWidth(48);viewBar->addWidget(sizeValue);
+    auto* sizeValue=new QLabel("200 dp");sizeValue->setObjectName("thumbnailSizeValue");sizeValue->setMinimumWidth(48);viewBar->addWidget(sizeValue);
     connect(size_,&QSlider::valueChanged,this,[this,sizeValue](int value){const int snapped=((value+5)/10)*10;if(value!=snapped){size_->setValue(snapped);return;}sizeValue->setText(QString::number(value)+" dp");});layout->addLayout(viewBar);
     views_=new QStackedWidget;list_=new FileListView;table_=new FileTableView;delegate_=new ThumbnailDelegate(list_);list_->setItemDelegate(delegate_);
     list_->setModel(proxy_);table_->setModel(proxy_);list_->setSelectionModel(selection_);table_->setSelectionModel(selection_);
@@ -564,12 +564,61 @@ void MainWindow::removeImageSelection() {
     }else catalog_->removePaths(selectedPaths());
 }
 QString MainWindow::browserScrollKey() const {return QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{})+":"+QString::number(viewMode_->checkedId());}
+QList<QWidget*> MainWindow::browserControls() const {
+    return {search_,instant_,metadataFilters_,today_,format_,range_,minImageEdge_,megapixels_,dateEnabled_,dateFrom_,dateTo_,sort_,size_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_};
+}
+void MainWindow::switchBrowserState() {
+    const auto key=QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{});
+    if(key==browserTabKey_)return;
+    list_->setSmoothScrolling(false);table_->setSmoothScrolling(false);
+    saveBrowserScroll();
+    restoringBrowserScroll_=true;
+    if(!browserTabKey_.isEmpty()){
+        BrowserState state;for(auto* widget:browserControls())state.controls.insert(widget->objectName(),widget->property(settingProperty(widget)));
+        state.search=appliedSearch_;state.mode=viewMode_->checkedId();state.aspect=aspectIndex_;state.order=sortOrder_;state.header=table_->horizontalHeader()->saveState();
+        browserStates_.insert(browserTabKey_,state);
+    }
+    browserTabKey_=key;
+    aspectTimer_->stop();aspectSamplePending_=false;
+    const auto it=browserStates_.constFind(key);
+    if(it!=browserStates_.cend()){
+        const auto state=it.value();
+        for(auto* widget:browserControls()){const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),state.controls.value(widget->objectName()));}
+        viewMode_->button(state.mode)->setChecked(true);aspectIndex_=state.aspect;sortOrder_=state.order;appliedSearch_=state.search;
+        {const QSignalBlocker blocker(table_->horizontalHeader());table_->horizontalHeader()->restoreState(state.header);}
+        findChild<QPushButton*>("sortDirection")->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");
+        // Visibility is normally updated by the Filters checkbox's signal.
+        findChild<QScrollArea*>("metadataFilterScroll")->setVisible(metadataFilters_->isChecked());
+        const QSignalBlocker blocker(selection_);const bool previous=syncingSelection_;syncingSelection_=true;
+        proxy_->sort(sort_->currentData().toInt(),sortOrder_);syncingSelection_=previous;
+    }
+    applyPresentation();
+    catalog_->setAspectSampling(autoAspect_->isChecked());
+}
 void MainWindow::saveBrowserScroll() {
-    if(scrollView_&&!scrollKey_.isEmpty())scrollPositions_[scrollKey_]=QPoint(scrollView_->horizontalScrollBar()->value(),scrollView_->verticalScrollBar()->value());
+    // A quick second tab switch must not save the intermediate reset-to-top
+    // geometry while the first tab's deferred restoration is still pending.
+    if(scrollView_&&!scrollKey_.isEmpty()&&!restoringBrowserScroll_){
+        ViewportState state;state.scroll=QPoint(scrollView_->horizontalScrollBar()->value(),scrollView_->verticalScrollBar()->value());
+        const auto current=selection_->currentIndex();if(current.isValid()){state.currentPath=current.data(Catalog::PathRole).toString();state.currentColumn=current.column();}
+        scrollPositions_[scrollKey_]=state;
+    }
 }
 void MainWindow::restoreBrowserScroll() {
-    const auto key=scrollKey_;const auto position=scrollPositions_.value(key);auto* view=scrollView_;
-    QTimer::singleShot(0,this,[this,key,position,view]{if(key!=scrollKey_||view!=scrollView_)return;view->doItemsLayout();view->horizontalScrollBar()->setValue(position.x());view->verticalScrollBar()->setValue(position.y());});
+    const auto key=scrollKey_;const auto state=scrollPositions_.value(key);auto* view=scrollView_;const auto generation=++scrollRestoreGeneration_;
+    restoringBrowserScroll_=true;
+    QTimer::singleShot(0,this,[this,key,state,view,generation]{
+        if(generation!=scrollRestoreGeneration_||key!=scrollKey_||view!=scrollView_)return;
+        const bool previous=changingAspect_;changingAspect_=true;view->doItemsLayout();
+        QModelIndex current;
+        if(!state.currentPath.isEmpty()){
+            const auto matches=proxy_->match(proxy_->index(0,0),Catalog::PathRole,state.currentPath,1,Qt::MatchExactly);
+            if(!matches.isEmpty())current=matches.first().siblingAtColumn(state.currentColumn);
+        }
+        selection_->setCurrentIndex(current,QItemSelectionModel::NoUpdate);
+        view->horizontalScrollBar()->setValue(state.scroll.x());view->verticalScrollBar()->setValue(state.scroll.y());
+        changingAspect_=previous;restoringBrowserScroll_=false;
+    });
 }
 void MainWindow::loadJobs() {
     QFile file(configDirectory()+"/jobs.json");if(!file.open(QIODevice::ReadOnly)||file.size()>16*1024*1024)return;
@@ -626,6 +675,7 @@ void MainWindow::clearJobs() {
     if(statusFilter_->checkedId()==2)statusFilter_->button(0)->setChecked(true);
     refreshJobs();saveJobs();updateFilter();
     for(auto it=scrollPositions_.begin();it!=scrollPositions_.end();)if(it.key().startsWith("2:"))it=scrollPositions_.erase(it);else ++it;
+    for(auto it=browserStates_.begin();it!=browserStates_.end();)if(it.key().startsWith("2:"))it=browserStates_.erase(it);else ++it;
 }
 bool MainWindow::isDraftJob(qint64 number) const {
     const SavedJob* saved=&temporaryJob_;for(const auto& job:savedJobs_)if(job.number==number)saved=&job;
@@ -675,6 +725,9 @@ void MainWindow::openOutputFolder() {
 }
 void MainWindow::applySearch() {appliedSearch_=search_->text();updateFilter();}
 void MainWindow::resetFilters() {
+    // Activate All before clearing its controls so restoring its saved tab
+    // state cannot reapply filters after the reset.
+    statusFilter_->button(0)->setChecked(true);updateFilter();
     search_->clear();appliedSearch_.clear();instant_->clear();format_->clear();range_->setCurrentIndex(0);
     minImageEdge_->setValue(0);megapixels_->setValue(0);dateEnabled_->setChecked(false);today_->setChecked(false);
     dateFrom_->setDate(QDate::currentDate().addDays(-1));dateTo_->setDate(QDate::currentDate());
@@ -713,6 +766,7 @@ void MainWindow::addPaths(const QStringList& paths) {
 }
 
 void MainWindow::updateFilter() {
+    switchBrowserState();
     selectedTabImages_.intersect(selectedImages_);
     jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
     const auto key=browserScrollKey();const bool changed=key!=scrollKey_;if(changed)saveBrowserScroll();
@@ -743,6 +797,14 @@ void MainWindow::updateBackgroundMetadata() {
 }
 void MainWindow::updatePresentation() {
     saveBrowserScroll();
+    restoringBrowserScroll_=true;
+    applyPresentation();
+    updateFilter();
+    if(!changingAspect_)restoreBrowserScroll();
+    else restoringBrowserScroll_=false;
+}
+void MainWindow::applyPresentation() {
+    findChild<QLabel*>("thumbnailSizeValue")->setText(QString::number(size_->value())+" dp");
     const bool details=viewMode_->checkedId()==2,grid=viewMode_->checkedId()==0;
     views_->setCurrentWidget(details?static_cast<QWidget*>(table_):list_);list_->setPresentation(grid,size_->value(),aspectRatios[aspectIndex_]);
     list_->setSmoothScrolling(smoothScrolling_->isChecked());table_->setSmoothScrolling(smoothScrolling_->isChecked());
@@ -750,10 +812,9 @@ void MainWindow::updatePresentation() {
     for(auto* action:thumbnailAspect_->menu()->actions())action->setChecked(action->data().toInt()==aspectIndex_);
     const bool fill=thumbnailFit_->isChecked();thumbnailFit_->setText(fill?"Fill":"Fit");delegate_->fill=fill;table_->setFillThumbnails(fill);
     table_->setIconSize(QSize(size_->value()/2,size_->value()/2));table_->verticalHeader()->setDefaultSectionSize(std::max(32,size_->value()/2+8));
-    updateFilter();
 }
 void MainWindow::requestAspectSample(bool viewport) {
-    if(!autoAspect_->isChecked()||changingAspect_)return;
+    if(!autoAspect_->isChecked()||changingAspect_||restoringBrowserScroll_)return;
     aspectSamplePending_=true;aspectViewportSample_=viewport;aspectTimer_->start();
 }
 void MainWindow::setThumbnailAspect(int index) {
@@ -790,7 +851,7 @@ void MainWindow::updateCounts() {
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
     progressStop_->setVisible(queue_->busy());
-    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy());remove_->setText(statusFilter_->checkedId()==1?"Remove from selection":"Remove selected");remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
+    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);

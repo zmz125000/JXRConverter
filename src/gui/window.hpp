@@ -2,6 +2,7 @@
 #include "catalog.hpp"
 #include "queue.hpp"
 #include <QMainWindow>
+#include <QVariantMap>
 class QButtonGroup;
 class QAction;
 class QActionGroup;
@@ -67,6 +68,9 @@ private:
     void updateJobOutput(qint64, const QString&, const QString&, const QString&);
     QString browserScrollKey() const;
     void saveBrowserScroll();
+    QList<QWidget*> browserControls() const;
+    void switchBrowserState();
+    void applyPresentation();
     void restoreBrowserScroll();
     void loadJobs();
     void clearJobs();
@@ -138,7 +142,23 @@ private:
     QVector<SavedJob> savedJobs_;
     SavedJob temporaryJob_{0,{},{},{}};
     qint64 nextJob_ = 1, viewedJob_ = 0;
-    QHash<QString,QPoint> scrollPositions_;
+    struct BrowserState {
+        QVariantMap controls;
+        QString search;
+        int mode = 0, aspect = 2;
+        Qt::SortOrder order = Qt::AscendingOrder;
+        QByteArray header;
+    };
+    struct ViewportState {
+        QPoint scroll;
+        QString currentPath;
+        int currentColumn = 0;
+    };
+    QHash<QString,BrowserState> browserStates_;
+    QString browserTabKey_;
+    QHash<QString,ViewportState> scrollPositions_;
+    quint64 scrollRestoreGeneration_ = 0;
+    bool restoringBrowserScroll_ = false;
     QString scrollKey_;
     QAbstractItemView* scrollView_ = nullptr;
     int selectionModelChanges_ = 0;

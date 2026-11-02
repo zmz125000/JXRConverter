@@ -613,7 +613,7 @@ private slots:
         tab("statusSelected");window.findChild<QPushButton*>("deselectImages")->click();QCOMPARE(model->rowCount(),2);QVERIFY(selection->selectedRows().isEmpty());
         // Removing a local highlight changes the global selection, not the library.
         selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
-        auto* remove=window.findChild<QPushButton*>("removeSelected");QCOMPARE(remove->text(),QString("Remove from selection"));remove->click();
+        auto* remove=window.findChild<QPushButton*>("removeSelected");QCOMPARE(remove->text(),QString("Remove selected"));remove->click();
         QCOMPARE(model->rowCount(),1);QCOMPARE(window.catalog()->rowCount(),3);
         tab("statusAll");QCOMPARE(selection->selectedRows().size(),1);
         tab("statusSelected");selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
@@ -636,6 +636,25 @@ private slots:
         window.findChild<QPushButton*>("statusAll")->click();QTRY_COMPARE(bar->value(),allPosition);
         window.findChild<QPushButton*>("statusFinished")->click();QTRY_COMPARE(bar->value(),finishedPosition);
         window.findChild<QPushButton*>("statusRemember")->click();QTRY_COMPARE(bar->value(),rememberedPosition);
+        // Rapid switches before deferred layout must not overwrite a saved viewport.
+        window.findChild<QPushButton*>("statusAll")->click();
+        window.findChild<QPushButton*>("statusFinished")->click();
+        window.findChild<QPushButton*>("statusRemember")->click();QTRY_COMPARE(bar->value(),rememberedPosition);
+        window.findChild<QPushButton*>("statusAll")->click();QTRY_COMPARE(bar->value(),allPosition);
+        // Filters, presentation and sorting belong to each tab too.
+        auto* instant=window.findChild<QLineEdit*>("instantFilter");instant->setText("00.jpg");
+        auto* size=window.findChild<QSlider*>("thumbnailSize");size->setValue(300);
+        window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
+        auto* sort=window.findChild<QComboBox*>("sortField");sort->setCurrentIndex(Catalog::Format);
+        window.findChild<QPushButton*>("statusFinished")->click();
+        QVERIFY(instant->text().isEmpty());QCOMPARE(size->value(),100);QCOMPARE(sort->currentData().toInt(),int(Catalog::Name));
+        window.findChild<QButtonGroup*>("viewMode")->button(2)->click();
+        window.findChild<FileTableView*>()->setColumnWidth(Catalog::Name,310);
+        window.findChild<QPushButton*>("statusAll")->click();
+        QCOMPARE(instant->text(),QString("00.jpg"));QCOMPARE(size->value(),300);QCOMPARE(sort->currentData().toInt(),int(Catalog::Format));
+        QCOMPARE(window.findChild<QButtonGroup*>("viewMode")->checkedId(),1);QVERIFY(!window.findChild<QCheckBox*>("autoThumbnailAspect")->isChecked());
+        window.findChild<QPushButton*>("statusFinished")->click();
+        QCOMPARE(window.findChild<QButtonGroup*>("viewMode")->checkedId(),2);QCOMPARE(window.findChild<FileTableView*>()->columnWidth(Catalog::Name),310);
     }
     void jobFileListsAndRestore() {
         appSettings().clear();const auto a=makeImage(root("job-history"),"a.jpg",64,48,100),b=makeImage(root("job-history"),"b.jpg",64,48,100),c=makeImage(root("job-history"),"c.jpg",64,48,100);
