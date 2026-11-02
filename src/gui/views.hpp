@@ -11,8 +11,10 @@ public:
     explicit FileListView(QWidget* parent = nullptr);
     void setPresentation(bool grid, int size, bool wide = false);
     void setSmoothScrolling(bool enabled);
+    void selectAll() override;
 signals:
     void pathsDropped(const QStringList& paths);
+    void bulkSelectionChanged(bool selecting);
 protected:
     void wheelEvent(QWheelEvent*) override;
     void hideEvent(QHideEvent*) override;
@@ -34,9 +36,11 @@ class FileTableView : public QTableView {
 public:
     explicit FileTableView(QWidget* parent = nullptr);
     void setSmoothScrolling(bool enabled);
+    void selectAll() override;
     void setFillThumbnails(bool fill);
 signals:
     void pathsDropped(const QStringList& paths);
+    void bulkSelectionChanged(bool selecting);
 protected:
     void paintEvent(QPaintEvent*) override;
     void hideEvent(QHideEvent*) override;

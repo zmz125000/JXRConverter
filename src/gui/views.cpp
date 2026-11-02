@@ -14,6 +14,9 @@
 #include <algorithm>
 
 namespace jxrc::gui {
+void FileListView::selectAll(){emit bulkSelectionChanged(true);QListView::selectAll();emit bulkSelectionChanged(false);}
+void FileTableView::selectAll(){emit bulkSelectionChanged(true);QTableView::selectAll();emit bulkSelectionChanged(false);}
+
 namespace {
 void paintThumbnail(QPainter* painter,const QRect& rect,const QIcon& icon,bool fill) {
     const auto pixmap=icon.pixmap(icon.availableSizes().value(0,QSize(384,384)));

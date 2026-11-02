@@ -16,6 +16,7 @@ std::filesystem::path nativePath(const QString& value) {
     return std::filesystem::u8path(value.toUtf8().constData());
 #endif
 }
+QString jobKey(const Job& job) {return QString::number(job.batch)+QChar(0)+job.input+QChar(0)+job.output;}
 void orderJobs(QVector<Job>& jobs) {
     // Keep each source's targets together to bound prepared-pixel memory by
     // worker count. RAW has SDR, HDR, and paired HDR/SDR render families.
@@ -55,7 +56,10 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         }
         QString folder=layout.source_folder?source.absolutePath():directory;
         if(folder.trimmed().isEmpty())throw std::invalid_argument("Choose an output folder");
-        if(layout.date_subfolders)folder=QDir(folder).filePath(dateFolder);
+        if(!layout.job_subfolder.isEmpty()) {
+            if(layout.job_subfolder=="."||layout.job_subfolder==".."||layout.job_subfolder.contains('/')||layout.job_subfolder.contains('\\')||layout.job_subfolder.contains(':'))throw std::invalid_argument("Invalid job folder name");
+            folder=QDir(folder).filePath(layout.job_subfolder);
+        } else if(layout.date_subfolders)folder=QDir(folder).filePath(dateFolder);
         if(layout.format_subfolders)folder=QDir(folder).filePath(suffixes[target].section('.',-1));
         QString filename=stem+"_"+suffixes[target];int n=2;
         auto outputPath=[&]{return QDir(folder).absoluteFilePath(filename);};
@@ -75,7 +79,7 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     if(busy())throw std::logic_error("A conversion batch is already running");
     if(jobs.isEmpty())return;
     orderJobs(jobs);
-    sessions_.clear();activeInputs_.clear();activeOutputs_.clear();
+    sessions_.clear();activeInputs_.clear();activeOutputs_.clear();activeBatches_.clear();batchAliases_.clear();
     jobs_=std::move(jobs);next_=active_=finished_=succeeded_=failed_=cancelled_=skipped_=0;
     limit_=std::clamp(parallelism,1,std::max(1,cores));pool_.setMaxThreadCount(limit_);
     threadBudget_=std::max(1,cores/limit_);
@@ -84,6 +88,20 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     for(auto& job:jobs_){job.options.threads=threadBudget_;emit statusChanged(job.input,"Queued",job.output);}
     pump();
 }
+void ConversionQueue::enqueue(QVector<Job> jobs,int parallelism,int cores) {
+    if(!busy()){start(std::move(jobs),parallelism,cores);return;}
+    orderJobs(jobs);
+    for(auto& job:jobs){job.options.threads=threadBudget_;if(!remaining_.value(job.input)){fileErrors_.remove(job.input);fileCancelled_.remove(job.input);fileSkipped_.remove(job.input);fileSucceeded_.remove(job.input);}++remaining_[job.input];}
+    jobs_+=jobs;
+    for(const auto& job:jobs)if(!activeInputs_.contains(job.input))emit statusChanged(job.input,"Queued",job.output);
+    pump();
+}
+qint64 ConversionQueue::runningBatch() const {
+    qint64 current=-1;for(auto it=activeBatches_.cbegin();it!=activeBatches_.cend();++it){const auto batch=it.value();if(batch==0||batchAliases_.value(jobKey({it.key(),activeOutputs_.value(it.key()),{},batch})).contains(0))return 0;current=std::max(current,batch);}
+    return current>=0?current:next_<jobs_.size()?jobs_[next_].batch:-1;
+}
+bool ConversionQueue::hasPendingBatch(qint64 batch) const {return std::any_of(jobs_.cbegin()+next_,jobs_.cend(),[this,batch](const Job& job){return job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch);});}
+void ConversionQueue::cancelBatch(qint64 batch) {cancelPendingMatching(nullptr,batch);}
 void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
     if(!busy()){start(std::move(jobs),parallelism,cores);return;}
     if(jobs.isEmpty())return;
@@ -96,9 +114,9 @@ void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
         (inputs.contains(jobs_[i].input)?priority:rest).append(jobs_[i]);
     QVector<Job> added;
     for(auto& job:jobs) {
-        if(activeOutputs_.value(job.input)==job.output)continue;
-        const bool pending=std::any_of(priority.cbegin(),priority.cend(),[&](const Job& other){return other.input==job.input&&other.output==job.output;});
-        if(pending)continue;
+        if(activeOutputs_.value(job.input)==job.output){batchAliases_[jobKey({job.input,job.output,{},activeBatches_.value(job.input)})].insert(job.batch);continue;}
+        const auto pending=std::find_if(priority.cbegin(),priority.cend(),[&](const Job& other){return other.input==job.input&&other.output==job.output;});
+        if(pending!=priority.cend()){batchAliases_[jobKey(*pending)].insert(job.batch);continue;}
         job.options.threads=threadBudget_;
         if(!remaining_.value(job.input)){fileErrors_.remove(job.input);fileCancelled_.remove(job.input);fileSkipped_.remove(job.input);fileSucceeded_.remove(job.input);}
         priority.append(job);added.append(job);++remaining_[job.input];
@@ -117,10 +135,10 @@ void ConversionQueue::cancelPendingFor(const QStringList& inputs) {
     const QSet<QString> selected(inputs.cbegin(),inputs.cend());
     cancelPendingMatching(&selected);
 }
-void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs) {
+void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs,qint64 batch) {
     if(!busy())return;
     // Keep total job count and the order of unselected pending outputs intact.
-    const auto end=std::stable_partition(jobs_.begin()+next_,jobs_.end(),[&](const Job& job){return !inputs||inputs->contains(job.input);});
+    const auto end=std::stable_partition(jobs_.begin()+next_,jobs_.end(),[&](const Job& job){return (batch<0||job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch))&&(!inputs||inputs->contains(job.input));});
     const int stop=int(end-jobs_.begin());
     if(stop==next_)return;
     while(next_<stop){const auto& job=jobs_[next_++];++cancelled_;++finished_;finishFile(job,{},true);}
@@ -140,20 +158,21 @@ void ConversionQueue::pump() {
         if(!job.options.overwrite && std::filesystem::exists(outputStatus)) {
             ++skipped_;++finished_;finishFile(job,{},false,true);continue;
         }
-        ++active_;activeInputs_.insert(job.input);activeOutputs_.insert(job.input,job.output);
+        ++active_;activeInputs_.insert(job.input);activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);
         std::shared_ptr<ConversionSession> session;
         if(!converter_) {
             auto& stored=sessions_[job.input];
             if(!stored)stored=std::make_shared<ConversionSession>(nativePath(job.input));
             session=stored;
         }
+        emit outputStarted(job.batch,job.input,job.output);
         emit statusChanged(job.input,"Converting",job.output);
         pool_.start([this,job,session] {
             QString error;bool skipped=false;
             try {const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);skipped=result.skipped;}catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
             QMetaObject::invokeMethod(this,[this,job,error,skipped] {
-                --active_;activeInputs_.remove(job.input);activeOutputs_.remove(job.input);++finished_;
+                --active_;activeInputs_.remove(job.input);activeOutputs_.remove(job.input);activeBatches_.remove(job.input);++finished_;
                 if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
                 finishFile(job,error,false,skipped);
                 pump();
@@ -164,6 +183,10 @@ void ConversionQueue::pump() {
     if(!busy())emit batchFinished(succeeded_,failed_,cancelled_);
 }
 void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancelled,bool skipped) {
+    const QString outcome=cancelled?"Cancelled":!error.isEmpty()?"Failed":skipped?"Skipped":"Finished";
+    const auto aliases=batchAliases_.take(jobKey(job));
+    emit outputFinished(job.batch,job.input,job.output,outcome);
+    for(auto alias:aliases)if(alias!=job.batch)emit outputFinished(alias,job.input,job.output,outcome);
     if(!error.isEmpty())fileErrors_[job.input]+=job.output+": "+error+"\n";
     if(cancelled)++fileCancelled_[job.input];
     if(skipped)++fileSkipped_[job.input];
