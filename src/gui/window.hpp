@@ -72,6 +72,8 @@ private:
     void clearJobs();
     void saveJobs();
     void refreshJobs();
+    void createDraftJob(const QStringList& files);
+    bool isDraftJob(qint64 number) const;
     void recordJob(const QVector<Job>&, bool temporary, bool reuse = false);
     QString jobText(qint64 number) const;
     QList<QWidget*> persistentControls() const;

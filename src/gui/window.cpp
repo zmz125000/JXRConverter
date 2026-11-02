@@ -230,14 +230,17 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(OutputCapture::instance(),&OutputCapture::textReady,this,[this](const QString& text){auto* bar=outputLog_->verticalScrollBar();const bool follow=bar->value()==bar->maximum();QTextCursor cursor(outputLog_->document());cursor.movePosition(QTextCursor::End);cursor.insertText(text);if(follow){outputLog_->setTextCursor(cursor);outputLog_->ensureCursorVisible();}});
     logMessage("JXRConverter "+QString::fromStdString(jxrc::version()));
     auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
-    auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
+    auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);auto* outputHeader=new WidthMatchedWidget(scroll->parentWidget());auto* headerLayout=new QHBoxLayout(outputHeader);headerLayout->setContentsMargins(14,0,14+scroll->verticalScrollBar()->sizeHint().width(),0);headerLayout->addWidget(outputToggle);sideLayout->addWidget(outputHeader,0,Qt::AlignHCenter);
     auto* outputPanel=new WidthMatchedWidget(scroll->parentWidget());outputPanel->setObjectName("outputPanel");auto* outputLayout=new QVBoxLayout(outputPanel);outputLayout->setContentsMargins(0,0,0,0);
     auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(12,0,12,0);
     auto* openQueueOutput=new QPushButton;openQueueOutput->setObjectName("openQueueOutputFolder");openQueueOutput->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));openQueueOutput->setToolTip("Open output folder");startButtons->addWidget(openQueueOutput);startButtons->addWidget(visible_,1);connect(openQueueOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
-    auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(12,6,12,12);auto* progressRow=new QHBoxLayout;progressRow->addWidget(progress_,1);
-    progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();progressRow->addWidget(progressStop_);progressLayout->addLayout(progressRow);
+    auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,12);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1);
+    progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();
+    // Match the queue group's side padding and scrollbar gutter. Keep the
+    // stop-button slot reserved so the bar keeps these edges while running.
+    auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot);progressLayout->addLayout(progressRow);
     connect(progressStop_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,0,Qt::AlignHCenter);
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
@@ -277,7 +280,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             for(int i=0;i<targets_->count();++i){const auto* item=targets_->item(i);auto* action=convertTo->addAction(item->text());action->setObjectName("convertTarget"+item->data(Qt::UserRole).toString());action->setData(item->data(Qt::UserRole));action->setEnabled(item->flags()&Qt::ItemIsEnabled);}
             const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.imageDate().date();const QString cameraName=record.camera,formatName=record.format;const int depth=record.bits;camera->setEnabled(!cameraName.isEmpty());bits->setEnabled(depth>0);date->setEnabled(captured.isValid());start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
             const auto queueSelection=selectedPaths();
-            auto* sendJob=menu.addAction("Send selected to new job");sendJob->setObjectName("sendSelectedToJob");sendJob->setEnabled(!selectedPaths().isEmpty()&&!updater_->installing()&&!selectedTargets().isEmpty());
+            auto* sendJob=menu.addAction("Send selected to new job");sendJob->setObjectName("sendSelectedToJob");sendJob->setEnabled(!selectedPaths().isEmpty()&&!updater_->installing());
             auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
             auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
@@ -288,7 +291,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             }
             else if(action==convertImage){convertPaths({currentImage},selectedTargets(),false,true);}
             else if(action&&action->parent()==convertTo){convertPaths({currentImage},{Target(action->data().toInt())},true,true);}
-            else if(action==sendJob){convertPaths(queueSelection,selectedTargets(),false,false,true);}
+            else if(action==sendJob){createDraftJob(queueSelection);}
             else if(action==cancelSelected){queue_->cancelPendingFor(queueSelection);}
             else if(action==camera||action==format||action==bits){
                 const QString term=action==camera?"camera:"+quotedSearchValue(cameraName):action==format?"format:"+quotedSearchValue(formatName):"bits:"+QString::number(depth);
@@ -593,7 +596,7 @@ QString MainWindow::jobText(qint64 number) const {
     for(const auto& output:job->outputs){auto& c=counts[output.input];++c.total;if(output.state=="Finished"||output.state=="Skipped"||output.state=="Failed"||output.state=="Cancelled"||output.state=="Interrupted")++c.terminal;if(output.state=="Finished")++c.finished;else if(output.state=="Skipped")++c.skipped;else if(output.state=="Failed")++c.failed;}
     int finished=0,skipped=0,failed=0;
     for(const auto& input:job->files){const auto c=counts.value(input);if(c.total&&c.terminal==c.total){if(c.failed)++failed;else if(c.skipped==c.total)++skipped;else if(c.finished+c.skipped==c.total)++finished;}}
-    return (number?QString("Job #%1").arg(number):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed)+(queue_->hasRunningBatch(number)?" *":"");
+    return (number?QString("Job #%1").arg(number):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed)+(queue_->hasRunningBatch(number)?" *":isDraftJob(number)?" (?)":"");
 }
 void MainWindow::refreshJobs() {
     QVector<qint64> ids{0};for(auto it=savedJobs_.crbegin();it!=savedJobs_.crend();++it)ids.append(it->number);
@@ -617,6 +620,15 @@ void MainWindow::clearJobs() {
     if(statusFilter_->checkedId()==2)statusFilter_->button(0)->setChecked(true);
     refreshJobs();saveJobs();updateFilter();
     for(auto it=scrollPositions_.begin();it!=scrollPositions_.end();)if(it.key().startsWith("2:"))it=scrollPositions_.erase(it);else ++it;
+}
+bool MainWindow::isDraftJob(qint64 number) const {
+    const SavedJob* saved=&temporaryJob_;for(const auto& job:savedJobs_)if(job.number==number)saved=&job;
+    return !saved->files.isEmpty()&&saved->outputs.isEmpty();
+}
+void MainWindow::createDraftJob(const QStringList& files) {
+    if(files.isEmpty())return;
+    QStringList unique=files;unique.removeDuplicates();
+    const auto number=nextJob_++;savedJobs_.append({number,unique,{},{}});jobHistoryDirty_=true;showJob(number);
 }
 void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse) {
     jobHistoryDirty_=true;
@@ -771,7 +783,7 @@ void MainWindow::updateCounts() {
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
     progressStop_->setVisible(queue_->busy());
-    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
+    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
@@ -789,7 +801,7 @@ void MainWindow::showMetadata() {
 }
 void MainWindow::convertFiles(bool selected) {
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
-    convertPaths(paths,selectedTargets(),false,false,false,selected&&statusFilter_->checkedId()==2);
+    convertPaths(paths,selectedTargets(),false,false,false,statusFilter_->checkedId()==2&&(selected||isDraftJob(viewedJob_)));
 }
 void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob) {
     if(paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;

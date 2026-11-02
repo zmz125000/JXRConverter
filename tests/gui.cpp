@@ -383,11 +383,12 @@ private slots:
         auto* tabs=window.findChild<QTabWidget*>("settingsTabs");auto* conversion=window.findChild<QScrollArea*>("conversionScroll");auto* output=window.findChild<QScrollArea*>("outputQueueScroll");
         auto* formats=window.findChild<QGroupBox*>("outputFormats");auto* destination=window.findChild<QGroupBox*>("outputDestination");
         QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
-        auto* panel=window.findChild<QWidget*>("outputPanel");QVERIFY(panel);QCOMPARE(panel->width(),conversion->width());QCOMPARE(window.findChild<QPushButton*>("convertVisible")->parentWidget(),panel);QVERIFY(panel->isAncestorOf(window.findChild<QProgressBar*>("conversionProgress")));
+        auto* panel=window.findChild<QWidget*>("outputPanel");QVERIFY(panel);QCOMPARE(panel->width(),conversion->width());auto* progress=window.findChild<QProgressBar*>("conversionProgress");QCOMPARE(progress->mapTo(panel,QPoint()).x(),destination->mapTo(panel,QPoint()).x());QCOMPARE(progress->width(),destination->width());auto* toggle=window.findChild<QPushButton*>("toggleOutput");QCOMPARE(toggle->width(),progress->width());QCOMPARE(toggle->mapTo(&window,QPoint()).x(),progress->mapTo(&window,QPoint()).x());
+        window.findChild<QPushButton*>("stopProgress")->show();QCoreApplication::processEvents();QCOMPARE(progress->width(),destination->width());window.findChild<QPushButton*>("stopProgress")->hide();QCOMPARE(window.findChild<QPushButton*>("convertVisible")->parentWidget(),panel);QVERIFY(panel->isAncestorOf(window.findChild<QProgressBar*>("conversionProgress")));
         tabs->setCurrentIndex(2);QCOMPARE(tabs->tabText(2),QString("Log"));auto* log=window.findChild<QPlainTextEdit*>("outputLog");auto* clear=window.findChild<QPushButton*>("clearLog");
         QVERIFY(tabs->widget(2)->isAncestorOf(clear));QCOMPARE(clear->parentWidget(),log);QCOMPARE(tabs->widget(2)->layout()->count(),1);QVERIFY(log->viewport()->geometry().contains(clear->geometry()));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(2)->width()/2);
         log->setPlainText(QString("log entry\n").repeated(200));QTest::qWait(10);const auto position=clear->pos();log->verticalScrollBar()->setValue(0);log->verticalScrollBar()->setValue(log->verticalScrollBar()->maximum());QCOMPARE(clear->pos(),position);
-        window.resize(1600,850);QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
+        window.resize(1600,850);QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());QCOMPARE(progress->width(),destination->width());
     }
     void aspectRatioMenuAndAutoSampling() {
         appSettings().clear();MainWindow window;window.show();auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");
@@ -782,7 +783,8 @@ private slots:
         window.findChild<QPushButton*>("selectAllImages")->click();auto* view=window.findChild<FileListView*>();bool chosen=false;
         QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("sendSelectedToJob");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});
         QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);view->customContextMenuRequested(view->visualRect(window.filterModel()->index(0,0)).center());QVERIFY(chosen);
-        QVERIFY(savedJob(window,1)->isChecked());QVERIFY(window.findChild<QToolButton*>("statusJob")->isChecked());QCOMPARE(window.queue()->total(),3);
+        QVERIFY(savedJob(window,1)->isChecked());QVERIFY(window.findChild<QToolButton*>("statusJob")->isChecked());QCOMPARE(window.queue()->total(),0);QVERIFY(!window.queue()->busy());QCOMPARE(done.count(),0);QVERIFY(savedJob(window,1)->text().endsWith("(?)"));
+        window.findChild<QPushButton*>("convertVisible")->click();QCOMPARE(window.queue()->total(),3);QVERIFY(savedJob(window,1)->isChecked());QVERIFY(!savedJob(window,1)->text().endsWith("(?)"));QVERIFY(!savedJob(window,2));
         auto* cancel=window.findChild<QPushButton*>("cancelJob");QCOMPARE(cancel->text(),QString("Cancel job"));QVERIFY(cancel->isEnabled());cancel->click();
         QTRY_COMPARE(done.count(),1);QCOMPARE(done[0][0].toInt(),1);QCOMPARE(done[0][2].toInt(),2);QCOMPARE(window.catalog()->rowCount(),3);QCOMPARE(window.filterModel()->rowCount(),3);
     }
