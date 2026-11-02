@@ -602,7 +602,7 @@ private slots:
     void jobFileListsAndRestore() {
         appSettings().clear();const auto a=makeImage(root("job-history"),"a.jpg",64,48,100),b=makeImage(root("job-history"),"b.jpg",64,48,100),c=makeImage(root("job-history"),"c.jpg",64,48,100);
         {
-            MainWindow window;window.show();window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
+            MainWindow window;window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(true);window.show();window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
             window.findChild<QLineEdit*>("outputDirectory")->setText(root("job-history-output"));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
             window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);
             auto* menu=window.findChild<QMenu*>("jobMenu");QCOMPARE(menu->actions().size(),2);QVERIFY(savedJob(window,1)->isChecked());QCOMPARE(savedJob(window,1)->text(),QString("Job #1 (2/2/0/0)"));
@@ -620,10 +620,40 @@ private slots:
             window.findChild<QPushButton*>("statusRemember")->click();window.findChild<QPushButton*>("statusSelected")->click();QVERIFY(savedJob(window,1)->isChecked());
             QFile file(configDirectory()+"/jobs.json");QVERIFY(file.open(QIODevice::ReadOnly));const auto json=QJsonDocument::fromJson(file.readAll()).object();QCOMPARE(json.value("jobs").toArray().size(),2);QCOMPARE(json.value("temporary").toArray().size(),2);
         }
-        MainWindow restored;restored.show();QTRY_COMPARE(restored.catalog()->rowCount(),3);QVERIFY(!restored.queue()->busy());
+        MainWindow restored;restored.show();QTest::qWait(60);QCOMPARE(restored.catalog()->rowCount(),0);QVERIFY(!restored.queue()->busy());
         QCOMPARE(restored.findChild<QMenu*>("jobMenu")->actions().size(),3);QVERIFY(savedJob(restored,1)->isChecked());
-        QVERIFY(chooseJob(restored,1));QCOMPARE(restored.filterModel()->rowCount(),2);
+        QVERIFY(chooseJob(restored,1));QTRY_COMPARE(restored.filterModel()->rowCount(),2);QCOMPARE(restored.catalog()->rowCount(),2);
         QVERIFY(chooseJob(restored,2));QCOMPARE(restored.filterModel()->rowCount(),1);QCOMPARE(restored.filterModel()->index(0,0).data(Catalog::PathRole).toString(),a);
+    }
+    void jobStartupPreferencesAndClear() {
+        appSettings().clear();const auto directory=root("job-startup");const auto a=makeImage(directory,"a.jpg",64,48,100),b=makeImage(directory,"b.jpg",64,48,100);
+        QJsonObject job;job.insert("number","7");job.insert("files",QJsonArray{a,b});QJsonObject jobs;jobs.insert("jobs",QJsonArray{job});jobs.insert("temporary",QJsonArray{b});jobs.insert("viewedJob","7");
+        const auto saved=QJsonDocument(jobs).toJson();QFile file(configDirectory()+"/jobs.json");QVERIFY(file.open(QIODevice::WriteOnly));file.write(saved);file.close();
+        QJsonObject history;history.insert("folders",QJsonArray{directory});history.insert("files",QJsonArray{a});history.insert("lastFiles",QJsonArray{a});QFile recent(configDirectory()+"/history.json");QVERIFY(recent.open(QIODevice::WriteOnly));recent.write(QJsonDocument(history).toJson());recent.close();
+        appSettings().setValue("jobs/nextNumber",12);
+        {
+            MainWindow window;window.show();QTest::qWait(80);QCOMPARE(window.catalog()->rowCount(),0);
+            QVERIFY(!window.findChild<QCheckBox*>("loadLastFolder")->isChecked());QVERIFY(!window.findChild<QCheckBox*>("loadLastFiles")->isChecked());QVERIFY(!window.findChild<QCheckBox*>("loadPreviousJobs")->isChecked());
+            QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),1);QCOMPARE(window.findChild<QToolButton*>("statusJob")->text(),QString("Jobs"));
+            auto* icon=window.findChild<QPushButton*>("openQueueOutputFolder");auto* all=window.findChild<QPushButton*>("convertVisible");auto* selected=window.findChild<QPushButton*>("convertSelected");QVERIFY(icon->x()<all->x());QVERIFY(all->x()<selected->x());
+        }
+        QVERIFY(file.open(QIODevice::ReadOnly));QCOMPARE(file.readAll(),saved);file.close();
+        appSettings().setValue("controls/loadPreviousJobs",true);
+        {
+            MainWindow window;window.show();QTest::qWait(80);QCOMPARE(window.catalog()->rowCount(),0);QVERIFY(window.findChild<QCheckBox*>("loadPreviousJobs")->isChecked());
+            QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),2);QVERIFY(chooseJob(window,7));QTRY_COMPARE(window.catalog()->rowCount(),2);
+            window.findChild<QPushButton*>("statusAll")->click();QCOMPARE(window.findChild<QToolButton*>("statusJob")->text(),QString("Jobs"));
+            window.findChild<QLineEdit*>("outputDirectory")->setText(root("job-startup-output"));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
+            window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);QVERIFY(savedJob(window,12));QCOMPARE(appSettings().value("jobs/nextNumber").toLongLong(),13);
+            window.findChild<QPushButton*>("clearJobs")->click();QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),1);QCOMPARE(window.catalog()->rowCount(),2);QCOMPARE(appSettings().value("jobs/nextNumber").toLongLong(),1);
+            QCOMPARE(window.findChild<QToolButton*>("statusJob")->text(),QString("Jobs"));
+            window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,1));QVERIFY(!savedJob(window,12));
+            window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(false);
+        }
+        {
+            MainWindow window;window.show();QTest::qWait(80);QCOMPARE(window.catalog()->rowCount(),0);QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),1);
+            window.addPaths({a});QTRY_COMPARE(window.catalog()->rowCount(),1);QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);QVERIFY(savedJob(window,2));QVERIFY(!savedJob(window,1));
+        }
     }
     void selectAllRememberAndTabClear() {
         appSettings().clear();MainWindow window;window.show();
@@ -699,7 +729,7 @@ private slots:
         for(const auto& state:{QString("Failed"),QString("Cancelled")}){QJsonObject output;output.insert("input",file);output.insert("state",state);outputs.insert(root("job-counts")+"/"+state,output);}
         QJsonObject job;job.insert("number","3");job.insert("files",QJsonArray{file});job.insert("outputs",outputs);
         QJsonObject json;json.insert("jobs",QJsonArray{job});json.insert("viewedJob","3");QFile history(configDirectory()+"/jobs.json");QVERIFY(history.open(QIODevice::WriteOnly));history.write(QJsonDocument(json).toJson());history.close();
-        MainWindow window;window.show();QTRY_COMPARE(window.catalog()->rowCount(),1);
+        appSettings().setValue("controls/loadPreviousJobs",true);MainWindow window;window.show();QCOMPARE(window.catalog()->rowCount(),0);QVERIFY(chooseJob(window,3));QTRY_COMPARE(window.catalog()->rowCount(),1);
         QCOMPARE(savedJob(window,3)->text(),QString("Job #3 (0/1/0/1)"));
         QCOMPARE(window.findChild<QToolButton*>("statusJob")->text(),savedJob(window,3)->text());QVERIFY(!window.queue()->busy());
     }

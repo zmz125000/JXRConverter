@@ -67,6 +67,7 @@ private:
     void saveBrowserScroll();
     void restoreBrowserScroll();
     void loadJobs();
+    void clearJobs();
     void saveJobs();
     void refreshJobs();
     void recordJob(const QVector<Job>&, bool temporary, bool reuse = false);
@@ -108,10 +109,10 @@ private:
     QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_;
     QDoubleSpinBox *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
-    QCheckBox *autoAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *dateFolders_, *jobFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
+    QCheckBox *autoAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *loadJobs_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *dateFolders_, *jobFolders_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
-    QPushButton *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_;
+    QPushButton *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_, *clearJobs_;
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit *inspector_, *outputLog_;
     QTimer* updateTimer_;
@@ -136,6 +137,7 @@ private:
     QAbstractItemView* scrollView_ = nullptr;
     int selectionModelChanges_ = 0;
     bool syncingSelection_ = false, bulkSelecting_ = false;
+    bool jobHistoryLoaded_ = false, jobHistoryDirty_ = false;
     bool closeWhenIdle_ = false;
     bool aspectSamplePending_ = false, aspectViewportSample_ = false, changingAspect_ = false;
     Qt::SortOrder sortOrder_ = Qt::AscendingOrder;

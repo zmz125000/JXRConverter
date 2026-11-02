@@ -140,6 +140,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         auto* filesMenu=recentMenu->addMenu("Recent dropped files");for(const auto& path:recentFiles_){auto* action=filesMenu->addAction(path);connect(action,&QAction::triggered,this,[this,path]{addPaths({path});});}
     });
     loadFolder_=check("Load last folder","loadLastFolder");loadFiles_=check("Load last files","loadLastFiles");toolbar->addWidget(loadFolder_);toolbar->addWidget(loadFiles_);
+    loadJobs_=check("Load jobs","loadPreviousJobs");loadJobs_->setToolTip("Restore saved job lists on startup. Job images load only when you select a job.");toolbar->addWidget(loadJobs_);
+    clearJobs_=new QPushButton("Clear jobs");clearJobs_->setObjectName("clearJobs");clearJobs_->setToolTip("Clear saved jobs and reset job numbering. Images already in the library stay available.");toolbar->addWidget(clearJobs_);connect(clearJobs_,&QPushButton::clicked,this,&MainWindow::clearJobs);
     auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
     recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
@@ -206,7 +208,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     separator("selectionSeparator");
     connect(statusFilter_,&QButtonGroup::idClicked,this,&MainWindow::updateFilter);
     jobSaveTimer_=new QTimer(this);jobSaveTimer_->setSingleShot(true);jobSaveTimer_->setInterval(500);connect(jobSaveTimer_,&QTimer::timeout,this,&MainWindow::saveJobs);
-    loadJobs();refreshJobs();
+    nextJob_=std::clamp(appSettings().value("jobs/nextNumber",1).toLongLong(),qint64(1),qint64(1000000001));
+    if(appSettings().value("controls/loadPreviousJobs",false).toBool()){loadJobs();jobHistoryLoaded_=true;}
+    refreshJobs();
     auto* selectAll=new QPushButton("Select all");selectAll->setObjectName("selectAllImages");actionsLayout->addWidget(selectAll);
     connect(selectAll,&QPushButton::clicked,this,&MainWindow::selectVisible);
     auto* deselect=new QPushButton("Deselect");deselect->setObjectName("deselectImages");actionsLayout->addWidget(deselect);connect(deselect,&QPushButton::clicked,this,&MainWindow::clearImageSelection);
@@ -225,8 +229,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
     auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);sideLayout->addWidget(outputToggle);
     auto* outputPanel=new WidthMatchedWidget(scroll->parentWidget());outputPanel->setObjectName("outputPanel");auto* outputLayout=new QVBoxLayout(outputPanel);outputLayout->setContentsMargins(0,0,0,0);
-    auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(12,0,12,0);startButtons->addWidget(visible_,1);
-    auto* openQueueOutput=new QPushButton;openQueueOutput->setObjectName("openQueueOutputFolder");openQueueOutput->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));openQueueOutput->setToolTip("Open output folder");startButtons->addWidget(openQueueOutput);connect(openQueueOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
+    auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(12,0,12,0);
+    auto* openQueueOutput=new QPushButton;openQueueOutput->setObjectName("openQueueOutputFolder");openQueueOutput->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));openQueueOutput->setToolTip("Open output folder");startButtons->addWidget(openQueueOutput);startButtons->addWidget(visible_,1);connect(openQueueOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(12,6,12,12);auto* progressRow=new QHBoxLayout;progressRow->addWidget(progress_,1);
@@ -352,7 +356,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     catalog_->setAspectSampling(autoAspect_->isChecked());updateMode();updateFilter();updatePresentation();updateCounts();requestAspectSample(false);
     QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
-    QTimer::singleShot(0,this,[this]{QStringList files=temporaryJob_.files;for(const auto& job:savedJobs_)files+=job.files;files.removeDuplicates();if(!files.isEmpty())catalog_->addPaths(files,false);});
+
     QTimer::singleShot(0,this,[this]{if(loadFolder_->isChecked()&&!recentFolders_.isEmpty())addPaths({recentFolders_.first()});if(loadFiles_->isChecked())addPaths(lastFiles_);});
 }
 MainWindow::~MainWindow() {
@@ -372,7 +376,7 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return {checkUpdates_,smoothScrolling_,autoAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
-        formatFolders_,dateFolders_,jobFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        formatFolders_,dateFolders_,jobFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
 void MainWindow::restoreSettings() {
@@ -395,7 +399,7 @@ void MainWindow::saveSettings() const {
     auto settings=appSettings();
     for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
-    settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
+    settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
 }
 QWidget* MainWindow::buildControls() {
     auto* panel=new QWidget;panel->setObjectName("conversionControls");auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(14,16,14,16);layout->setSpacing(14);
@@ -569,7 +573,10 @@ void MainWindow::loadJobs() {
     const auto selected=data.value("viewedJob").toVariant().toLongLong();if(ids.contains(selected))viewedJob_=selected;
 }
 void MainWindow::saveJobs() {
+    auto settings=appSettings();settings.setValue("jobs/nextNumber",nextJob_);settings.sync();
     if(jobSaveTimer_)jobSaveTimer_->stop();
+    // Merely starting with history restore off must not erase saved lists.
+    if(!jobHistoryLoaded_&&!jobHistoryDirty_)return;
     auto outputs=[](const SavedJob& job){QJsonObject result;for(auto it=job.outputs.cbegin();it!=job.outputs.cend();++it){QJsonObject value;value.insert("input",it->input);value.insert("state",it->state);result.insert(it.key(),value);}return result;};
     QJsonArray jobs;for(const auto& job:savedJobs_){QJsonObject object;object.insert("number",QString::number(job.number));object.insert("files",QJsonArray::fromStringList(job.files));object.insert("outputs",outputs(job));object.insert("folder",job.folder);jobs.append(object);}
     QJsonObject object;object.insert("version",2);object.insert("temporary",QJsonArray::fromStringList(temporaryJob_.files));object.insert("temporaryOutputs",outputs(temporaryJob_));object.insert("temporaryFolder",temporaryJob_.folder);object.insert("jobs",jobs);object.insert("viewedJob",QString::number(viewedJob_));
@@ -590,10 +597,25 @@ void MainWindow::refreshJobs() {
         if(!action){action=new QAction(jobMenu_);action->setData(number);action->setCheckable(true);jobMenu_->insertAction(jobMenu_->actions().value(i),action);connect(action,&QAction::triggered,this,[this,number]{showJob(number);});}
         action->setText(jobText(number));action->setChecked(number==viewedJob_);
     }
-    jobButton_->setText(jobText(viewedJob_));
+    jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
 }
-void MainWindow::showJob(qint64 number) {viewedJob_=number;statusFilter_->button(2)->setChecked(true);refreshJobs();saveJobs();updateFilter();}
+void MainWindow::showJob(qint64 number) {
+    viewedJob_=number;statusFilter_->button(2)->setChecked(true);refreshJobs();saveJobs();updateFilter();
+    const QStringList* files=&temporaryJob_.files;for(const auto& job:savedJobs_)if(job.number==number)files=&job.files;
+    const auto current=catalog_->paths();const QSet<QString> present(current.cbegin(),current.cend());QStringList missing;
+    for(const auto& path:*files)if(!present.contains(path))missing.append(path);
+    if(!missing.isEmpty())catalog_->addPaths(missing,false);
+}
+void MainWindow::clearJobs() {
+    if(queue_->busy())return;
+    savedJobs_.clear();temporaryJob_={0,{},{},{}};jobSelections_.clear();viewedJob_=0;nextJob_=1;
+    jobHistoryLoaded_=true;jobHistoryDirty_=true;jobMenu_->clear();
+    if(statusFilter_->checkedId()==2)statusFilter_->button(0)->setChecked(true);
+    refreshJobs();saveJobs();updateFilter();
+    for(auto it=scrollPositions_.begin();it!=scrollPositions_.end();)if(it.key().startsWith("2:"))it=scrollPositions_.erase(it);else ++it;
+}
 void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse) {
+    jobHistoryDirty_=true;
     SavedJob* saved=&temporaryJob_;
     if(reuse){for(auto& job:savedJobs_)if(job.number==viewedJob_)saved=&job;}
     else if(!temporary){savedJobs_.append({nextJob_++,{},{},{}});saved=&savedJobs_.last();}
@@ -669,6 +691,7 @@ void MainWindow::addPaths(const QStringList& paths) {
 }
 
 void MainWindow::updateFilter() {
+    jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
     const auto key=browserScrollKey();const bool changed=key!=scrollKey_;if(changed)saveBrowserScroll();
     Filter f;const int tab=statusFilter_->checkedId();f.status=(tab==3||tab==4)?tab:0;
     f.restrictPaths=tab==1||tab==2||tab==5;
@@ -746,7 +769,7 @@ void MainWindow::updateCounts() {
     selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);clear_->setText(statusFilter_->checkedId()==2?"Cancel job":"Clear");
     clear_->setToolTip(statusFilter_->checkedId()==2?"Cancel this job’s pending outputs; active conversions finish":"Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?queue_->hasPendingBatch(viewedJob_):statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
-    running_->setEnabled(queue_->busy());workers_->setEnabled(!busy);
+    running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
 }
 void MainWindow::showMetadata() {
     QModelIndex index=selection_->currentIndex();const auto selected=selection_->selectedRows(0);
