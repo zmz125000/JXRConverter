@@ -9,6 +9,8 @@
 #include "settings.hpp"
 #include <QStyleHints>
 #include <QStyle>
+#include <QStyleOption>
+#include <QPainter>
 #include <QMenu>
 #include <QClipboard>
 #include <QButtonGroup>
@@ -66,6 +68,12 @@
 
 namespace jxrc::gui {
 namespace {
+class ToolbarSeparator : public QWidget {
+public:
+    ToolbarSeparator(){setFixedWidth(8);setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Expanding);}
+protected:
+    void paintEvent(QPaintEvent*) override {QStyleOption option;option.initFrom(this);option.state|=QStyle::State_Horizontal;QPainter painter(this);style()->drawPrimitive(QStyle::PE_IndicatorToolBarSeparator,&option,&painter,this);}
+};
 QComboBox* combo(const QStringList& values,const char* name,QWidget* parent=nullptr) {auto* w=new QComboBox(parent);w->addItems(values);w->setObjectName(name);return w;}
 QSpinBox* spin(int low,int high,int initial,const char* name) {auto* w=new QSpinBox;w->setRange(low,high);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
 QDoubleSpinBox* real(double low,double high,double initial,double step,const char* name) {auto* w=new QDoubleSpinBox;w->setRange(low,high);w->setDecimals(2);w->setSingleStep(step);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
@@ -76,7 +84,17 @@ QStringList urlPaths(const QMimeData* mime) {QStringList out;for(const auto& url
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog(this)),proxy_(new CatalogFilter(this)),queue_(new ConversionQueue(this)) {
     OutputCapture::instance();
     setWindowTitle("JXRConverter v" + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
-    proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);selection_=new QItemSelectionModel(proxy_,this);
+    proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);
+    // Register structural guards before the view selection model, whose own
+    // removal handlers emit selectionChanged as filtered rows disappear.
+    connect(proxy_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this]{++selectionModelChanges_;});
+    connect(proxy_,&QAbstractItemModel::modelAboutToBeReset,this,[this]{++selectionModelChanges_;});
+    connect(proxy_,&QAbstractItemModel::layoutAboutToBeChanged,this,[this]{++selectionModelChanges_;});
+    selection_=new QItemSelectionModel(proxy_,this);
+    auto modelChanged=[this]{--selectionModelChanges_;QTimer::singleShot(0,this,&MainWindow::syncSelection);};
+    connect(proxy_,&QAbstractItemModel::rowsRemoved,this,modelChanged);
+    connect(proxy_,&QAbstractItemModel::modelReset,this,modelChanged);
+    connect(proxy_,&QAbstractItemModel::layoutChanged,this,modelChanged);
     catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
     auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
@@ -137,15 +155,23 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");
     auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addWidget(counts_);actionsLayout->addStretch();
     statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
-    const QStringList statusNames={"All","Ready","Queued","Finished","Failed"};
-    for(int i=0;i<statusNames.size();++i){auto* button=new QPushButton(statusNames[i]);button->setObjectName("status"+statusNames[i]);button->setCheckable(true);statusFilter_->addButton(button,i);actionsLayout->addWidget(button);}
-    statusFilter_->button(0)->setChecked(true);statusFilter_->button(1)->setToolTip("Images not yet queued for conversion");statusFilter_->button(2)->setToolTip("Queued and running images");statusFilter_->button(3)->setToolTip("Completed images, including skipped existing outputs");
+    auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
+    auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
+    tab("Job",2,"statusJob")->setToolTip("Browse saved conversion jobs; image clicks leave the selection unchanged");
+    jobSelector_=new QComboBox;jobSelector_->setObjectName("jobSelector");jobSelector_->setMinimumContentsLength(10);jobSelector_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);actionsLayout->addWidget(jobSelector_);
+    tab("Remember",5,"statusRemember")->setToolTip("Every image you clicked or selected");
+    tab("Selected",1,"statusSelected")->setToolTip("Your selection across all views; image clicks leave it unchanged");
+    separator("collectionSeparator");
+    tab("All",0,"statusAll")->setChecked(true);tab("Finished",3,"statusFinished");tab("Failed",4,"statusFailed");
+    separator("selectionSeparator");
     connect(statusFilter_,&QButtonGroup::idClicked,this,&MainWindow::updateFilter);
+    loadJobs();refreshJobs();
+    connect(jobSelector_,&QComboBox::currentIndexChanged,this,[this]{if(jobSelector_->currentIndex()<0)return;viewedJob_=jobSelector_->currentData().toLongLong();refreshJobs();saveJobs();if(statusFilter_->checkedId()==2)updateFilter();});
     auto* selectAll=new QPushButton("Select all");selectAll->setObjectName("selectAllImages");actionsLayout->addWidget(selectAll);
-    connect(selectAll,&QPushButton::clicked,this,[this]{if(views_->currentWidget()==table_)table_->selectAll();else list_->selectAll();});
-    auto* deselect=new QPushButton("Deselect");deselect->setObjectName("deselectImages");actionsLayout->addWidget(deselect);connect(deselect,&QPushButton::clicked,selection_,&QItemSelectionModel::clearSelection);
+    connect(selectAll,&QPushButton::clicked,this,&MainWindow::selectVisible);
+    auto* deselect=new QPushButton("Deselect");deselect->setObjectName("deselectImages");actionsLayout->addWidget(deselect);connect(deselect,&QPushButton::clicked,this,&MainWindow::clearImageSelection);
     remove_=new QPushButton("Remove selected");remove_->setObjectName("removeSelected");actionsLayout->addWidget(remove_);connect(remove_,&QPushButton::clicked,this,[this]{catalog_->removePaths(selectedPaths());});
-    clear_=new QPushButton("Clear");clear_->setObjectName("clearLibrary");actionsLayout->addWidget(clear_);connect(clear_,&QPushButton::clicked,catalog_,&Catalog::clear);layout->addWidget(libraryActions);
+    clear_=new QPushButton("Clear");clear_->setObjectName("clearLibrary");actionsLayout->addWidget(clear_);connect(clear_,&QPushButton::clicked,catalog_,&Catalog::clear);auto* footerScroll=new QScrollArea;footerScroll->setObjectName("libraryFooterScroll");footerScroll->setFrameShape(QFrame::NoFrame);footerScroll->setWidgetResizable(true);footerScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);footerScroll->setWidget(libraryActions);footerScroll->setFixedHeight(libraryActions->sizeHint().height()+style()->pixelMetric(QStyle::PM_ScrollBarExtent)+2);layout->addWidget(footerScroll);
 
     auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
     auto* scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
@@ -188,12 +214,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             if(!fieldIndex.isValid()){QMenu menu;auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");if(menu.exec(view->viewport()->mapToGlobal(point))==reset)resetFilters();return;}
             const int fieldColumn=fieldIndex.column();const QString fieldValue=fieldIndex.data().toString();
             auto index=fieldIndex.siblingAtColumn(0);
-            if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+            if(!collectionView()&&!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
             QMenu menu;QAction* addField=nullptr;
             if(view==table_){addField=menu.addAction("Add this to filters");addField->setObjectName("addFieldToFilters");addField->setEnabled(!fieldValue.isEmpty());addField->setToolTip(catalog_->headerData(fieldColumn,Qt::Horizontal,Qt::DisplayRole).toString()+": "+fieldValue);}
             auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
             auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
-            const QString currentImage=index.data(Catalog::PathRole).toString();
+            const QString currentImage=index.data(Catalog::PathRole).toString();rememberedImages_.insert(currentImage);
             auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!updater_->installing()&&!selectedTargets().isEmpty());
             auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!updater_->installing());
             for(int i=0;i<targets_->count();++i){const auto* item=targets_->item(i);auto* action=convertTo->addAction(item->text());action->setObjectName("convertTarget"+item->data(Qt::UserRole).toString());action->setData(item->data(Qt::UserRole));action->setEnabled(item->flags()&Qt::ItemIsEnabled);}
@@ -241,14 +267,16 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(smoothScrolling_,&QCheckBox::toggled,this,&MainWindow::updatePresentation);connect(thumbnailAspect_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
     connect(thumbnailFit_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
     connect(viewMode_,&QButtonGroup::idClicked,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
-    connect(selection_,&QItemSelectionModel::selectionChanged,this,[this]{updateCounts();showMetadata();});
-    connect(proxy_,&QAbstractItemModel::rowsInserted,this,&MainWindow::updateCounts);connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
+    connect(selection_,&QItemSelectionModel::selectionChanged,this,&MainWindow::changeSelection);
+    for(auto* view:QList<QAbstractItemView*>{list_,table_})connect(view,&QAbstractItemView::clicked,this,[this](const QModelIndex& index){rememberedImages_.insert(index.data(Catalog::PathRole).toString());showMetadata();});
+    connect(proxy_,&QAbstractItemModel::rowsInserted,this,[this]{syncSelection();updateCounts();});connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
     connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this](const QModelIndex&,int first,int last){
         for(int row=first;row<=last;++row){const auto ext=QFileInfo(catalog_->record(row).path).suffix().toLower();if(ext=="jxr"||ext=="wdp"||ext=="hdp"){thumbnailAspect_->setChecked(true);break;}}
         updateAutoThumbnailAspect();
     });
-    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())thumbnailAspectSampleChecked_=false;});
-    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;loggedWarnings_.clear();updateCounts();showMetadata();});
+    connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);rememberedImages_.remove(path);}});
+    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())thumbnailAspectSampleChecked_=false;updateFilter();});
+    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{thumbnailAspectSampleChecked_=false;loggedWarnings_.clear();selectedImages_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& first,const QModelIndex& last){
         updateCounts();showMetadata();updateAutoThumbnailAspect();
         for(int row=first.row();row<=last.row();++row){const auto& record=catalog_->record(row);if(record.metadataWarning.isEmpty())continue;const auto warning=record.path+"\n"+record.metadataWarning;if(!loggedWarnings_.contains(warning)){loggedWarnings_.insert(warning);logMessage("Warning: "+warning);}}
@@ -260,7 +288,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(queue_,&ConversionQueue::progress,this,[this](int done,int total,int active){progress_->setRange(0,total);progress_->setValue(done);queueState_->setText(QString("%1 / %2 outputs finished · %3 active").arg(done).arg(total).arg(active));updateCounts();});
     connect(queue_,&ConversionQueue::batchFinished,this,[this](int success,int failed,int cancelled){queueState_->setText(QString("%1 done · %2 skipped · %3 failed · %4 cancelled").arg(success).arg(queue_->skipped()).arg(failed).arg(cancelled));logMessage(queueState_->text());updateCounts();if(closeWhenIdle_)QTimer::singleShot(0,this,&QWidget::close);});
     auto* deleteShortcut=new QShortcut(QKeySequence::Delete,this);connect(deleteShortcut,&QShortcut::activated,this,[this]{if(!queue_->busy()&&(list_->hasFocus()||table_->hasFocus()))catalog_->removePaths(selectedPaths());});
-    auto* allShortcut=new QShortcut(QKeySequence::SelectAll,this);connect(allShortcut,&QShortcut::activated,this,[this]{if(list_->hasFocus())list_->selectAll();else if(table_->hasFocus())table_->selectAll();});
+    auto* allShortcut=new QShortcut(QKeySequence::SelectAll,this);connect(allShortcut,&QShortcut::activated,this,[this]{if(list_->hasFocus()||table_->hasFocus())selectVisible();});
     for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
         auto* copy=new QShortcut(QKeySequence::Copy,view);copy->setContext(Qt::WidgetWithChildrenShortcut);
         connect(copy,&QShortcut::activated,this,[this]{QList<QUrl> urls;for(const auto& path:selectedPaths())urls.append(QUrl::fromLocalFile(path));if(urls.isEmpty())return;auto* mime=new QMimeData;mime->setUrls(urls);mime->setData("application/x-kde-cutselection","0");qApp->clipboard()->setMimeData(mime);});
@@ -273,6 +301,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     updateMode();updateFilter();updatePresentation();updateCounts();
     QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
+    QTimer::singleShot(0,this,[this]{QStringList files=temporaryJob_;for(const auto& job:savedJobs_)files+=job.files;files.removeDuplicates();if(!files.isEmpty())catalog_->addPaths(files,false);});
     QTimer::singleShot(0,this,[this]{if(loadFolder_->isChecked()&&!recentFolders_.isEmpty())addPaths({recentFolders_.first()});if(loadFiles_->isChecked())addPaths(lastFiles_);});
 }
 MainWindow::~MainWindow() {
@@ -448,6 +477,65 @@ Options MainWindow::optionsForTarget(Target target) const {
     }
     validate(o);return o;
 }
+bool MainWindow::collectionView() const {const int tab=statusFilter_->checkedId();return tab==1||tab==2||tab==5;}
+void MainWindow::syncSelection() {
+    if(selectionModelChanges_||!selection_)return;
+    const bool previous=syncingSelection_;syncingSelection_=true;
+    QItemSelection visible;
+    if(!selectedImages_.isEmpty())for(int row=0;row<proxy_->rowCount();++row){const auto index=proxy_->index(row,0);if(selectedImages_.contains(index.data(Catalog::PathRole).toString()))visible.select(index,index.siblingAtColumn(Catalog::ColumnCount-1));}
+    selection_->select(visible,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+    syncingSelection_=previous;
+}
+void MainWindow::changeSelection(const QItemSelection& selected,const QItemSelection& deselected) {
+    if(syncingSelection_||selectionModelChanges_||collectionView())return;
+    for(const auto& index:deselected.indexes())if(index.column()==0)selectedImages_.remove(index.data(Catalog::PathRole).toString());
+    for(const auto& index:selected.indexes())if(index.column()==0){const auto path=index.data(Catalog::PathRole).toString();selectedImages_.insert(path);rememberedImages_.insert(path);}
+    updateCounts();showMetadata();
+}
+void MainWindow::selectVisible() {
+    for(int row=0;row<proxy_->rowCount();++row){const auto path=proxy_->index(row,0).data(Catalog::PathRole).toString();selectedImages_.insert(path);rememberedImages_.insert(path);}
+    updateFilter();showMetadata();
+}
+void MainWindow::clearImageSelection() {selectedImages_.clear();updateFilter();showMetadata();}
+QString MainWindow::browserScrollKey() const {return QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{})+":"+QString::number(viewMode_->checkedId());}
+void MainWindow::saveBrowserScroll() {
+    if(scrollView_&&!scrollKey_.isEmpty())scrollPositions_[scrollKey_]=QPoint(scrollView_->horizontalScrollBar()->value(),scrollView_->verticalScrollBar()->value());
+}
+void MainWindow::restoreBrowserScroll() {
+    const auto key=scrollKey_;const auto position=scrollPositions_.value(key);auto* view=scrollView_;
+    QTimer::singleShot(0,this,[this,key,position,view]{if(key!=scrollKey_||view!=scrollView_)return;view->doItemsLayout();view->horizontalScrollBar()->setValue(position.x());view->verticalScrollBar()->setValue(position.y());});
+}
+void MainWindow::loadJobs() {
+    QFile file(configDirectory()+"/jobs.json");if(!file.open(QIODevice::ReadOnly)||file.size()>16*1024*1024)return;
+    const auto data=QJsonDocument::fromJson(file.readAll()).object();
+    auto files=[](const QJsonValue& value){QStringList paths;for(const auto& entry:value.toArray())if(entry.isString()&&!entry.toString().isEmpty())paths.append(entry.toString());paths.removeDuplicates();return paths;};
+    temporaryJob_=files(data.value("temporary"));
+    QSet<qint64> ids;
+    for(const auto& value:data.value("jobs").toArray()){
+        const auto object=value.toObject();const auto number=object.value("number").toVariant().toLongLong();
+        if(number<1||ids.contains(number)||number>1000000000)continue;
+        const auto paths=files(object.value("files"));if(paths.isEmpty())continue;
+        savedJobs_.append({number,paths});ids.insert(number);nextJob_=std::max(nextJob_,number+1);
+    }
+    const auto selected=data.value("viewedJob").toVariant().toLongLong();if(ids.contains(selected))viewedJob_=selected;
+}
+void MainWindow::saveJobs() {
+    QJsonArray jobs;for(const auto& job:savedJobs_){QJsonObject object;object.insert("number",QString::number(job.number));object.insert("files",QJsonArray::fromStringList(job.files));jobs.append(object);}
+    QJsonObject object;object.insert("version",1);object.insert("temporary",QJsonArray::fromStringList(temporaryJob_));object.insert("jobs",jobs);object.insert("viewedJob",QString::number(viewedJob_));
+    QSaveFile file(configDirectory()+"/jobs.json");const auto bytes=QJsonDocument(object).toJson();
+    if(!file.open(QIODevice::WriteOnly)||file.write(bytes)!=bytes.size()||!file.commit())logMessage("Warning: cannot save job file lists");
+}
+void MainWindow::refreshJobs() {
+    const QSignalBlocker blocker(jobSelector_);jobSelector_->clear();jobSelector_->addItem(QString("Temporary · %1").arg(temporaryJob_.size()),qint64(0));
+    for(auto it=savedJobs_.crbegin();it!=savedJobs_.crend();++it)jobSelector_->addItem(QString("Job #%1 · %2").arg(it->number).arg(it->files.size()),it->number);
+    jobSelector_->setCurrentIndex(std::max(0,jobSelector_->findData(viewedJob_)));
+    statusFilter_->button(2)->setText(viewedJob_?QString("Job #%1").arg(viewedJob_):"Job · Temp");
+}
+void MainWindow::recordJob(const QStringList& files,bool temporary) {
+    if(temporary){for(const auto& path:files)if(!temporaryJob_.contains(path))temporaryJob_.append(path);viewedJob_=0;}
+    else {viewedJob_=nextJob_++;savedJobs_.append({viewedJob_,files});}
+    refreshJobs();saveJobs();if(statusFilter_->checkedId()==2)updateFilter();
+}
 void MainWindow::applySearch() {appliedSearch_=search_->text();updateFilter();}
 void MainWindow::resetFilters() {
     search_->clear();appliedSearch_.clear();instant_->clear();format_->clear();range_->setCurrentIndex(0);
@@ -488,7 +576,13 @@ void MainWindow::addPaths(const QStringList& paths) {
 }
 
 void MainWindow::updateFilter() {
-    Filter f;f.status=statusFilter_->checkedId();f.search=appliedSearch_;f.text=instant_->text();f.literalText=!metadataFilters_->isChecked();f.today=today_->isChecked();
+    const auto key=browserScrollKey();const bool changed=key!=scrollKey_;if(changed)saveBrowserScroll();
+    Filter f;const int tab=statusFilter_->checkedId();f.status=(tab==3||tab==4)?tab:0;
+    f.restrictPaths=tab==1||tab==2||tab==5;
+    if(tab==1)f.paths=selectedImages_;
+    else if(tab==5)f.paths=rememberedImages_;
+    else if(tab==2){const QStringList* files=&temporaryJob_;for(const auto& job:savedJobs_)if(job.number==viewedJob_)files=&job.files;f.paths=QSet<QString>(files->cbegin(),files->cend());}
+    f.search=appliedSearch_;f.text=instant_->text();f.literalText=!metadataFilters_->isChecked();f.today=today_->isChecked();
     if(metadataFilters_->isChecked()) {
         f.format=format_->text().trimmed();if(range_->currentIndex())f.range=range_->currentText();
         f.minMaxEdge=minImageEdge_->value();f.minMegapixels=megapixels_->value();
@@ -496,7 +590,11 @@ void MainWindow::updateFilter() {
     }
     const bool dates=metadataFilters_->isChecked()&&dateEnabled_->isChecked()&&!f.today;
     dateEnabled_->setEnabled(!f.today);dateFrom_->setEnabled(dates);dateTo_->setEnabled(dates);
-    proxy_->setFilter(f);updateBackgroundMetadata();updateCounts();
+    syncingSelection_=true;proxy_->setFilter(f);syncingSelection_=false;
+    list_->setSelectionMode(collectionView()?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
+    table_->setSelectionMode(collectionView()?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
+    syncSelection();updateBackgroundMetadata();updateCounts();
+    if(changed){scrollKey_=key;scrollView_=qobject_cast<QAbstractItemView*>(views_->currentWidget());restoreBrowserScroll();}
 }
 void MainWindow::updateBackgroundMetadata() {
     const int sort=sort_->currentData().toInt();
@@ -505,6 +603,7 @@ void MainWindow::updateBackgroundMetadata() {
     catalog_->setBackgroundMetadata(metadataSort||metadataFilter||today_->isChecked()||!appliedSearch_.trimmed().isEmpty()||!instant_->text().trimmed().isEmpty());
 }
 void MainWindow::updatePresentation() {
+    saveBrowserScroll();
     const bool details=viewMode_->checkedId()==2,grid=viewMode_->checkedId()==0;
     views_->setCurrentWidget(details?static_cast<QWidget*>(table_):list_);list_->setPresentation(grid,size_->value(),thumbnailAspect_->isChecked());
     list_->setSmoothScrolling(smoothScrolling_->isChecked());table_->setSmoothScrolling(smoothScrolling_->isChecked());
@@ -512,6 +611,7 @@ void MainWindow::updatePresentation() {
     thumbnailAspect_->setMinimumWidth(thumbnailAspect_->sizeHint().width());
     const bool fill=thumbnailFit_->isChecked();thumbnailFit_->setText(fill?"Fill":"Fit");delegate_->fill=fill;table_->setFillThumbnails(fill);
     table_->setIconSize(QSize(size_->value()/2,size_->value()/2));table_->verticalHeader()->setDefaultSectionSize(std::max(32,size_->value()/2+8));
+    updateFilter();
 }
 void MainWindow::updateAutoThumbnailAspect() {
     if(thumbnailAspectSampleChecked_||catalog_->rowCount()<3)return;
@@ -528,9 +628,9 @@ void MainWindow::updateAutoThumbnailAspect() {
     thumbnailAspectSampleChecked_=true;
     if(wide)thumbnailAspect_->setChecked(true);
 }
-QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& index:selection_->selectedRows(0))out<<index.data(Catalog::PathRole).toString();return out;}
+QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(selectedImages_.contains(path))out.append(path);return out;}
 void MainWindow::updateCounts() {
-    const int selected=selection_->selectedRows(0).size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
+    const int selected=selectedImages_.size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
@@ -539,8 +639,10 @@ void MainWindow::updateCounts() {
     selected_->setEnabled(selected>0&&hasTargets&&!busy);visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!busy);cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&!busy);clear_->setEnabled(!busy&&(catalog_->rowCount()>0||catalog_->scanning()));workers_->setEnabled(!busy);
 }
 void MainWindow::showMetadata() {
-    const auto selected=selection_->selectedRows(0);if(selected.isEmpty()){inspector_->clear();return;}
-    const auto& r=catalog_->record(proxy_->mapToSource(selected.first()).row());
+    QModelIndex index=selection_->currentIndex();const auto selected=selection_->selectedRows(0);
+    if(!index.isValid()&&!selected.isEmpty())index=selected.first();
+    if(!index.isValid()){inspector_->clear();return;}
+    const auto& r=catalog_->record(proxy_->mapToSource(index).row());
     QString text=r.path+"\n\n"+QString("%1 × %2 · %3 · %4 bit\n%5 · %6\nStatus: %7\n").arg(r.width).arg(r.height).arg(r.format).arg(r.bits).arg(r.transfer,r.primaries,r.status);
     text+="\nCreated: "+r.created.toString("yyyy-MM-dd HH:mm:ss")+"\nModified: "+r.modified.toString("yyyy-MM-dd HH:mm:ss")+"\nEXIF date: "+r.captured.toString("yyyy-MM-dd HH:mm:ss")+"\n";
     if(!r.error.isEmpty())text+="\n"+r.error+"\n";
@@ -580,9 +682,10 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
             if(inputs.contains(QFileInfo(job.output).absoluteFilePath().toCaseFolded()))throw std::invalid_argument("Output would replace an input file");
             if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
         }
+        QStringList jobFiles;for(const auto& job:jobs)if(!jobFiles.contains(job.input))jobFiles.append(job.input);
         if(priority)queue_->enqueueNext(std::move(jobs),workers_->value());
         else queue_->start(std::move(jobs),workers_->value());
-        updateCounts();
+        recordJob(jobFiles,priority);updateCounts();
     } catch(const std::exception& e){logMessage("Cannot start conversion: "+QString::fromUtf8(e.what()));QMessageBox::warning(this,"Cannot start conversion",QString::fromUtf8(e.what()));}
 }
 void MainWindow::logMessage(const QString& message) {outputLog_->appendPlainText("["+QTime::currentTime().toString("HH:mm:ss")+"] "+message);}

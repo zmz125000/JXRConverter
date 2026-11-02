@@ -400,8 +400,7 @@ QString catalogFieldKey(int column) {
 }
 bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     const auto& r=static_cast<Catalog*>(sourceModel())->record(row);const auto& f=filter_;
-    if(f.status==1&&r.status!="Ready")return false;
-    if(f.status==2&&r.status!="Queued"&&r.status!="Converting"&&!r.status.startsWith("In progress"))return false;
+    if(f.restrictPaths&&!f.paths.contains(r.path))return false;
     if(f.status==3&&!r.status.startsWith("Done")&&r.status!="Skipped")return false;
     if(f.status==4&&r.status!="Failed")return false;
     const QString haystack=r.path+" "+r.format+" "+dimensions(r)+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+QString::number(r.bits)+" bit "+r.exif.keys().join(' ')+" "+r.exif.values().join(' ');

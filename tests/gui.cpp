@@ -98,6 +98,7 @@ private slots:
         applyDesktopStyle();
         QVERIFY(temp_.isValid());QStandardPaths::setTestModeEnabled(true);QCoreApplication::setOrganizationName("JxrcTests");QCoreApplication::setApplicationName("DesktopTests");appSettings().clear();
     }
+    void init() {QFile::remove(configDirectory()+"/jobs.json");}
     void metadataAndThumbnails() {
         const auto file=makeImage(root("metadata"),"orange.jpg",128,64,400);QVERIFY(!file.isEmpty());
         const auto metadata=readMetadata(file);QCOMPARE(metadata.width,128);QCOMPARE(metadata.height,64);QCOMPARE(metadata.iso,400);
@@ -478,31 +479,84 @@ private slots:
     }
     void libraryFooterAndStatusFilters() {
         appSettings().clear();MainWindow window;window.show();
-        auto* progress=window.findChild<QProgressBar*>("conversionProgress");QVERIFY(progress);
-        progress->setRange(0,100);progress->setValue(60);QCOMPARE(progress->text(),QString("60% (60/100)"));
-        const auto a=makeImage(root("footer"),"a.jpg",32,24,100);
-        const auto b=makeImage(root("footer"),"b.jpg",32,24,100);
-        const auto c=makeImage(root("footer"),"c.jpg",32,24,100);
+        auto* progress=window.findChild<QProgressBar*>("conversionProgress");progress->setRange(0,100);progress->setValue(60);QCOMPARE(progress->text(),QString("60% (60/100)"));
+        const auto a=makeImage(root("footer"),"a.jpg",32,24,100),b=makeImage(root("footer"),"b.jpg",32,24,100),c=makeImage(root("footer"),"c.jpg",32,24,100);
         window.addPaths({a,b,c});QTRY_COMPARE(window.catalog()->rowCount(),3);
-        auto* footer=window.findChild<QWidget*>("libraryActions");QVERIFY(footer);
-        auto* view=window.findChild<FileListView*>();
+        auto* footer=window.findChild<QWidget*>("libraryActions");auto* view=window.findChild<FileListView*>();
         footer->findChild<QPushButton*>("selectAllImages")->click();QCOMPARE(view->selectionModel()->selectedRows().size(),3);
         footer->findChild<QPushButton*>("deselectImages")->click();QVERIFY(view->selectionModel()->selectedRows().isEmpty());
         window.catalog()->setStatus(b,"Done");window.catalog()->setStatus(c,"Failed","failure");
-        footer->findChild<QPushButton*>("statusReady")->click();QCOMPARE(window.filterModel()->rowCount(),1);QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),a);
-        window.catalog()->setStatus(a,"Queued");QCOMPARE(window.filterModel()->rowCount(),0);
-        footer->findChild<QPushButton*>("statusQueued")->click();QCOMPARE(window.filterModel()->rowCount(),1);
-        for(const auto& status:{"Queued","Converting","In progress · 1 outputs remaining"}) {
-            window.catalog()->setStatus(a,status);QCOMPARE(window.filterModel()->rowCount(),1);
-        }
-        window.catalog()->setStatus(a,"Ready");QCOMPARE(window.filterModel()->rowCount(),0);
-        window.catalog()->setStatus(a,"Done");QCOMPARE(window.filterModel()->rowCount(),0);
-        window.catalog()->setStatus(a,"Queued");QCOMPARE(window.filterModel()->rowCount(),1);
         footer->findChild<QPushButton*>("statusFinished")->click();QCOMPARE(window.filterModel()->rowCount(),1);
         window.catalog()->setStatus(b,"Skipped");QCOMPARE(window.filterModel()->rowCount(),1);
         footer->findChild<QPushButton*>("statusFailed")->click();QCOMPARE(window.filterModel()->rowCount(),1);QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),c);
         footer->findChild<QPushButton*>("statusAll")->click();QCOMPARE(window.filterModel()->rowCount(),3);
+        QVERIFY(footer->findChild<QWidget*>("collectionSeparator"));QVERIFY(footer->findChild<QWidget*>("selectionSeparator"));
         footer->findChild<QPushButton*>("clearLibrary")->click();QCOMPARE(window.catalog()->rowCount(),0);
+    }
+    void selectionAcrossLibraryTabs() {
+        appSettings().clear();MainWindow window;window.show();
+        const auto a=makeImage(root("tab-selection"),"a.jpg",32,24,100),b=makeImage(root("tab-selection"),"b.jpg",32,24,100),c=makeImage(root("tab-selection"),"c.jpg",32,24,100);
+        window.addPaths({a,b,c});QTRY_COMPARE(window.catalog()->rowCount(),3);
+        auto* view=window.findChild<FileListView*>();auto* model=window.filterModel();auto* selection=view->selectionModel();
+        selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        selection->select(model->index(1,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        window.catalog()->setStatus(b,"Done");window.catalog()->setStatus(c,"Failed");
+        auto tab=[&](const char* name){window.findChild<QPushButton*>(name)->click();};
+        tab("statusFinished");QCOMPARE(model->rowCount(),1);QCOMPARE(selection->selectedRows().size(),1);
+        QVERIFY(window.findChild<QLabel*>("catalogCounts")->text().contains("2 selected"));
+        tab("statusAll");QCOMPARE(selection->selectedRows().size(),2);
+        tab("statusSelected");QCOMPARE(model->rowCount(),2);QCOMPARE(view->selectionMode(),QAbstractItemView::NoSelection);
+        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,view->visualRect(model->index(0,0)).center());QCOMPARE(model->rowCount(),2);QCOMPARE(selection->selectedRows().size(),2);
+        tab("statusRemember");QCOMPARE(model->rowCount(),2);QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(model->index(1,0)).center());
+        tab("statusSelected");QCOMPARE(model->rowCount(),2);
+        tab("statusJob");QCOMPARE(model->rowCount(),0);tab("statusSelected");QCOMPARE(model->rowCount(),2);
+        tab("statusAll");auto* instant=window.findChild<QLineEdit*>("instantFilter");instant->setText("c.jpg");QCOMPARE(model->rowCount(),1);instant->clear();QCOMPARE(selection->selectedRows().size(),2);
+        // Automatic status-driven row removal must not deselect hidden images.
+        tab("statusFinished");window.catalog()->setStatus(b,"Failed");QCOMPARE(model->rowCount(),0);
+        tab("statusAll");QTRY_COMPARE(selection->selectedRows().size(),2);
+        window.findChild<QButtonGroup*>("viewMode")->button(2)->click();QCOMPARE(window.findChild<FileTableView*>()->selectionModel()->selectedRows().size(),2);
+        tab("statusSelected");window.findChild<QPushButton*>("deselectImages")->click();QCOMPARE(model->rowCount(),0);
+        tab("statusRemember");QCOMPARE(model->rowCount(),2);
+    }
+    void libraryTabScrollPositions() {
+        appSettings().clear();MainWindow window;window.resize(1200,700);window.show();
+        const auto directory=root("tab-scroll");const auto source=makeImage(directory,"00.jpg",32,24,100);QStringList files{source};
+        for(int i=1;i<50;++i){const auto file=directory+QString("/%1.jpg").arg(i,2,10,QChar('0'));QVERIFY(QFile::copy(source,file));files.append(QFileInfo(file).canonicalFilePath());}
+        window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),50);
+        window.findChild<QButtonGroup*>("viewMode")->button(1)->click();window.findChild<QSlider*>("thumbnailSize")->setValue(100);
+        auto* view=window.findChild<FileListView*>();auto* bar=view->verticalScrollBar();
+        window.findChild<QPushButton*>("selectAllImages")->click();for(int row=0;row<25;++row)window.catalog()->setStatus(files[row],"Done");
+        QTRY_VERIFY(bar->maximum()>0);QTest::qWait(20);const int allPosition=bar->maximum()/2;bar->setValue(allPosition);
+        window.findChild<QPushButton*>("statusFinished")->click();QTest::qWait(20);QVERIFY(bar->maximum()>0);const int finishedPosition=bar->maximum();bar->setValue(finishedPosition);
+        window.findChild<QPushButton*>("statusRemember")->click();QTest::qWait(20);const int rememberedPosition=bar->maximum()/3;bar->setValue(rememberedPosition);
+        window.findChild<QPushButton*>("statusAll")->click();QTRY_COMPARE(bar->value(),allPosition);
+        window.findChild<QPushButton*>("statusFinished")->click();QTRY_COMPARE(bar->value(),finishedPosition);
+        window.findChild<QPushButton*>("statusRemember")->click();QTRY_COMPARE(bar->value(),rememberedPosition);
+    }
+    void jobFileListsAndRestore() {
+        appSettings().clear();const auto a=makeImage(root("job-history"),"a.jpg",64,48,100),b=makeImage(root("job-history"),"b.jpg",64,48,100),c=makeImage(root("job-history"),"c.jpg",64,48,100);
+        {
+            MainWindow window;window.show();window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
+            window.findChild<QLineEdit*>("outputDirectory")->setText(root("job-history-output"));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
+            window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);
+            auto* selector=window.findChild<QComboBox*>("jobSelector");QCOMPARE(selector->count(),2);QCOMPARE(selector->currentData().toLongLong(),1);
+            auto* view=window.findChild<FileListView*>();view->selectionModel()->select(window.filterModel()->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+            window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),2);QCOMPARE(selector->currentData().toLongLong(),2);
+            window.addPaths({c});QTRY_COMPARE(window.catalog()->rowCount(),3);
+            auto single=[&](int row){bool chosen=false;QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("convertImage");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});view->customContextMenuRequested(view->visualRect(window.filterModel()->index(row,0)).center());return chosen;};
+            QVERIFY(single(2));QTRY_COMPARE(done.count(),3);QVERIFY(single(1));QTRY_COMPARE(done.count(),4);
+            QCOMPARE(selector->count(),3);QCOMPARE(selector->currentData().toLongLong(),0);
+            window.findChild<QPushButton*>("statusJob")->click();QCOMPARE(window.filterModel()->rowCount(),2);
+            selector->setCurrentIndex(selector->findData(qint64(1)));QCOMPARE(window.filterModel()->rowCount(),2);
+            const auto selected=view->selectionModel()->selectedRows().size();
+            QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(window.filterModel()->index(0,0)).center());QCOMPARE(view->selectionModel()->selectedRows().size(),selected);
+            window.findChild<QPushButton*>("statusRemember")->click();window.findChild<QPushButton*>("statusSelected")->click();QCOMPARE(selector->currentData().toLongLong(),1);
+            QFile file(configDirectory()+"/jobs.json");QVERIFY(file.open(QIODevice::ReadOnly));const auto json=QJsonDocument::fromJson(file.readAll()).object();QCOMPARE(json.value("jobs").toArray().size(),2);QCOMPARE(json.value("temporary").toArray().size(),2);
+        }
+        MainWindow restored;restored.show();QTRY_COMPARE(restored.catalog()->rowCount(),3);QVERIFY(!restored.queue()->busy());
+        auto* selector=restored.findChild<QComboBox*>("jobSelector");QCOMPARE(selector->count(),3);QCOMPARE(selector->currentData().toLongLong(),1);
+        restored.findChild<QPushButton*>("statusJob")->click();QCOMPARE(restored.filterModel()->rowCount(),2);
+        selector->setCurrentIndex(selector->findData(qint64(2)));QCOMPARE(restored.filterModel()->rowCount(),1);QCOMPARE(restored.filterModel()->index(0,0).data(Catalog::PathRole).toString(),a);
     }
     void collapsedQueueAndDateFolders() {
         appSettings().clear();
