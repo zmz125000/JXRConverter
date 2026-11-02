@@ -36,6 +36,8 @@
 #include <QScopeGuard>
 #include <QMenu>
 #include <QAction>
+#include <QActionGroup>
+#include <QToolBar>
 #include <QTimer>
 #include <QWheelEvent>
 #include <QTemporaryDir>
@@ -402,8 +404,26 @@ private slots:
         Catalog model;model.setBackgroundMetadata(false);model.setAspectSampling(false);model.addPaths(files);QTRY_COMPARE(model.rowCount(),3);model.setBackgroundMetadata(false);QTest::qWait(50);QCOMPARE(model.metadataJobCount(),0);QVERIFY(!model.record(0).inspected);
         model.setAspectSampling(true);QTRY_VERIFY(model.record(0).inspected&&model.record(1).inspected);QVERIFY(!model.record(2).inspected);
     }
+    void portraitGateAndToolbarJobActions() {
+        appSettings().clear();
+        {
+            MainWindow window;window.show();auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");auto* portrait=window.findChild<QCheckBox*>("portraitThumbnailAspect");auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");
+            QVERIFY(automatic->x()<portrait->x());QVERIFY(portrait->x()<aspect->x());QVERIFY(!portrait->isChecked());
+            auto* clear=window.findChild<QAction*>("clearJobs");QVERIFY(clear);auto* toolbar=window.findChild<QToolBar*>();QVERIFY(qobject_cast<QToolButton*>(toolbar->widgetForAction(clear)));
+            auto* first=savedJob(window,0);QVERIFY(first->actionGroup());QVERIFY(first->actionGroup()->isExclusive());
+            const auto a=makeImage(root("portrait-gate"),"a.jpg",90,160,100),b=makeImage(root("portrait-gate"),"b.jpg",99,176,100);
+            window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);QTRY_VERIFY(inspected(*window.catalog()));QTest::qWait(70);QCOMPARE(aspect->text(),QString("1:1"));
+            portrait->setChecked(true);QTRY_COMPARE(aspect->text(),QString("9:16"));portrait->setChecked(false);QCOMPARE(aspect->text(),QString("1:1"));
+            automatic->setChecked(false);aspect->menu()->actions()[4]->trigger();QCOMPARE(aspect->text(),QString("3:4"));automatic->setChecked(true);QCOMPARE(aspect->text(),QString("1:1"));
+            portrait->setChecked(true);QTRY_COMPARE(aspect->text(),QString("9:16"));
+            window.findChild<QLineEdit*>("outputDirectory")->setText(root("portrait-gate-output"));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);
+            QCOMPARE(savedJob(window,1)->actionGroup(),savedJob(window,0)->actionGroup());QVERIFY(savedJob(window,1)->isChecked());QVERIFY(!savedJob(window,0)->isChecked());
+            clear->trigger();QVERIFY(savedJob(window,0)->actionGroup()->isExclusive());QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),1);
+        }
+        MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("portraitThumbnailAspect")->isChecked());
+    }
     void viewportAspectSamplingAndAutoPersistence() {
-        appSettings().clear();QStringList files;const auto directory=root("viewport-ar");
+        appSettings().clear();appSettings().setValue("controls/portraitThumbnailAspect",true);QStringList files;const auto directory=root("viewport-ar");
         for(int i=0;i<30;++i)files.append(makeImage(directory,QString("%1.jpg").arg(i,2,10,QChar('0')),i<15?160:90,i<15?90:160,100));
         {
             MainWindow window;window.resize(1400,760);window.show();window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),30);
@@ -645,7 +665,7 @@ private slots:
             window.findChild<QPushButton*>("statusAll")->click();QCOMPARE(window.findChild<QToolButton*>("statusJob")->text(),QString("Jobs"));
             window.findChild<QLineEdit*>("outputDirectory")->setText(root("job-startup-output"));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
             window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);QVERIFY(savedJob(window,12));QCOMPARE(appSettings().value("jobs/nextNumber").toLongLong(),13);
-            window.findChild<QPushButton*>("clearJobs")->click();QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),1);QCOMPARE(window.catalog()->rowCount(),2);QCOMPARE(appSettings().value("jobs/nextNumber").toLongLong(),1);
+            window.findChild<QAction*>("clearJobs")->trigger();QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),1);QCOMPARE(window.catalog()->rowCount(),2);QCOMPARE(appSettings().value("jobs/nextNumber").toLongLong(),1);
             QCOMPARE(window.findChild<QToolButton*>("statusJob")->text(),QString("Jobs"));
             window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,1));QVERIFY(!savedJob(window,12));
             window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(false);

@@ -141,7 +141,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     });
     loadFolder_=check("Load last folder","loadLastFolder");loadFiles_=check("Load last files","loadLastFiles");toolbar->addWidget(loadFolder_);toolbar->addWidget(loadFiles_);
     loadJobs_=check("Load jobs","loadPreviousJobs");loadJobs_->setToolTip("Restore saved job lists on startup. Job images load only when you select a job.");toolbar->addWidget(loadJobs_);
-    clearJobs_=new QPushButton("Clear jobs");clearJobs_->setObjectName("clearJobs");clearJobs_->setToolTip("Clear saved jobs and reset job numbering. Images already in the library stay available.");toolbar->addWidget(clearJobs_);connect(clearJobs_,&QPushButton::clicked,this,&MainWindow::clearJobs);
+    clearJobs_=toolbar->addAction("Clear jobs");clearJobs_->setObjectName("clearJobs");clearJobs_->setToolTip("Clear saved jobs and reset job numbering. Images already in the library stay available.");connect(clearJobs_,&QAction::triggered,this,&MainWindow::clearJobs);
     auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
     recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
@@ -176,11 +176,13 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* direction=new QPushButton("Ascending");direction->setObjectName("sortDirection");viewBar->addWidget(new QLabel("Sort"));viewBar->addWidget(sort_);viewBar->addWidget(direction);viewBar->addStretch();
     smoothScrolling_=new QCheckBox("Smooth scrolling");smoothScrolling_->setObjectName("smoothScrolling");
     smoothScrolling_->setToolTip("Animate scrolling in the image grid, list and details views.");viewBar->addWidget(smoothScrolling_);
+    autoAspect_=check("Auto","autoThumbnailAspect",true);autoAspect_->setToolTip("Sample two images on import and in the viewport’s first row when scrolling. Ratio ranges choose the shape; disagreement keeps the current shape.");viewBar->addWidget(autoAspect_);
+    portraitAspect_=check("Portrait","portraitThumbnailAspect");portraitAspect_->setToolTip("Allow Auto to choose portrait cells. Off limits automatic cell shapes to landscape or 1:1; manual ratio choices remain available.");viewBar->addWidget(portraitAspect_);
     thumbnailAspect_=new PopupButton;thumbnailAspect_->setObjectName("thumbnailAspect");thumbnailAspect_->setText("1:1");
     auto* aspectMenu=new QMenu(thumbnailAspect_);thumbnailAspect_->setMenu(aspectMenu);auto* aspectActions=new QActionGroup(this);aspectActions->setExclusive(true);
     for(int i=0;i<aspectNames.size();++i){auto* action=aspectMenu->addAction(aspectNames[i]);action->setData(i);action->setCheckable(true);action->setChecked(i==aspectIndex_);aspectActions->addAction(action);connect(action,&QAction::triggered,this,[this,i]{setThumbnailAspect(i);});}
     thumbnailAspect_->setToolTip("Thumbnail cell aspect ratio; images retain their original proportions");viewBar->addWidget(thumbnailAspect_);
-    autoAspect_=check("Auto","autoThumbnailAspect",true);autoAspect_->setToolTip("Sample two images on import and in the viewport’s first row when scrolling. Ratio ranges choose the shape; disagreement keeps the current shape.");viewBar->addWidget(autoAspect_);
+
     aspectTimer_=new QTimer(this);aspectTimer_->setSingleShot(true);aspectTimer_->setInterval(50);connect(aspectTimer_,&QTimer::timeout,this,&MainWindow::updateAutoThumbnailAspect);
     thumbnailFit_=new QPushButton("Fit");thumbnailFit_->setObjectName("thumbnailFit");thumbnailFit_->setCheckable(true);
     thumbnailFit_->setToolTip("Fit shows the whole image. Fill crops the image to fill its thumbnail cell. Click to switch.");viewBar->addWidget(thumbnailFit_);
@@ -199,7 +201,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
     jobButton_=new PopupButton;jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
-    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Click to choose a job. Counts: finished / all / skipped / failed (images).");
+    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Click to choose a job. Counts: finished / all / skipped / failed (images).");
     running_=new QPushButton("Running");running_->setObjectName("runningJob");actionsLayout->addWidget(running_);connect(running_,&QPushButton::clicked,this,[this]{const auto batch=queue_->runningBatch();if(batch>=0)showJob(batch);});
     tab("Remember",5,"statusRemember")->setToolTip("Images you clicked or individually selected; Select all does not add images");
     tab("Selected",1,"statusSelected")->setToolTip("Your selection across all views; image clicks leave it unchanged");
@@ -316,7 +318,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
     connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(column);direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
     connect(smoothScrolling_,&QCheckBox::toggled,this,&MainWindow::updatePresentation);
-    connect(autoAspect_,&QCheckBox::toggled,this,[this](bool on){catalog_->setAspectSampling(on);if(on)requestAspectSample(list_->verticalScrollBar()->value()>0);else{aspectSamplePending_=false;aspectTimer_->stop();}});
+    connect(autoAspect_,&QCheckBox::toggled,this,[this](bool on){catalog_->setAspectSampling(on);if(on){if(!portraitAspect_->isChecked()&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);}else{aspectSamplePending_=false;aspectTimer_->stop();}});
+    connect(portraitAspect_,&QCheckBox::toggled,this,[this](bool on){if(!autoAspect_->isChecked())return;if(!on&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);});
     connect(list_,&FileListView::viewportChanged,this,[this]{if(!changingAspect_&&viewMode_->checkedId()==0&&!(aspectSamplePending_&&!aspectViewportSample_))requestAspectSample(true);});
     connect(thumbnailFit_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
     connect(viewMode_,&QButtonGroup::idClicked,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
@@ -374,7 +377,7 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {checkUpdates_,smoothScrolling_,autoAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
+    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
         formatFolders_,dateFolders_,jobFolders_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
@@ -594,7 +597,7 @@ QString MainWindow::jobText(qint64 number) const {
 void MainWindow::refreshJobs() {
     QVector<qint64> ids{0};for(auto it=savedJobs_.crbegin();it!=savedJobs_.crend();++it)ids.append(it->number);
     for(int i=0;i<ids.size();++i){const auto number=ids[i];QAction* action=nullptr;for(auto* candidate:jobMenu_->actions())if(candidate->data().toLongLong()==number){action=candidate;break;}
-        if(!action){action=new QAction(jobMenu_);action->setData(number);action->setCheckable(true);jobMenu_->insertAction(jobMenu_->actions().value(i),action);connect(action,&QAction::triggered,this,[this,number]{showJob(number);});}
+        if(!action){action=new QAction(jobMenu_);action->setData(number);action->setCheckable(true);jobActions_->addAction(action);jobMenu_->insertAction(jobMenu_->actions().value(i),action);connect(action,&QAction::triggered,this,[this,number]{showJob(number);});}
         action->setText(jobText(number));action->setChecked(number==viewedJob_);
     }
     jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
@@ -753,7 +756,8 @@ void MainWindow::updateAutoThumbnailAspect() {
         const double ratio=double(record.width)/record.height;
         // Near-square images use square cells. Landscape and portrait ranges
         // are mirrored, with 1.6 separating 4:3 and 16:9 landscape cells.
-        const int match=ratio>=1.6?0:ratio>1.1?1:ratio<1.0/1.6?3:ratio<1.0/1.1?4:2;
+        int match=ratio>=1.6?0:ratio>1.1?1:ratio<1.0/1.6?3:ratio<1.0/1.1?4:2;
+        if(!portraitAspect_->isChecked()&&match>=3)match=2;
         if(choice<0)choice=match;else if(choice!=match){aspectSamplePending_=false;return;}
     }
     aspectSamplePending_=false;setThumbnailAspect(choice);
