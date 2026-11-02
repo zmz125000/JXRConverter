@@ -21,7 +21,8 @@ struct Record {
     int width = 0, height = 0, bits = 0, iso = 0;
     double aperture = 0, shutter = 0, focal = 0;
     bool raw = false, gainmap = false, hdr = false, inspected = false, thumbnailPending = false, thumbnailFailed = false;
-    QDateTime captured, modified;
+    QDateTime captured, created, modified;
+    QDateTime imageDate() const { return captured.isValid()?captured:modified.isValid()?modified:created; }
     QMap<QString, QString> exif;
 };
 bool supportedFile(const QString& path);
@@ -31,7 +32,7 @@ QImage readThumbnail(const QString& path, int edge = 384, const std::function<bo
 class Catalog : public QAbstractTableModel {
     Q_OBJECT
 public:
-    enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, ColumnCount };
+    enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, Created, Modified, ExifDate, ColumnCount };
     enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole };
     explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 128*1024);
     ~Catalog() override;

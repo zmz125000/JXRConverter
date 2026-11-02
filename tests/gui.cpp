@@ -28,6 +28,10 @@
 #include <QScrollBar>
 #include <QPushButton>
 #include <QProgressBar>
+#include <QDateEdit>
+#include <QMenu>
+#include <QAction>
+#include <QTimer>
 #include <QWheelEvent>
 #include <QTemporaryDir>
 #include <exiv2/exiv2.hpp>
@@ -320,6 +324,37 @@ private slots:
         window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
     }
+    void imageDateFallbackAndSingleDayMenu() {
+        appSettings().clear();
+        const auto directory=root("file-dates");QDir().mkpath(directory);
+        auto path=directory+"/no-exif.png";
+        QImage image(32,24,QImage::Format_RGB32);image.fill(Qt::green);QVERIFY(image.save(path));path=QFileInfo(path).canonicalFilePath();
+        const QDateTime modified(QDate(2024,3,7),QTime(12,30));
+        QFile file(path);QVERIFY(file.open(QIODevice::ReadWrite));QVERIFY(file.setFileTime(modified,QFileDevice::FileModificationTime));file.close();
+        const auto record=readMetadata(path);QVERIFY(!record.captured.isValid());QCOMPARE(record.modified,modified);QCOMPARE(record.imageDate(),modified);QCOMPARE(record.created,QFileInfo(path).birthTime());
+        Record creationOnly;creationOnly.created=modified;QCOMPARE(creationOnly.imageDate(),modified);
+        const auto exifPath=makeImage(directory,"with-exif.jpg",32,24,100);
+        const auto exif=readMetadata(exifPath);QCOMPARE(exif.imageDate(),exif.captured);QCOMPARE(exif.imageDate().date(),QDate(2025,6,12));
+        Catalog model;CatalogFilter proxy;proxy.setSourceModel(&model);model.addPaths({path,exifPath});QTRY_COMPARE(model.rowCount(),2);QTRY_VERIFY(inspected(model));
+        proxy.sort(Catalog::Captured);QCOMPARE(proxy.index(0,0).data(Catalog::PathRole).toString(),path);
+        Filter filter;filter.from=modified.date();filter.to=modified.date();proxy.setFilter(filter);QCOMPARE(proxy.rowCount(),1);
+        const int row=proxy.mapToSource(proxy.index(0,0)).row();
+        QCOMPARE(model.index(row,Catalog::Captured).data().toString(),modified.toString("yyyy-MM-dd HH:mm:ss"));
+        QCOMPARE(model.index(row,Catalog::Modified).data().toString(),modified.toString("yyyy-MM-dd HH:mm:ss"));
+        QCOMPARE(model.index(row,Catalog::Created).data().toString(),record.created.toString("yyyy-MM-dd HH:mm:ss"));
+        QVERIFY(model.index(row,Catalog::ExifDate).data().toString().isEmpty());
+        MainWindow window;window.show();window.addPaths({path});QTRY_COMPARE(window.catalog()->rowCount(),1);QTRY_VERIFY(window.catalog()->record(0).inspected);
+        auto* view=window.findChild<FileListView*>();const auto index=window.filterModel()->index(0,0);QTRY_VERIFY(!view->visualRect(index).isEmpty());
+        bool enabled=false;
+        QTimer::singleShot(0,&window,[&]{
+            auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;
+            auto* action=menu->findChild<QAction*>("setImageDate");enabled=action&&action->isEnabled();
+            if(enabled){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();
+        });
+        view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(enabled);
+        QVERIFY(window.findChild<QCheckBox*>("dateFilter")->isChecked());
+        QCOMPARE(window.findChild<QDateEdit*>("dateFrom")->date(),modified.date());QCOMPARE(window.findChild<QDateEdit*>("dateTo")->date(),modified.date());QCOMPARE(window.filterModel()->rowCount(),1);
+    }
     void libraryFooterAndStatusFilters() {
         appSettings().clear();MainWindow window;window.show();
         auto* progress=window.findChild<QProgressBar*>("conversionProgress");QVERIFY(progress);
@@ -439,6 +474,32 @@ private slots:
         peak=0;invalidBudget=0;jobs.removeAt(3);queue.start(jobs,2,8);queue.cancelPending();QTRY_COMPARE(done.count(),2);
         QCOMPARE(done[1][0].toInt(),2);QCOMPARE(done[1][2].toInt(),4);QVERIFY(peak.load()<=2);QCOMPARE(invalidBudget.load(),0);
         QCOMPARE(recommendedWorkers(16),4);QCOMPARE(recommendedWorkers(7),1);QCOMPARE(recommendedWorkers(2),1);QCOMPARE(recommendedWorkers(0),1);
+    }
+    void cancelSelectedPendingOutputs() {
+        QSemaphore activeGate;
+        QStringList converted;
+        ConversionQueue queue(nullptr,[&](const std::filesystem::path& input,const std::filesystem::path&,const jxrc::Options&) {
+            const auto name=QString::fromStdString(input.string());
+            if(name=="active")activeGate.acquire();
+            converted.append(name);return jxrc::Result{};
+        });
+        QSignalSpy done(&queue,&ConversionQueue::batchFinished),states(&queue,&ConversionQueue::statusChanged),progress(&queue,&ConversionQueue::progress);
+        QVector<Job> jobs={{"active",root("cancel-selected/active-1"),{}},{"active",root("cancel-selected/active-2"),{}},{"pending",root("cancel-selected/pending-1"),{}},{"pending",root("cancel-selected/pending-2"),{}},{"other",root("cancel-selected/other"),{}}};
+        queue.start(jobs,1,1);
+        const bool hadPending=queue.hasPendingFor({"active","pending","finished","ready"});
+        queue.cancelPendingFor({"finished","ready"});
+        queue.cancelPendingFor({"active","pending","finished","ready"});
+        const bool stillBusy=queue.busy(),selectedPending=queue.hasPendingFor({"active","pending"}),otherPending=queue.hasPendingFor({"other"});
+        // Always release the worker before assertions, including on failure.
+        activeGate.release(2);
+        QVERIFY(hadPending);QVERIFY(stillBusy);QVERIFY(!selectedPending);QVERIFY(otherPending);QCOMPARE(queue.total(),5);
+        QTRY_COMPARE(done.count(),1);
+        QCOMPARE(done[0][0].toInt(),2);QCOMPARE(done[0][1].toInt(),0);QCOMPARE(done[0][2].toInt(),3);
+        QCOMPARE(converted,QStringList({"active","other"}));
+        QCOMPARE(progress.last()[0].toInt(),5);QCOMPARE(progress.last()[1].toInt(),5);
+        QMap<QString,QString> finalStates;for(const auto& state:states)finalStates[state[0].toString()]=state[1].toString();
+        QCOMPARE(finalStates.value("active"),QString("Cancelled"));QCOMPARE(finalStates.value("pending"),QString("Cancelled"));QCOMPARE(finalStates.value("other"),QString("Done"));
+        queue.cancelPendingFor({"active","pending"});QCOMPARE(done.count(),1);
     }
     void outputLayoutAndRawNames() {
         const QString a=makeImage(root("layout/a"),"same.jpg",16,12,100),b=makeImage(root("layout/b"),"same.jpg",16,12,100);

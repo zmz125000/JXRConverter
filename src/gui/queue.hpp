@@ -29,6 +29,8 @@ public:
     ~ConversionQueue() override;
     void start(QVector<Job> jobs, int parallelism, int cores = coreCount());
     void cancelPending();
+    void cancelPendingFor(const QStringList& inputs);
+    bool hasPendingFor(const QStringList& inputs) const;
     bool busy() const { return active_ > 0 || next_ < jobs_.size(); }
     int skipped() const { return skipped_; }
     int total() const { return jobs_.size(); }
@@ -38,6 +40,7 @@ signals:
     void batchFinished(int succeeded, int failed, int cancelled);
 private:
     void pump();
+    void cancelPendingMatching(const QSet<QString>* inputs);
     void finishFile(const Job& job, const QString& error, bool cancelled, bool skipped = false);
     QVector<Job> jobs_;
     int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, skipped_ = 0, limit_ = 1;

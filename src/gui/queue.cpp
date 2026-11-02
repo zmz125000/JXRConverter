@@ -80,9 +80,22 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     for(auto& job:jobs_){job.options.threads=budget;emit statusChanged(job.input,"Queued",job.output);}
     pump();
 }
-void ConversionQueue::cancelPending() {
+bool ConversionQueue::hasPendingFor(const QStringList& inputs) const {
+    const QSet<QString> selected(inputs.cbegin(),inputs.cend());
+    return std::any_of(jobs_.cbegin()+next_,jobs_.cend(),[&](const Job& job){return selected.contains(job.input);});
+}
+void ConversionQueue::cancelPending() { cancelPendingMatching(nullptr); }
+void ConversionQueue::cancelPendingFor(const QStringList& inputs) {
+    const QSet<QString> selected(inputs.cbegin(),inputs.cend());
+    cancelPendingMatching(&selected);
+}
+void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs) {
     if(!busy())return;
-    while(next_<jobs_.size()){const auto& job=jobs_[next_++];++cancelled_;++finished_;finishFile(job,{},true);}
+    // Keep total job count and the order of unselected pending outputs intact.
+    const auto end=std::stable_partition(jobs_.begin()+next_,jobs_.end(),[&](const Job& job){return !inputs||inputs->contains(job.input);});
+    const int stop=int(end-jobs_.begin());
+    if(stop==next_)return;
+    while(next_<stop){const auto& job=jobs_[next_++];++cancelled_;++finished_;finishFile(job,{},true);}
     emit progress(finished_,jobs_.size(),active_);
     if(!busy())emit batchFinished(succeeded_,failed_,cancelled_);
 }

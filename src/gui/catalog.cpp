@@ -47,7 +47,7 @@ void checkCancelled(const std::function<bool()>& cancelled) {
 }
 struct SourceBuffer {
     std::vector<uint8_t> bytes;
-    QDateTime modified;
+    QDateTime created, modified;
 };
 SourceBuffer readSource(const QString& path,const std::function<bool()>& cancelled,QMutex* sourceReadMutex,bool wantMetadata=true) {
     // Hold the HDD/SMB read gate only until this file is loaded and closed.
@@ -58,7 +58,7 @@ SourceBuffer readSource(const QString& path,const std::function<bool()>& cancell
     const qint64 length=file.size();
     if(length<=0||length>512LL*1024*1024)throw std::runtime_error("Input must be 1 byte to 512 MiB");
     SourceBuffer source;auto& bytes=source.bytes;bytes.resize(static_cast<size_t>(length));
-    if(wantMetadata)source.modified=file.fileTime(QFileDevice::FileModificationTime);
+    if(wantMetadata){source.modified=file.fileTime(QFileDevice::FileModificationTime).toLocalTime();source.created=file.fileTime(QFileDevice::FileBirthTime).toLocalTime();}
     for(size_t offset=0;offset<bytes.size();) {
         checkCancelled(cancelled);
         const auto count=file.read(reinterpret_cast<char*>(bytes.data()+offset),qint64(std::min<size_t>(256*1024,bytes.size()-offset)));
@@ -70,7 +70,7 @@ SourceBuffer readSource(const QString& path,const std::function<bool()>& cancell
 Record metadataFromBytes(const QString& path,const SourceBuffer& source,const std::function<bool()>& cancelled,const ImageInfo* sourceInfo=nullptr) {
     const auto& bytes=source.bytes;
     Record r;if(cancelled&&cancelled())return r; r.path = path; QFileInfo file(path);
-    r.name = file.fileName(); r.bytes = qint64(bytes.size()); r.modified = source.modified;
+    r.name = file.fileName(); r.bytes = qint64(bytes.size()); r.modified = source.modified; r.created = source.created;
     r.format = file.suffix().toUpper();
     try {
         if(cancelled&&cancelled())return r;
@@ -86,9 +86,10 @@ Record metadataFromBytes(const QString& path,const SourceBuffer& source,const st
             if (!r.iso) r.iso = int(exifNumber(exif,"Exif.Photo.ISOSpeed"));
             r.aperture = exifNumber(exif,"Exif.Photo.FNumber"); r.shutter = exifNumber(exif,"Exif.Photo.ExposureTime");
             r.focal = exifNumber(exif,"Exif.Photo.FocalLength");
-            QString date = exifText(exif,"Exif.Photo.DateTimeOriginal");
-            if (date.isEmpty()) date = exifText(exif,"Exif.Image.DateTime");
-            r.captured = QDateTime::fromString(date.left(19),"yyyy:MM:dd HH:mm:ss");
+            for(const auto* tag:{"Exif.Photo.DateTimeOriginal","Exif.Photo.DateTimeDigitized","Exif.Image.DateTime"}) {
+                r.captured=QDateTime::fromString(exifText(exif,tag).left(19),"yyyy:MM:dd HH:mm:ss");
+                if(r.captured.isValid())break;
+            }
         }
     } catch (const std::exception& e) { r.metadataWarning = QString::fromUtf8(e.what()); }
     try {
@@ -137,7 +138,7 @@ Catalog::~Catalog() {
 int Catalog::rowCount(const QModelIndex& parent) const { return parent.isValid()?0:records_.size(); }
 int Catalog::columnCount(const QModelIndex& parent) const { return parent.isValid()?0:ColumnCount; }
 QVariant Catalog::headerData(int section, Qt::Orientation orientation, int role) const {
-    static const QStringList headers = {"Name","Format","Dimensions","File size","Captured","Camera","Lens","ISO","Aperture","Shutter","Focal length","Transfer","Primaries","Bit depth","Status"};
+    static const QStringList headers = {"Name","Format","Dimensions","File size","Image date","Camera","Lens","ISO","Aperture","Shutter","Focal length","Transfer","Primaries","Bit depth","Status","Created","Modified","EXIF date"};
     if (orientation == Qt::Horizontal && role == Qt::DisplayRole && section >= 0 && section < headers.size()) return headers[section];
     return {};
 }
@@ -147,7 +148,7 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     if (role == PathRole) return r.path;
     if (role == RawRole) return r.raw;
     if (role == SummaryRole) return QStringList{dimensions(r), r.format, r.transfer}.filter(QRegularExpression(".+")).join(" · ");
-    if (role == Qt::ToolTipRole) return r.path + "\n" + dimensions(r) + "\n" + r.camera + "\n" + r.status + (r.error.isEmpty()?QString{}:"\n"+r.error) + (r.metadataWarning.isEmpty()?QString{}:"\nMetadata: "+r.metadataWarning);
+    if (role == Qt::ToolTipRole) return r.path + "\n" + dimensions(r) + "\n" + r.camera + "\n" + r.imageDate().toString("yyyy-MM-dd HH:mm:ss") + "\n" + r.status + (r.error.isEmpty()?QString{}:"\n"+r.error) + (r.metadataWarning.isEmpty()?QString{}:"\nMetadata: "+r.metadataWarning);
     if ((role == Qt::DecorationRole || role == ThumbnailRole) && index.column() == Name) {
         if(role==ThumbnailRole&&thumbnailFrame_&&!visibleThumbnails_.contains(r.path))
             const_cast<Catalog*>(this)->visibleThumbnails_.append(r.path);
@@ -157,7 +158,8 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     if (role != Qt::DisplayRole) return {};
     switch(index.column()) {
     case Name:return r.name; case Format:return r.format; case Dimensions:return dimensions(r);
-    case Size:return QLocale().formattedDataSize(r.bytes); case Captured:return r.captured.isValid()?r.captured.toString("yyyy-MM-dd HH:mm:ss"):QString{};
+    case Size:return QLocale().formattedDataSize(r.bytes); case Captured:return r.imageDate().toString("yyyy-MM-dd HH:mm:ss");
+    case Created:return r.created.toString("yyyy-MM-dd HH:mm:ss");case Modified:return r.modified.toString("yyyy-MM-dd HH:mm:ss");case ExifDate:return r.captured.toString("yyyy-MM-dd HH:mm:ss");
     case Camera:return r.camera; case Lens:return r.lens; case Iso:return r.iso?QString::number(r.iso):QString{};
     case Aperture:return r.aperture>0?QString("f/%1").arg(r.aperture,0,'f',1):QString{};
     case Shutter:return r.shutter>0?(r.shutter<1?QString("1/%1 s").arg(std::round(1/r.shutter)):QString("%1 s").arg(r.shutter)):QString{};
@@ -424,12 +426,10 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     if(f.range=="HDR"&&(!hdr||r.raw))return false;
     if(f.range=="SDR"&&(hdr||r.raw||r.transfer.isEmpty()))return false;
     if(r.width<f.minWidth||r.height<f.minHeight||std::max(r.width,r.height)<f.minMaxEdge||double(r.width)*r.height/1e6<f.minMegapixels)return false;
-    if(f.from.isValid()&&(!r.captured.isValid()||r.captured.date()<f.from))return false;
-    if(f.to.isValid()&&(!r.captured.isValid()||r.captured.date()>f.to))return false;
-    if(f.today) {
-        const auto date=r.captured.isValid()?r.captured.date():r.modified.date();
-        if(date!=QDate::currentDate())return false;
-    }
+    const auto imageDate=r.imageDate().date();
+    if(f.from.isValid()&&(!imageDate.isValid()||imageDate<f.from))return false;
+    if(f.to.isValid()&&(!imageDate.isValid()||imageDate>f.to))return false;
+    if(f.today&&imageDate!=QDate::currentDate())return false;
     if(f.literalText)return haystack.contains(f.text.trimmed(),Qt::CaseInsensitive);
     for(const auto& word:f.text.split(' ',Qt::SkipEmptyParts))if(!haystack.contains(word,Qt::CaseInsensitive))return false;
     return true;
@@ -439,7 +439,10 @@ bool CatalogFilter::lessThan(const QModelIndex& left,const QModelIndex& right) c
     auto numeric=[&](double x,double y){return x==y?a.path<b.path:x<y;};
     switch(left.column()) {
     case Catalog::Dimensions:return numeric(double(a.width)*a.height,double(b.width)*b.height);
-    case Catalog::Size:return numeric(a.bytes,b.bytes);case Catalog::Captured:return a.captured==b.captured?a.path<b.path:a.captured<b.captured;
+    case Catalog::Size:return numeric(a.bytes,b.bytes);case Catalog::Captured:return a.imageDate()==b.imageDate()?a.path<b.path:a.imageDate()<b.imageDate();
+    case Catalog::Created:return a.created==b.created?a.path<b.path:a.created<b.created;
+    case Catalog::Modified:return a.modified==b.modified?a.path<b.path:a.modified<b.modified;
+    case Catalog::ExifDate:return a.captured==b.captured?a.path<b.path:a.captured<b.captured;
     case Catalog::Iso:return numeric(a.iso,b.iso);case Catalog::Aperture:return numeric(a.aperture,b.aperture);case Catalog::Shutter:return numeric(a.shutter,b.shutter);
     case Catalog::Focal:return numeric(a.focal,b.focal);case Catalog::Bits:return numeric(a.bits,b.bits);default: {
         const int c=QString::localeAwareCompare(sourceModel()->data(left).toString().toCaseFolded(),sourceModel()->data(right).toString().toCaseFolded());return c==0?a.path<b.path:c<0;

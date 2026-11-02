@@ -92,7 +92,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(search_,&QLineEdit::textChanged,this,[this](const QString& text){if(text.isEmpty())applySearch();});
     auto* filters=new QHBoxLayout;instant_=new QLineEdit;instant_->setObjectName("instantFilter");instant_->setPlaceholderText("Instant filter within search results…");instant_->setClearButtonEnabled(true);filters->addWidget(instant_,1);
     metadataFilters_=check("Filters","metadataFilters");filters->addWidget(metadataFilters_);
-    today_=check("Today","todayFilter");today_->setToolTip("Captured today; uses file modification date when no capture date is available.");filters->addWidget(today_);
+    today_=check("Today","todayFilter");today_->setToolTip("Image date is today: EXIF date, falling back to file modification date, then creation date.");filters->addWidget(today_);
     format_=new QLineEdit;format_->setObjectName("formatFilter");format_->setPlaceholderText("e.g. jpg, avif, raw");format_->setClearButtonEnabled(true);
     format_->setToolTip("Enter one or more formats/extensions separated by commas or spaces. JPEG/JPG and RAW camera extensions are supported.");
     layout->addLayout(filters);
@@ -125,7 +125,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(size_,&QSlider::valueChanged,this,[this,sizeValue](int value){const int snapped=((value+5)/10)*10;if(value!=snapped){size_->setValue(snapped);return;}sizeValue->setText(QString::number(value)+" dp");});layout->addLayout(viewBar);
     views_=new QStackedWidget;list_=new FileListView;table_=new FileTableView;delegate_=new ThumbnailDelegate(list_);list_->setItemDelegate(delegate_);
     list_->setModel(proxy_);table_->setModel(proxy_);list_->setSelectionModel(selection_);table_->setSelectionModel(selection_);
-    table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
+    table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);for(int column:{Catalog::Captured,Catalog::Created,Catalog::Modified,Catalog::ExifDate})table_->setColumnWidth(column,170);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
     views_->addWidget(list_);views_->addWidget(table_);layout->addWidget(views_,1);
     counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");layout->addWidget(counts_);
     auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addStretch();
@@ -171,15 +171,19 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         connect(view,&QWidget::customContextMenuRequested,this,[this,view,openImage](const QPoint& point){
             auto index=view->indexAt(point);if(!index.isValid())return;index=index.siblingAtColumn(0);
             if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
-            QMenu menu;auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
-            const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.captured.date();const QString cameraName=record.camera,formatName=record.format;const int depth=record.bits;camera->setEnabled(!cameraName.isEmpty());bits->setEnabled(depth>0);start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
+            QMenu menu;auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
+            const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.imageDate().date();const QString cameraName=record.camera,formatName=record.format;const int depth=record.bits;camera->setEnabled(!cameraName.isEmpty());bits->setEnabled(depth>0);date->setEnabled(captured.isValid());start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
+            const auto queueSelection=selectedPaths();
+            auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
             auto* remove=menu.addAction("Remove selected");remove->setEnabled(!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
-            if(action==camera||action==format||action==bits){
+            if(action==cancelSelected){queue_->cancelPendingFor(queueSelection);}
+            else if(action==camera||action==format||action==bits){
                 QString term=action==camera?"camera:\""+QString(cameraName).replace('"', ' ')+"\"":action==format?"format:\""+formatName+"\"":"bits:"+QString::number(depth);
                 search_->setText((search_->text()+" "+term).trimmed());applySearch();
-            }else if(action==start||action==end){
-                if(action==start){dateFrom_->setDate(captured);if(dateTo_->date()<captured)dateTo_->setDate(captured);}
+            }else if(action==date||action==start||action==end){
+                if(action==date){dateFrom_->setDate(captured);dateTo_->setDate(captured);}
+                else if(action==start){dateFrom_->setDate(captured);if(dateTo_->date()<captured)dateTo_->setDate(captured);}
                 else{dateTo_->setDate(captured);if(dateFrom_->date()>captured)dateFrom_->setDate(captured);}
                 today_->setChecked(false);metadataFilters_->setChecked(true);dateEnabled_->setChecked(true);updateFilter();
             }else if(action==open)openImage(index);else if(action==folder)QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(index.data(Catalog::PathRole).toString()).absolutePath()));else if(action==remove)catalog_->removePaths(selectedPaths());
@@ -492,6 +496,7 @@ void MainWindow::showMetadata() {
     const auto selected=selection_->selectedRows(0);if(selected.isEmpty()){inspector_->clear();return;}
     const auto& r=catalog_->record(proxy_->mapToSource(selected.first()).row());
     QString text=r.path+"\n\n"+QString("%1 × %2 · %3 · %4 bit\n%5 · %6\nStatus: %7\n").arg(r.width).arg(r.height).arg(r.format).arg(r.bits).arg(r.transfer,r.primaries,r.status);
+    text+="\nCreated: "+r.created.toString("yyyy-MM-dd HH:mm:ss")+"\nModified: "+r.modified.toString("yyyy-MM-dd HH:mm:ss")+"\nEXIF date: "+r.captured.toString("yyyy-MM-dd HH:mm:ss")+"\n";
     if(!r.error.isEmpty())text+="\n"+r.error+"\n";
     if(!r.metadataWarning.isEmpty())text+="\nMetadata note: "+r.metadataWarning+"\n";
     text+="\nEXIF\n";for(auto it=r.exif.cbegin();it!=r.exif.cend();++it)text+=it.key()+" = "+it.value()+"\n";inspector_->setPlainText(text);
