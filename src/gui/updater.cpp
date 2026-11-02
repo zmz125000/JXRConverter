@@ -119,7 +119,7 @@ void Updater::downloadRelease(const QByteArray& data) {
         fail("No stable release is available.");return;
     }
     if(QVersionNumber::fromString(version)<=QVersionNumber::fromString(QString::fromStdString(jxrc::version()))) {
-        busy_=false;emit busyChanged(false);emit statusChanged("Update");QMessageBox::information(window_,"Update","You already have the latest release.");return;
+        busy_=false;emit busyChanged(false);emit statusChanged("Latest");return;
     }
     QString system=QStringLiteral(JXRC_PACKAGE_SYSTEM);
 #ifdef Q_OS_WIN
