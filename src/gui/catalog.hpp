@@ -4,7 +4,7 @@
 #include <QDateTime>
 #include <QImage>
 #include <QMap>
-#include <QMutex>
+#include <QSemaphore>
 #include <QSet>
 #include <QSortFilterProxyModel>
 #include <QThreadPool>
@@ -26,8 +26,8 @@ struct Record {
     QMap<QString, QString> exif;
 };
 bool supportedFile(const QString& path);
-Record readMetadata(const QString& path, const std::function<bool()>& cancelled = {}, QMutex* sourceReadMutex = nullptr);
-QImage readThumbnail(const QString& path, int edge = 384, const std::function<bool()>& cancelled = {}, Record* metadata = nullptr, QMutex* sourceReadMutex = nullptr);
+Record readMetadata(const QString& path, const std::function<bool()>& cancelled = {}, QSemaphore* sourceReadSlots = nullptr);
+QImage readThumbnail(const QString& path, int edge = 384, const std::function<bool()>& cancelled = {}, Record* metadata = nullptr, QSemaphore* sourceReadSlots = nullptr);
 
 class Catalog : public QAbstractTableModel {
     Q_OBJECT
@@ -69,7 +69,7 @@ private:
     QVector<Record> records_;
     QSet<QString> known_;
     QThreadPool scans_, workers_;
-    QMutex sourceReadMutex_;
+    QSemaphore sourceReadSlots_{3}; // At most three source handles, shared by thumbnails and metadata.
     static constexpr int ThumbnailBudget = 6;
     std::shared_ptr<std::atomic_bool> epoch_ = std::make_shared<std::atomic_bool>(true);
     std::shared_ptr<std::atomic_bool> metadataToken_;

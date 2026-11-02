@@ -202,39 +202,40 @@ private slots:
         const auto thumbnail=readThumbnail(png,128,{},&metadata);
         QCOMPARE(thumbnail.size(),QSize(128,64));QCOMPARE(metadata.width,1024);QCOMPARE(metadata.height,512);QCOMPARE(metadata.bits,16);
     }
-    void serializedReadsAndParallelDecoding() {
+    void boundedReadsAndParallelDecoding() {
         const auto path=makeImage(root("parallel-thumbs"),"photo.jpg",128,64,100);
-        QMutex sourceReadMutex;QSemaphore readEntered,readRelease,decodeEntered,decodeRelease;
+        QSemaphore sourceReadSlots(3),readEntered,readRelease,decodeEntered,decodeRelease;
         auto run=[&] {
             int checks=0;
             return readThumbnail(path,48,[&] {
                 ++checks;
                 if(checks==2){readEntered.release();readRelease.acquire();}
-                // The first preview_bytes cancellation check runs after the
-                // source file is closed and the reader mutex has been released.
+                // preview_bytes begins after closing the file and releasing
+                // its read slot. All six decoders must reach this together.
                 if(checks==4){decodeEntered.release();decodeRelease.acquire();}
                 return false;
-            },nullptr,&sourceReadMutex);
+            },nullptr,&sourceReadSlots);
         };
-        auto first=std::async(std::launch::async,run),second=std::async(std::launch::async,run);
-        const bool reading=readEntered.tryAcquire(1,3000);
-        const bool concurrentReads=reading&&readEntered.tryAcquire(1,50);
-        readRelease.release(2);
-        const bool parallelDecoding=decodeEntered.tryAcquire(2,3000);
-        decodeRelease.release(2);
-        const auto a=first.get(),b=second.get();
-        QVERIFY(reading);QVERIFY(!concurrentReads);QVERIFY(parallelDecoding);
-        QCOMPARE(a.size(),QSize(48,24));QCOMPARE(b.size(),QSize(48,24));
+        std::vector<std::future<QImage>> jobs;
+        for(int i=0;i<6;++i)jobs.push_back(std::async(std::launch::async,run));
+        const bool parallelReads=readEntered.tryAcquire(3,3000);
+        const bool exceededReadLimit=readEntered.tryAcquire(1,50);
+        readRelease.release(6);
+        const bool parallelDecoding=decodeEntered.tryAcquire(6,3000);
+        decodeRelease.release(6);
+        QList<QImage> images;for(auto& job:jobs)images.append(job.get());
+        QVERIFY(parallelReads);QVERIFY(!exceededReadLimit);QVERIFY(parallelDecoding);
+        for(const auto& image:images)QCOMPARE(image.size(),QSize(48,24));
 
-        // A job cancelled while waiting for the disk gate must not open its file.
-        sourceReadMutex.lock();std::atomic_bool cancel{false};QSemaphore started;
+        // Cancellation while waiting for a read slot must prevent file opens.
+        sourceReadSlots.acquire(3);std::atomic_bool cancel{false};QSemaphore started;
         auto waiting=std::async(std::launch::async,[&] {
             started.release();
-            try{readThumbnail(root("missing.jpg"),48,[&]{return cancel.load();},nullptr,&sourceReadMutex);}
+            try{readThumbnail(root("missing.jpg"),48,[&]{return cancel.load();},nullptr,&sourceReadSlots);}
             catch(const std::exception& e){return QString::fromUtf8(e.what());}
             return QString{};
         });
-        const bool launched=started.tryAcquire(1,3000);cancel.store(true);sourceReadMutex.unlock();
+        const bool launched=started.tryAcquire(1,3000);cancel.store(true);sourceReadSlots.release(3);
         const auto error=waiting.get();QVERIFY(launched);QVERIFY(error.contains("cancelled"));
     }
     void cancellableImageReads() {
