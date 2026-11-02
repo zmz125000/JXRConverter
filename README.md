@@ -25,8 +25,9 @@
     <img src="https://img.shields.io/github/downloads/zmz125000/JXRConverter/total?label=Total%20Downloads&labelColor=27303D&color=0D1117&logo=github&logoColor=FFFFFF&style=flat" alt="LICENSE">
   </a>
 </p>
-A C++17 image conversion library and CLI extracted from [LocalViewer](https://github.com/zmz125000/LocalViewer) .  
+A C++17 image conversion library and CLI extracted from LocalViewer.  
 
+https://github.com/zmz125000/LocalViewer  
 
 Features:  
 
