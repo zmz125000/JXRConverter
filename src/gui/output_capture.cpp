@@ -4,11 +4,17 @@
 #include <QStringConverter>
 #include <cstdio>
 #include <atomic>
+#include <chrono>
 #ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #include <io.h>
 #include <fcntl.h>
 #else
 #include <unistd.h>
+#include <poll.h>
 #include <fcntl.h>
 #include <cerrno>
 #endif
@@ -26,6 +32,21 @@ int readFd(int fd,char* buffer,int size){int n;do{n=int(read(fd,buffer,size));}w
 int writeFd(int fd,const char* buffer,int size){int n;do{n=int(write(fd,buffer,size));}while(n<0&&errno==EINTR);return n;}
 int streamFd(FILE* file){return fileno(file);}
 #endif
+int readableSize(int fd,const std::atomic_bool& stopping,int capacity) {
+    while(!stopping.load()) {
+#ifdef _WIN32
+        DWORD available=0;
+        if(!PeekNamedPipe(reinterpret_cast<HANDLE>(_get_osfhandle(fd)),nullptr,0,nullptr,&available,nullptr))return 0;
+        if(available)return available<DWORD(capacity)?int(available):capacity;
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+#else
+        pollfd channel{fd,POLLIN,0};const int result=poll(&channel,1,50);
+        if(result>0)return channel.revents&(POLLIN|POLLHUP)?capacity:0;
+        if(result<0&&errno!=EINTR)return 0;
+#endif
+    }
+    return 0;
+}
 }
 OutputCapture* OutputCapture::instance() {
     static auto* capture=new OutputCapture(QCoreApplication::instance());return capture;
@@ -52,8 +73,9 @@ OutputCapture::OutputCapture(QObject* parent):QObject(parent) {
     }
     try {
         reader_=std::thread([this,fd=channel[0]] {
-            QStringDecoder decode(QStringDecoder::Utf8);char buffer[8192];int count;
-            while((count=readFd(fd,buffer,sizeof(buffer)))>0) {
+            QStringDecoder decode(QStringDecoder::Utf8);char buffer[8192];
+            while(const int capacity=readableSize(fd,stopping_,sizeof(buffer))) {
+                const int count=readFd(fd,buffer,capacity);if(count<=0)break;
                 // Preserve terminal/debug-console diagnostics as well as the tab.
                 for(int offset=0;offset<count;) {const int n=writeFd(savedErr_,buffer+offset,count-offset);if(n<=0)break;offset+=n;}
                 const QString text=decode(QByteArrayView(buffer,count));
@@ -75,6 +97,9 @@ OutputCapture::~OutputCapture() {
     if(active.load()==this){qInstallMessageHandler(previous_);active.store(nullptr);}
     std::fflush(stdout);std::fflush(stderr);
     if(savedOut_>=0)redirect(savedOut_,out_);if(savedErr_>=0)redirect(savedErr_,err_);
+    // Detached children can retain duplicated stdout/stderr pipe writers.
+    // Shutdown must not depend on those children exiting before this process.
+    stopping_.store(true);
     if(reader_.joinable())reader_.join();closeFd(savedOut_);closeFd(savedErr_);
 }
 }

@@ -54,6 +54,8 @@
 #include <QToolButton>
 #include <QLabel>
 #include <QPlainTextEdit>
+#include <QProcess>
+#include "output_capture.hpp"
 #include <cstdio>
 #include <cstring>
 #include "settings.hpp"
@@ -411,6 +413,15 @@ private slots:
             automatic->setChecked(false);aspect->menu()->actions()[4]->trigger();view->verticalScrollBar()->setValue(0);QTest::qWait(100);QCOMPARE(aspect->text(),QString("3:4"));
         }
         MainWindow restored;restored.show();QVERIFY(!restored.findChild<QCheckBox*>("autoThumbnailAspect")->isChecked());QCOMPARE(restored.findChild<QToolButton*>("thumbnailAspect")->text(),QString("3:4"));
+    }
+    void detachedLogCaptureShutdown() {
+        QTemporaryDir directory;QVERIFY(directory.isValid());const auto marker=directory.filePath("parent-exited");
+        QProcess process;process.start(QCoreApplication::applicationFilePath(),{"--capture-exit-probe",marker});QVERIFY(process.waitForStarted());
+        const bool finished=process.waitForFinished(5000);
+        if(!finished){process.kill();process.waitForFinished(1000);}
+        QVERIFY2(finished,"Log capture waited for a detached child which was waiting for the parent to exit");
+        QCOMPARE(process.exitStatus(),QProcess::NormalExit);QCOMPARE(process.exitCode(),0);
+        QVERIFY(QFile::exists(marker));QVERIFY(QFile::exists(marker+".child-done"));
     }
     void outputLogRawResetAndUpdateSchedule() {
         appSettings().clear();MainWindow window;window.show();
@@ -913,5 +924,29 @@ private slots:
         for(const auto& job:multiple)QVERIFY(QFileInfo(job.output).size()>0);
     }
 };
-QTEST_MAIN(GuiTests)
+int main(int argc,char** argv) {
+    if(argc==3&&QByteArray(argv[1])=="--capture-exit-child") {
+        QCoreApplication app(argc,argv);const auto marker=app.arguments()[2];
+        for(int i=0;i<200;++i){
+            if(QFile::exists(marker)){QFile done(marker+".child-done");return done.open(QIODevice::WriteOnly)?0:3;}
+            QThread::msleep(50);
+        }
+        return 4;
+    }
+    if(argc==3&&QByteArray(argv[1])=="--capture-exit-probe") {
+        QString marker;
+        {
+            QCoreApplication app(argc,argv);marker=app.arguments()[2];OutputCapture::instance();
+            // Deliberately inherit stdout/stderr, reproducing the old updater
+            // launch. The child retains the log pipe until capture shuts down.
+            if(!QProcess::startDetached(app.applicationFilePath(),{"--capture-exit-child",marker}))return 2;
+        }
+        QFile done(marker);if(!done.open(QIODevice::WriteOnly))return 3;done.close();
+        for(int i=0;i<100;++i){if(QFile::exists(marker+".child-done"))return 0;QThread::msleep(10);}
+        return 5;
+    }
+    QApplication app(argc,argv);app.setAttribute(Qt::AA_Use96Dpi,true);GuiTests tests;
+    QTEST_SET_MAIN_SOURCE_PATH
+    return QTest::qExec(&tests,argc,argv);
+}
 #include "gui.moc"

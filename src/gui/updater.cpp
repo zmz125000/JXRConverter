@@ -209,7 +209,11 @@ void Updater::install() {
     if(!QFile::copy(source+"/"+helperRelative_,helper)){fail("Cannot prepare the update helper.");return;}
     QFile::setPermissions(helper,QFileInfo(source+"/"+helperRelative_).permissions());
     temp_->setAutoRemove(false);
-    if(!QProcess::startDetached(helper,{QString::number(QCoreApplication::applicationPid()),root_,source,relativeGui_,temp_->path(),manifestRelative_},root_)) {
+    // The helper waits for this process to exit. It must not inherit the log
+    // capture pipe and keep the parent's reader alive during shutdown.
+    QProcess process;process.setProgram(helper);process.setArguments({QString::number(QCoreApplication::applicationPid()),root_,source,relativeGui_,temp_->path(),manifestRelative_});process.setWorkingDirectory(root_);
+    process.setStandardInputFile(QProcess::nullDevice());process.setStandardOutputFile(QProcess::nullDevice());process.setStandardErrorFile(QProcess::nullDevice());
+    if(!process.startDetached()) {
         temp_->setAutoRemove(true);fail("Cannot start the update helper.");return;
     }
     emit statusChanged("Restarting…");QCoreApplication::quit();

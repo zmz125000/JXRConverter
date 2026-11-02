@@ -2,6 +2,7 @@
 #include <filesystem>
 #include "update_paths.hpp"
 #include <cstdlib>
+#include <cstdio>
 #include <fstream>
 #include <set>
 #include <string>
@@ -21,6 +22,22 @@ namespace fs=std::filesystem;
 namespace {
 using jxrc_update::local;
 using jxrc_update::safeParent;
+void disconnectParentStreams() {
+    // Older GUI versions launch us with their log pipe as stdout/stderr.
+    // Close those inherited writers before waiting for that GUI to exit.
+    // Otherwise its reader can wait for our EOF while we wait for its PID.
+#ifdef _MSC_VER
+    FILE* stream=nullptr;freopen_s(&stream,"NUL","r",stdin);freopen_s(&stream,"NUL","w",stdout);freopen_s(&stream,"NUL","w",stderr);
+#else
+#ifdef _WIN32
+    const char* device="NUL";
+#else
+    const char* device="/dev/null";
+#endif
+    FILE* input=std::freopen(device,"r",stdin);FILE* output=std::freopen(device,"w",stdout);FILE* error=std::freopen(device,"w",stderr);
+    (void)input;(void)output;(void)error;
+#endif
+}
 void waitForParent(unsigned long pid) {
 #ifdef _WIN32
     HANDLE process=OpenProcess(SYNCHRONIZE,FALSE,pid);
@@ -140,11 +157,13 @@ int apply(unsigned long pid,const fs::path& root,const fs::path& source,const fs
 // Helper protocol v1: parent PID, installation, payload, executable, workspace, manifest.
 #ifdef _WIN32
 int wmain(int argc,wchar_t** argv) {
+    disconnectParentStreams();
     if(argc!=7)return 2;
     try{return apply(std::stoul(argv[1]),fs::path(argv[2]),fs::path(argv[3]),fs::path(argv[4]),fs::path(argv[5]),fs::path(argv[6]));}catch(...){return 2;}
 }
 #else
 int main(int argc,char** argv) {
+    disconnectParentStreams();
     if(argc!=7)return 2;
     try{return apply(std::stoul(argv[1]),fs::u8path(argv[2]),fs::u8path(argv[3]),fs::u8path(argv[4]),fs::u8path(argv[5]),fs::u8path(argv[6]));}catch(...){return 2;}
 }
