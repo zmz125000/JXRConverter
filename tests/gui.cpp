@@ -27,6 +27,7 @@
 #include <QStandardItemModel>
 #include <QScrollBar>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QWheelEvent>
 #include <QTemporaryDir>
 #include <exiv2/exiv2.hpp>
@@ -318,6 +319,34 @@ private slots:
         }
         window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
+    }
+    void libraryFooterAndStatusFilters() {
+        appSettings().clear();MainWindow window;window.show();
+        auto* progress=window.findChild<QProgressBar*>("conversionProgress");QVERIFY(progress);
+        progress->setRange(0,100);progress->setValue(60);QCOMPARE(progress->text(),QString("60% (60/100)"));
+        const auto a=makeImage(root("footer"),"a.jpg",32,24,100);
+        const auto b=makeImage(root("footer"),"b.jpg",32,24,100);
+        const auto c=makeImage(root("footer"),"c.jpg",32,24,100);
+        window.addPaths({a,b,c});QTRY_COMPARE(window.catalog()->rowCount(),3);
+        auto* footer=window.findChild<QWidget*>("libraryActions");QVERIFY(footer);
+        auto* view=window.findChild<FileListView*>();
+        footer->findChild<QPushButton*>("selectAllImages")->click();QCOMPARE(view->selectionModel()->selectedRows().size(),3);
+        footer->findChild<QPushButton*>("deselectImages")->click();QVERIFY(view->selectionModel()->selectedRows().isEmpty());
+        window.catalog()->setStatus(b,"Done");window.catalog()->setStatus(c,"Failed","failure");
+        footer->findChild<QPushButton*>("statusReady")->click();QCOMPARE(window.filterModel()->rowCount(),1);QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),a);
+        window.catalog()->setStatus(a,"Queued");QCOMPARE(window.filterModel()->rowCount(),0);
+        footer->findChild<QPushButton*>("statusQueued")->click();QCOMPARE(window.filterModel()->rowCount(),1);
+        for(const auto& status:{"Queued","Converting","In progress · 1 outputs remaining"}) {
+            window.catalog()->setStatus(a,status);QCOMPARE(window.filterModel()->rowCount(),1);
+        }
+        window.catalog()->setStatus(a,"Ready");QCOMPARE(window.filterModel()->rowCount(),0);
+        window.catalog()->setStatus(a,"Done");QCOMPARE(window.filterModel()->rowCount(),0);
+        window.catalog()->setStatus(a,"Queued");QCOMPARE(window.filterModel()->rowCount(),1);
+        footer->findChild<QPushButton*>("statusFinished")->click();QCOMPARE(window.filterModel()->rowCount(),1);
+        window.catalog()->setStatus(b,"Skipped");QCOMPARE(window.filterModel()->rowCount(),1);
+        footer->findChild<QPushButton*>("statusFailed")->click();QCOMPARE(window.filterModel()->rowCount(),1);QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),c);
+        footer->findChild<QPushButton*>("statusAll")->click();QCOMPARE(window.filterModel()->rowCount(),3);
+        footer->findChild<QPushButton*>("clearLibrary")->click();QCOMPARE(window.catalog()->rowCount(),0);
     }
     void collapsedQueueAndDateFolders() {
         appSettings().clear();

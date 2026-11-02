@@ -70,7 +70,7 @@ private:
     FileTableView* table_;
     ThumbnailDelegate* delegate_;
     QStackedWidget* views_;
-    QButtonGroup* viewMode_;
+    QButtonGroup *viewMode_, *statusFilter_;
     QComboBox *sort_, *range_, *mode_, *preset_, *avifDepth_, *rawMode_, *wb_;
     QListWidget* targets_;
     QLineEdit *search_, *instant_, *format_, *output_;

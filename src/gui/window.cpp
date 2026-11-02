@@ -82,11 +82,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     });
     loadFolder_=check("Load last folder","loadLastFolder");loadFiles_=check("Load last files","loadLastFiles");toolbar->addWidget(loadFolder_);toolbar->addWidget(loadFiles_);
     auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
-    recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);toolbar->addSeparator();
-    auto* selectAll=toolbar->addAction("Select all");connect(selectAll,&QAction::triggered,this,[this]{if(views_->currentWidget()==table_)table_->selectAll();else list_->selectAll();});
-    remove_=new QPushButton("Remove selected");remove_->setObjectName("removeSelected");toolbar->addWidget(remove_);
-    connect(remove_,&QPushButton::clicked,this,[this]{catalog_->removePaths(selectedPaths());});
-    clear_=new QPushButton("Clear");toolbar->addWidget(clear_);connect(clear_,&QPushButton::clicked,catalog_,&Catalog::clear);
+    recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
     wheelChanges_->setToolTip("Allow the mouse wheel to change dropdowns and numeric inputs. Off lets you scroll past controls without changing conversion settings.");toolbar->addWidget(wheelChanges_);
     auto* splitter=new QSplitter;setCentralWidget(splitter);
@@ -132,6 +128,18 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
     views_->addWidget(list_);views_->addWidget(table_);layout->addWidget(views_,1);
     counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");layout->addWidget(counts_);
+    auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addStretch();
+    statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
+    const QStringList statusNames={"All","Ready","Queued","Finished","Failed"};
+    for(int i=0;i<statusNames.size();++i){auto* button=new QPushButton(statusNames[i]);button->setObjectName("status"+statusNames[i]);button->setCheckable(true);statusFilter_->addButton(button,i);actionsLayout->addWidget(button);}
+    statusFilter_->button(0)->setChecked(true);statusFilter_->button(1)->setToolTip("Images not yet queued for conversion");statusFilter_->button(2)->setToolTip("Queued and running images");statusFilter_->button(3)->setToolTip("Completed images, including skipped existing outputs");
+    connect(statusFilter_,&QButtonGroup::idClicked,this,&MainWindow::updateFilter);
+    auto* selectAll=new QPushButton("Select all");selectAll->setObjectName("selectAllImages");actionsLayout->addWidget(selectAll);
+    connect(selectAll,&QPushButton::clicked,this,[this]{if(views_->currentWidget()==table_)table_->selectAll();else list_->selectAll();});
+    auto* deselect=new QPushButton("Deselect");deselect->setObjectName("deselectImages");actionsLayout->addWidget(deselect);connect(deselect,&QPushButton::clicked,selection_,&QItemSelectionModel::clearSelection);
+    remove_=new QPushButton("Remove selected");remove_->setObjectName("removeSelected");actionsLayout->addWidget(remove_);connect(remove_,&QPushButton::clicked,this,[this]{catalog_->removePaths(selectedPaths());});
+    clear_=new QPushButton("Clear");clear_->setObjectName("clearLibrary");actionsLayout->addWidget(clear_);connect(clear_,&QPushButton::clicked,catalog_,&Catalog::clear);layout->addWidget(libraryActions);
+
     auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
     auto* scroll=new QScrollArea;scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
     sidebar->addTab(scroll,"Conversion");
@@ -349,7 +357,7 @@ QWidget* MainWindow::buildControls() {
     selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue · finish active files");cancel_->setObjectName("cancelQueue");
     visible_->setToolTip("Convert all visible files");selected_->setToolTip("Convert selected files");
     // Start actions are placed outside the collapsible output settings.
-    queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
+    queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setObjectName("conversionProgress");progress_->setFormat("%p% (%v/%m)");progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
     connect(mode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(targets_,&QListWidget::itemChanged,this,&MainWindow::updateMode);connect(preset_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(rawMode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(wb_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
     connect(exposure_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateMode);connect(maxEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateMode);
     connect(selected_,&QPushButton::clicked,this,[this]{convertFiles(true);});connect(visible_,&QPushButton::clicked,this,[this]{convertFiles(false);});connect(cancel_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);
@@ -430,7 +438,7 @@ void MainWindow::addPaths(const QStringList& paths) {
 }
 
 void MainWindow::updateFilter() {
-    Filter f;f.search=appliedSearch_;f.text=instant_->text();f.literalText=!metadataFilters_->isChecked();f.today=today_->isChecked();
+    Filter f;f.status=statusFilter_->checkedId();f.search=appliedSearch_;f.text=instant_->text();f.literalText=!metadataFilters_->isChecked();f.today=today_->isChecked();
     if(metadataFilters_->isChecked()) {
         f.format=format_->text().trimmed();if(range_->currentIndex())f.range=range_->currentText();
         f.minMaxEdge=minImageEdge_->value();f.minMegapixels=megapixels_->value();

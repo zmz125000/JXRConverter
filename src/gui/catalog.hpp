@@ -88,6 +88,7 @@ private:
 };
 struct Filter {
     QString search, text, format, range;
+    int status = 0; // All, Ready, Queued (including running), Finished (Done/Skipped), Failed.
     int minWidth = 0, minHeight = 0, minMaxEdge = 0;
     double minMegapixels = 0;
     bool literalText = false, today = false;
