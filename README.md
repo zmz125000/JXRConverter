@@ -29,12 +29,19 @@ A C++17 image conversion library and CLI extracted from LocalViewer.
 
 https://github.com/zmz125000/LocalViewer  
 
-Features:  
+JXRConverter is a RAW/JXR converter that  
+renders accurate SDR base images,  
+while preserving wide color gamut,  
+then outputs to JPG/AVIF Gain Map HDR.   
 
+It also supports scRGB and PQ outputs  
+and comes with a Qt6 GUI for Windows, Linux and macOS.
+
+Features:  
 1. Convert JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL PQ HDR.
 2. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
 3. Support auto color management, keeping source wide color gamut and color tag.
-4. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for SDR output.
+4. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for UHDR SDR base image.
 5. RAW images are processed and output as scRGB, Linear HDR or PQ HDR with BT.2020 color.
 6. Float32 high quality image processing.
 7. File listing with ultra fast thumbnails.
@@ -91,8 +98,6 @@ Process mode decodes and processes linear-light pixels. Processing SDR targets c
 For supported formats and conversion paths, see the [conversion matrix](docs/conversion-matrix.md). For GUI build and usage, see [Desktop GUI](docs/desktop-gui.md).
 
 ## Thanks
-
-JXRConverter is based on conversion code from [LocalViewer](https://github.com/zmz125000/LocalViewer). Thanks to the maintainers of these libraries:
 
 - [libultrahdr](https://github.com/google/libultrahdr)
 - [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo)
