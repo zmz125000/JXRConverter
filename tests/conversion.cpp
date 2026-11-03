@@ -230,6 +230,50 @@ static void signed_float_jxl(const fs::path& dir) {
 
 }
 
+// PQ has an absolute 10000-nit coding range, independent of content-peak metadata.
+static void pq_jxl_peak(const fs::path& dir) {
+    for(bool half:{false,true})for(int preset:{0,2})for(float nits:{0.f,20.f,1000.f,20000.f}) {
+        const float value=half?half_to_float(float_to_half(nits/kSdrWhiteNits)):nits/kSdrWhiteNits;
+        std::vector<float> input(16*16*4,value);
+        for(size_t i=3;i<input.size();i+=4)input[i]=1.f;
+        const auto path=dir/("pq-peak-"+std::to_string(half)+"-"+std::to_string(preset)+"-"+std::to_string(int(nits))+".jxl");
+        StillEncodeQuality quality(preset);
+        int rc;
+        if(half) {
+            std::vector<uint16_t> packed(input.size());
+            std::transform(input.begin(),input.end(),packed.begin(),float_to_half);
+            rc=encode_jxl_f16(16,16,packed.data(),UHDR_CG_BT_2100,true,path.string().c_str(),quality,true);
+        } else rc=encode_jxl_f32(16,16,input.data(),UHDR_CG_BT_2100,true,path.string().c_str(),quality,true);
+        check(rc==0,"PQ content-peak encode");
+        auto encoded=bytes(path);auto decoder=JxlDecoderMake(nullptr);
+        check(JxlDecoderSubscribeEvents(decoder.get(),JXL_DEC_BASIC_INFO|JXL_DEC_FULL_IMAGE)==JXL_DEC_SUCCESS,"PQ peak events");
+        JxlDecoderSetInput(decoder.get(),encoded.data(),encoded.size());JxlDecoderCloseInput(decoder.get());
+        std::vector<uint16_t> codes(input.size());const JxlPixelFormat format{4,JXL_TYPE_UINT16,JXL_NATIVE_ENDIAN,0};bool complete=false;
+        for(;;) {
+            const auto status=JxlDecoderProcessInput(decoder.get());
+            if(status==JXL_DEC_BASIC_INFO) {
+                JxlBasicInfo info{};check(JxlDecoderGetBasicInfo(decoder.get(),&info)==JXL_DEC_SUCCESS,"PQ peak basic info");
+                const float peak=std::clamp(value*kSdrWhiteNits,1.f,kMaxNits);
+                check(std::abs(info.intensity_target-peak)<=std::max(.01f,peak*.001f),"PQ intensity target does not match content peak");
+                check(info.bits_per_sample==16&&info.exponent_bits_per_sample==0,"PQ storage depth changed");
+            } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER)check(JxlDecoderSetImageOutBuffer(decoder.get(),&format,codes.data(),codes.size()*2)==JXL_DEC_SUCCESS,"PQ peak buffer");
+            else if(status==JXL_DEC_FULL_IMAGE){complete=true;break;}
+            else check(status!=JXL_DEC_ERROR&&status!=JXL_DEC_NEED_MORE_INPUT&&status!=JXL_DEC_SUCCESS,"PQ peak decode");
+        }
+        check(complete,"PQ peak frame missing");
+        if(preset==0)for(size_t i=0;i<codes.size();++i)
+            check(codes[i]==(i%4==3?65535:std::lround(linear_to_pq_code(value)*65535.f)),"Content peak rescaled absolute PQ codes");
+        unsigned w=0,h=0;uhdr_color_gamut_t gamut;bool hdr;int transfer;
+        std::vector<float> output;
+        check(decode_jxl_to_linear_f32(encoded.data(),encoded.size(),output,w,h,&gamut,&hdr,&transfer,false,nullptr)==0,"PQ peak float decode");
+        const float expected=std::min(value,kMaxLinear);
+        for(size_t i=0;i<output.size();++i)check(std::abs(output[i]-(i%4==3?1.f:expected))<std::max(.002f,expected*.02f),"PQ content-peak metadata changed absolute brightness");
+        std::vector<uint16_t> outputHalf;
+        check(decode_jxl_to_linear_f16(encoded.data(),encoded.size(),outputHalf,w,h,&gamut,&hdr,&transfer,false,0,false,nullptr,nullptr)==0,"PQ peak half decode");
+        check(std::abs(half_to_float(outputHalf[0])-expected)<std::max(.002f,expected*.02f),"PQ half decode raised content below SDR white");
+    }
+}
+
 static void srgb_clamping(const fs::path& dir) {
     jxrc::Options o;o.mode=jxrc::Mode::process;o.srgb_clamp=true;o.quality.preset=jxrc::Preset::lossless;
     std::vector<float> referencePixels(16*16*4,.5f);const auto referencePath=dir/"reference-srgb.jpg";
@@ -572,6 +616,7 @@ int main(int argc,char** argv) try {
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--srgb-clamp") {srgb_clamping(dir);signed_float_jxl(dir);std::cout<<"sRGB clamp tests passed\n";return 0;}
     // BMFF is a container, not an AVIF signature. Canon CR3 must reach LibRaw.
     const std::vector<uint8_t> cr3_header={0,0,0,24,'f','t','y','p','c','r','x',' ',0,0,0,1,'c','r','x',' ','i','s','o','m'};
@@ -584,6 +629,7 @@ int main(int argc,char** argv) try {
     srgb_clamping(dir);
     shared_render(dir);
     signed_float_jxl(dir);
+    pq_jxl_peak(dir);
     regular_images(dir);jpeg_avif_paths(dir);
     jxrc::validate({});
     { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }

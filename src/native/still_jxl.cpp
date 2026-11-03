@@ -168,7 +168,8 @@ static int encode_jxl_sdr_f32(unsigned w,unsigned h,const float* rgba,uhdr_color
 }
 
 // The caller owns straight-alpha linear half samples. Normalize HDR to its
-// declared luminance for linear JXL; PQ retains the absolute 10000-nit reference.
+// declared luminance for linear JXL. PQ codes retain the absolute 10000-nit
+// reference, while intensity_target reports the measured content peak (MaxCLL).
 int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality, bool pq) {
     const size_t pixels = static_cast<size_t>(w) * h;
@@ -179,11 +180,12 @@ int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg
         return encode_jxl_sdr_f32(w,h,linear.data(),cg,path,quality);
     }
     float peak = pq ? kMaxLinear : 1.f;
-    if (hdr && !pq) {
+    float pq_intensity = 1.f;
+    if (hdr || pq) {
         std::array<float, 8> peaks{};
         const unsigned jobs = hdr_pixel_jobs(pixels);
         hdr_parallel_pixels(pixels, jobs, [&](size_t begin, size_t end, unsigned job) {
-            float p = 1.f;
+            float p = pq ? 0.f : 1.f;
             for (size_t i = begin; i < end; ++i) {
                 for (unsigned c = 0; c < 3; ++c) {
                     const float v = half_to_float(rgba[4 * i + c]);
@@ -192,9 +194,11 @@ int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg
             }
             peaks[job] = p;
         });
-        peak = std::clamp(*std::max_element(peaks.begin(), peaks.end()), 400.f / kSdrWhiteNits, kMaxLinear);
+        const float found = *std::max_element(peaks.begin(), peaks.end());
+        if (pq) pq_intensity = std::clamp(found * kSdrWhiteNits, 1.f, kMaxNits);
+        else peak = std::clamp(found, 400.f / kSdrWhiteNits, kMaxLinear);
     }
-    const float intensity = pq ? kMaxNits : hdr ? peak * kSdrWhiteNits : kSdrWhiteNits;
+    const float intensity = pq ? pq_intensity : hdr ? peak * kSdrWhiteNits : kSdrWhiteNits;
     // One table also bounds invalid input and avoids per-channel floating-point
     // conversion in the image loop. Alpha stays straight; PQ converts its
     // storage to the same uint16 precision as the color channels.
@@ -226,18 +230,20 @@ int encode_jxl_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg
     if(!rgba||!path||!pixels)return -60;
     if(!hdr&&!pq)return encode_jxl_sdr_f32(w,h,rgba,cg,path,quality);
     float peak=pq?kMaxLinear:1.f;
-    if(hdr&&!pq) {
+    float pq_intensity=1.f;
+    if(hdr||pq) {
         float found=1.f;
         const unsigned jobs=hdr_pixel_jobs(pixels);
         std::array<float,8> peaks{};
         hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned job){
-            float local=1.f;
+            float local=pq?0.f:1.f;
             for(size_t i=begin;i<end;++i)for(unsigned c=0;c<3;++c)
                 if(std::isfinite(rgba[4*i+c]))local=std::max(local,rgba[4*i+c]);
             peaks[job]=local;
         });
         found=*std::max_element(peaks.begin(),peaks.end());
-        peak=std::max(found,400.f/kSdrWhiteNits);
+        if(pq)pq_intensity=std::clamp(found*kSdrWhiteNits,1.f,kMaxNits);
+        else peak=std::max(found,400.f/kSdrWhiteNits);
     }
     std::vector<float> encoded(pixels*4);
     hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned){
@@ -251,7 +257,7 @@ int encode_jxl_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg
             encoded[4*i+3]=std::clamp(alpha,0.f,1.f);
         }
     });
-    const float intensity=pq?kMaxNits:hdr?peak*kSdrWhiteNits:kSdrWhiteNits;
+    const float intensity=pq?pq_intensity:hdr?peak*kSdrWhiteNits:kSdrWhiteNits;
     if(pq || (hdr && quality.jxl_half)) {
         std::vector<uint16_t> packed(encoded.size());
         std::transform(encoded.begin(),encoded.end(),packed.begin(),[&](float v){

@@ -28,6 +28,8 @@ Native inputs include JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPE
 
 Processing uses float32. Source-preserving JXL/AVIF exports retain the transfer and primaries (AVIF quantizes to its selected bit depth). PNG/TIFF retain 16-bit integer samples for preservation; lossless JXL can preserve those codes exactly. AVIF is limited to 12 bits and JPEG remains lossy. See [supported raster layouts](port-status.md) for restrictions.
 
+PQ JXL pixel-processing exports record the measured maximum RGB channel level in nits as `intensity_target` (MaxCLL), bounded to 1–10,000 nits. PQ codes still use the absolute 10,000-nit reference; the metadata does not rescale pixel brightness. Linear JXL retains its own luminance normalization, and direct scRGB JXL retains its 80-nit reference.
+
 GUI input formats follow the converter's current codec support; the GUI does not add the Android-only formats listed in [port status](port-status.md).
 
 Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV** multiplies linear RGB by 1/8; **+3 EV** multiplies it by 8. Processing still decodes and re-encodes the image at 0 EV, with source-preserving fast paths where eligible. JPEG/AVIF gain-map photos and Apple/ProXDR HEIC photos exported to ordinary JPEG or AVIF keep the SDR base plus gain map when exposure is 0, resizing is disabled and sRGB clamp is off, including in Process pixels mode. Exposure, resizing or sRGB clamping requests use the float32 HDR render path instead. JPEG recompression remains lossy; this is base/map retention, not a promise of identical compressed bytes.
