@@ -49,156 +49,63 @@ See the [conversion matrix](docs/conversion-matrix.md) for input classes, output
 
 <img width="2232" height="1561" alt="JXRConverter screenshot" src="https://github.com/user-attachments/assets/a9cdc1e5-86de-4592-8fa6-4db33049ab23" />
 
-
 ## Build
 
-Requires CMake 3.22+, a C/C++17 compiler, Git, and NASM on x86. Ninja is recommended.
-Dependencies are pinned to current stable releases and built from source; see
-[dependency versions](docs/dependencies.md). An initial build needs network access:
+Requires CMake 3.22+, a C/C++17 compiler, Git, and NASM on x86. Ninja is recommended. Dependencies are pinned and built from source; see [dependency versions](docs/dependencies.md). The initial build needs network access.
 
 ```sh
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target jxrconvert jxrc_tests -j 6
-ctest --test-dir build --output-on-failure
+cmake --build build --target jxrconvert -j 6
 ```
 
-## Desktop GUI
+## CLI usage
 
-The optional desktop application uses Qt 6 Widgets. The native converter and GUI
-use Exiv2 for photographic metadata. Exiv2 0.28.9 is
-built from source by default. Qt 6.12.0 is covered by CI; installed Qt 6.4+
-remains supported. On Ubuntu:
+Run `jxrconvert --help` for the complete option list. Basic conversion examples:
 
 ```sh
-sudo apt-get update
-sudo apt-get install -y qt6-base-dev libexiv2-dev ninja-build nasm
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DJXRC_BUILD_GUI=ON
-cmake --build build --target jxrconverter -j 6
-./build/jxrconverter
-```
-
-You can also pass files or folders on the command line:
-
-```sh
-./build/jxrconverter /path/to/photos picture.avif
-```
-
-To use your distribution's Exiv2 instead, configure with
-`-DJXRC_USE_SYSTEM_EXIV2=ON` (including Exiv2 0.27 compatibility).
-
-On macOS, install `qt`, `cmake`, `ninja`, and `nasm` with Homebrew,
-and provide `-DCMAKE_PREFIX_PATH="$(brew --prefix qt)"` if Qt is not discovered.
-On Windows, provide Qt 6 Widgets with a matching compiler and architecture.
-Exiv2 is built automatically unless the system-library option is selected. Platform packaging
-and macOS/Windows GUI execution still need validation.
-
-Native inputs include JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and
-LibRaw camera formats. Regular raster decoding is independent of OS/Qt decoders.
-HDR PNG input supports full-range cICP PQ/HLG with BT.709, BT.2020 or Display P3
-primaries, including 8/16-bit samples. Processing uses float32; source-preserving
-JXL/AVIF exports retain the transfer and primaries (AVIF quantizes to its selected
-bit depth). PNG/TIFF retain 16-bit integer samples for preservation; lossless JXL can preserve
-those codes exactly. AVIF is limited to 12 bits and JPEG remains lossy. See
-[supported raster layouts](docs/port-status.md) for restrictions.
-
-GUI input formats follow the converter's current codec support; the GUI does not
-add the Android-only formats listed in [port status](docs/port-status.md).
-
-Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV**
-multiplies linear RGB by 1/8; **+3 EV** multiplies it by 8. Processing still decodes
-and re-encodes the image at 0 EV, with source-preserving fast paths where eligible.
-JPEG/AVIF gain-map photos and Apple/ProXDR HEIC photos exported to the ordinary
-JPEG or AVIF target keep the SDR base plus gain map when exposure is 0 and resizing
-is disabled, including in Process pixels mode. Exposure or resizing requests use
-the float32 HDR render path instead. JPEG recompression remains lossy; this is
-base/map retention, not a promise of identical compressed bytes.
-For RAW gain-map exports, adjust the separate Custom RAW exposure instead.
-**Extended BT.2020 · JXL decoding** converts floating-point linear-sRGB JXL's
-extended colors into BT.2020 before clipping negative channels, preserving more
-wide-gamut color. This switch affects JXL decoding, not the output transfer
-function or other input formats.
-
-## Convert
-
-Preserve source transfer, color profiles, and gain-map metadata while converting
-containers/codecs:
-
-```sh
+# Preserve source transfer, color profile, and gain-map metadata.
 build/jxrconvert input-hdr.jpg output.avif --target avif-gainmap --preset high
 build/jxrconvert input.avif output.jpg --target jpeg-gainmap --preset high
 build/jxrconvert input-pq.jxl output.avif --target avif --preset lossless
 build/jxrconvert input.jpg output.jxl --target jxl --jpeg-transcoding --keep-exif
-```
 
-Preservation avoids linearization, tone mapping, and HDR reconstruction. Codec
-quantization, RGB/YUV conversion, and bit-depth conversion can still change
-sample values. JPEG remains lossy even with the `lossless` preset. The **JXL lossless JPEG transcoding** toggle (`--jpeg-transcoding`) works in
-both modes when exporting SDR JXL without exposure or resizing. It passes
-compressed SDR JPEG data directly to libjxl and bypasses quality presets; other
-source formats retain their normal conversion paths. The option stores JPEG coefficients in JXL; retaining EXIF allows
-reconstruction of the original JPEG bytes. Gain-map sources are rejected for
-JXL preservation because that path cannot carry the gain map.
-
-Decode and process linear-light pixels, then select the output representation:
-
-```sh
+# Decode and process linear-light pixels before encoding.
 build/jxrconvert input.avif output.jxl --mode process --target jxl-linear
 build/jxrconvert input.jxl output.avif --mode process --target avif-pq --exposure -0.5
 build/jxrconvert input.jxr output.jpg --mode process --target jpeg --max-edge 2048
+
+# Process a RAW file using custom HDR controls.
 build/jxrconvert camera.dng output.avif --mode process --target avif-gainmap \
   --raw-exposure 0.5 --raw-wb kelvin --raw-kelvin 6000 \
   --raw-highlight-stops 1 --raw-shoulder 0.6 --raw-target-nits 1500
 ```
 
-Targets: `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `avif`,
-`avif-pq`, `avif-gainmap`. Generic targets in preservation mode retain the source
-transfer, so `--target avif` can produce a PQ AVIF from a PQ source.
-Processing SDR targets clip to SDR; there is currently no selectable general
-HDR-to-SDR tone mapper. Processing gain-map outputs use the ported LocalViewer
-encoder; an SDR source does not gain new highlight detail.
+Targets are `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `avif`, `avif-pq`, and `avif-gainmap`. Generic targets in preservation mode retain the source transfer, so `--target avif` can produce PQ AVIF from a PQ source.
 
-`--threads N` sets a per-conversion codec CPU budget (`0` keeps automatic defaults).
+Preservation mode retains compatible source metadata and avoids linearization, tone mapping, and HDR reconstruction. Codec quantization and color/bit-depth conversion can still change sample values. JPEG is lossy, including with the `lossless` preset. `--jpeg-transcoding` passes compressed SDR JPEG data directly to libjxl when exporting SDR JXL without exposure or resizing. Gain-map sources are rejected on this path.
 
-RAW source mode follows sensor headroom up to 10,000 nits. `--raw-mode boost`
-opens highlights toward the default 1,500-nit target. RAW adjustment flags select
-custom mode unless an explicit `--raw-mode` was supplied.
+Process mode decodes and processes linear-light pixels. Processing SDR targets clip to SDR; no general HDR-to-SDR tone mapper is currently selectable. RAW source mode follows sensor headroom up to 10,000 nits. `--raw-mode boost` opens highlights toward the default 1,500-nit target. RAW adjustment flags select custom mode unless `--raw-mode` is explicitly supplied. Gain-map output from an SDR source does not add highlight detail.
 
-`--help` lists all controls. Presets are `lossless`, `high`, `medium`, `low`, and
-`custom`. `--quality`, `--jxl-distance`, `--avif-depth`, and
-`--downsize-gainmap` select the custom preset and conflict with an explicitly
-selected non-custom preset. Existing output files require `--overwrite`.
-Failed conversions do not publish partial destination files. Input and output
-must refer to different files.
+`--threads N` sets the per-conversion codec CPU budget (`0` keeps automatic defaults). Presets are `lossless`, `high`, `medium`, `low`, and `custom`. `--quality`, `--jxl-distance`, `--avif-depth`, and `--downsize-gainmap` select the custom preset and conflict with an explicitly selected non-custom preset. Existing output files require `--overwrite`. Failed conversions do not publish partial destination files, and input and output must refer to different files.
 
-## Library
+For supported formats and conversion paths, see the [conversion matrix](docs/conversion-matrix.md). For GUI build and usage, see [Desktop GUI](docs/desktop-gui.md).
 
-Embed the project with CMake and link `jxrc::jxrc`. The C++ API is in
-[`include/jxrc/converter.hpp`](include/jxrc/converter.hpp):
+## Thanks
 
-```cpp
-#include <jxrc/converter.hpp>
+JXRConverter is based on conversion code from [LocalViewer](https://github.com/zmz125000/LocalViewer). Thanks to the maintainers of these libraries:
 
-jxrc::Options options;
-options.mode = jxrc::Mode::process;
-options.target = jxrc::Target::avif_pq;
-options.raw.hdr_mode = jxrc::RawHdrMode::custom;
-options.raw.exposure = 0.5f;
-auto result = jxrc::convert("camera.dng", "output.avif", options);
-```
-
-Options are per-call values, independent of global viewer settings. Decoders
-hand off straight-alpha linear F32 pixels for processing in the declared RGB primaries, with
-1.0 corresponding to 203 nits. RAW HDR gain-map exports retain a separate SDR
-camera-look render. Pixel-processing controls are rejected in preservation mode.
-There is no silent fallback between those modes.
-
-The CMake target handles codec linkage for embedding. A standalone installed SDK,
-C ABI, and language bindings remain future packaging work. CLI exit codes are
-0 for success, 2 for invalid arguments, and 1 for conversion/I/O failure.
+- [libultrahdr](https://github.com/google/libultrahdr)
+- [libjpeg-turbo](https://github.com/libjpeg-turbo/libjpeg-turbo)
+- [libjxl](https://github.com/libjxl/libjxl) and [skcms](https://skia.org/docs/user/skcms/)
+- [libavif](https://github.com/AOMediaCodec/libavif), [libaom](https://aomedia.googlesource.com/aom/), and [dav1d](https://code.videolan.org/videolan/dav1d)
+- [libheif](https://github.com/strukturag/libheif) and [libde265](https://github.com/strukturag/libde265)
+- [LibRaw](https://github.com/LibRaw/LibRaw)
+- [JPEG XR](https://github.com/bvibber/jpegxr)
+- [libpng](https://github.com/pnggroup/libpng), [libwebp](https://github.com/webmproject/libwebp), [libtiff](https://gitlab.com/libtiff/libtiff), and [zlib](https://github.com/madler/zlib)
+- [stb_image](https://github.com/nothings/stb)
+- [Exiv2](https://github.com/Exiv2/exiv2)
+- [Qt](https://www.qt.io/)
 
 ## License
 
-The port retains LocalViewer's GPLv3 license. See [COPYING](COPYING) and
-[NOTICE](NOTICE). Codec dependencies retain their own licenses.
-
-See [versions, CI downloads and releases](docs/releases.md) for packaging and update details.
+The port retains LocalViewer's GPLv3 license.
