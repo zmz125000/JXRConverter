@@ -4,6 +4,10 @@
 #include <QDirIterator>
 #include <QFileInfo>
 #include <QFile>
+#include <QBuffer>
+#include <QImageReader>
+#include <QColorSpace>
+#include <cstring>
 #include <QSemaphoreReleaser>
 #include <stdexcept>
 #include <QIcon>
@@ -119,8 +123,32 @@ QImage readThumbnail(const QString& path,int edge,const std::function<bool()>& c
     const auto source=readSource(path,cancelled,sourceReadSlots,metadata!=nullptr);
     Preview image;ImageInfo info;
     try {image=preview_bytes(source.bytes,std::min(edge,768),metadata?&info:nullptr,cancelled);}
-    catch(...) {
-        if(metadata&&(!cancelled||!cancelled()))*metadata=metadataFromBytes(path,source,cancelled);
+    catch(const std::exception& error) {
+        if(cancelled&&cancelled())throw;
+        // Preview-only fallback for PNG variants/profiles the native path cannot
+        // render. Reuse the source buffer: no second file open or network read.
+        QImage fallback;
+        if(source.bytes.size()>=8&&!std::memcmp(source.bytes.data(),"\x89PNG\r\n\x1a\n",8)) {
+            auto bytes=QByteArray::fromRawData(reinterpret_cast<const char*>(source.bytes.data()),qsizetype(source.bytes.size()));
+            QBuffer buffer(&bytes);buffer.open(QIODevice::ReadOnly);QImageReader reader(&buffer,"PNG");reader.setAutoTransform(true);
+            const auto size=reader.size();const int bound=std::clamp(edge,1,768);
+            if(size.width()>0&&size.height()>0&&qint64(size.width())*size.height()<=80000000) {
+                if(std::max(size.width(),size.height())>bound)reader.setScaledSize(size.scaled(bound,bound,Qt::KeepAspectRatio));fallback=reader.read();
+                if(!fallback.isNull()) {
+                    if(fallback.colorSpace().isValid())fallback.convertToColorSpace(QColorSpace::SRgb);
+                    if(std::max(fallback.width(),fallback.height())>bound)fallback=fallback.scaled(bound,bound,Qt::KeepAspectRatio,Qt::SmoothTransformation);
+                    fallback=fallback.convertToFormat(QImage::Format_RGBA8888);
+                    if(metadata){
+                        if(!info.width){info.width=unsigned(size.width());info.height=unsigned(size.height());info.bits=source.bytes.size()>24?std::max(8u,unsigned(source.bytes[24])):8;info.format="PNG";}
+                        *metadata=metadataFromBytes(path,source,cancelled,&info);
+                        if(metadata->metadataWarning.isEmpty())metadata->metadataWarning="Native PNG preview: "+QString::fromUtf8(error.what());
+                    }
+                }
+            }
+        }
+        if(cancelled&&cancelled())throw;
+        if(!fallback.isNull())return fallback;
+        if(metadata)*metadata=metadataFromBytes(path,source,cancelled);
         throw;
     }
     if(metadata)*metadata=metadataFromBytes(path,source,cancelled,&info);

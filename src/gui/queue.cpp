@@ -39,11 +39,34 @@ int coreCount() { return std::max(1,QThread::idealThreadCount()); }
 int recommendedWorkers(int cores) {
     return std::max(1,cores/4);
 }
+QString outputFolder(const QString& input,const QString& directory,Target target,const OutputLayout& layout) {
+    const QFileInfo source(input);
+    QString folder=layout.source_folder?source.absolutePath():directory;
+    if(folder.trimmed().isEmpty())throw std::invalid_argument("Choose an output folder");
+    QStringList parts;
+    if(layout.parent_subfolders) {
+        const auto parent=QDir(source.absolutePath()).dirName();
+        if(!QDir(source.absolutePath()).isRoot()&&!parent.isEmpty())parts.append(parent);
+    }
+    if(layout.date_subfolders)parts.append(outputDateFolder());
+    if(!layout.job_subfolder.isEmpty())parts.append(layout.job_subfolder);
+    if(layout.format_subfolders) {
+        switch(target) {
+            case Target::jpeg:case Target::jpeg_gainmap:parts.append("jpg");break;
+            case Target::avif:case Target::avif_pq:case Target::avif_gainmap:parts.append("avif");break;
+            default:parts.append("jxl");break;
+        }
+    }
+    for(const auto& part:parts)
+        if(part=="."||part==".."||part.contains('/')||part.contains('\\')||part.contains(':'))throw std::invalid_argument("Invalid output subfolder name");
+    if(layout.flatten_subfolders&&!parts.isEmpty())folder=QDir(folder).filePath(parts.join('-'));
+    else for(const auto& part:parts)folder=QDir(folder).filePath(part);
+    return QDir(folder).absolutePath();
+}
 QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const Options& options,const OutputLayout& layout) {
     validate(options);QVector<Job> result;QSet<QString> outputs;
     const int target=int(options.target);
     const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl"};
-    const QString dateFolder=layout.date_subfolders?outputDateFolder():QString{};
     static const QSet<QString> rawExtensions={"dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     auto pathKey=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
     QSet<QString> sources;for(const auto& input:inputs)sources.insert(pathKey(input));
@@ -54,13 +77,7 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
             if(options.raw.hdr_mode==RawHdrMode::boost)stem+="_hdr_boost";
             else if(options.raw.hdr_mode==RawHdrMode::custom)stem+="_hdr_custom";
         }
-        QString folder=layout.source_folder?source.absolutePath():directory;
-        if(folder.trimmed().isEmpty())throw std::invalid_argument("Choose an output folder");
-        if(!layout.job_subfolder.isEmpty()) {
-            if(layout.job_subfolder=="."||layout.job_subfolder==".."||layout.job_subfolder.contains('/')||layout.job_subfolder.contains('\\')||layout.job_subfolder.contains(':'))throw std::invalid_argument("Invalid job folder name");
-            folder=QDir(folder).filePath(layout.job_subfolder);
-        } else if(layout.date_subfolders)folder=QDir(folder).filePath(dateFolder);
-        if(layout.format_subfolders)folder=QDir(folder).filePath(suffixes[target].section('.',-1));
+        const QString folder=outputFolder(input,directory,options.target,layout);
         QString filename=stem+"_"+suffixes[target];int n=2;
         auto outputPath=[&]{return QDir(folder).absoluteFilePath(filename);};
         while(outputs.contains(pathKey(outputPath())) ||

@@ -17,8 +17,11 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
-The output panel can create format subfolders (`avif/`, `jxl/`, `jpg/`), save
-beside each original image, and rename conflicting outputs with a number.
+The output panel can create subfolders in source parent → date → job → format
+order (`iphone/11-3-26/Job-3/avif/`, for example; date spelling follows the system
+locale). Enable Flatten subfolder rules to join the enabled names into one
+folder, such as `iphone-11-3-26-Job-3-avif/`. Each rule is independent. It can also
+save beside each original image and rename conflicting outputs with a number.
 Settings are stored in `config/settings.ini` and recent-file/folder history in
 `config/history.json` beside the executable (beside the `.app` on macOS).
 Keep the app folder writable; updates preserve this folder.

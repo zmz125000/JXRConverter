@@ -80,6 +80,8 @@ protected:
 // Use the same InstantPopup behavior as Recent folders, while drawing the
 // regular push-button control used by the neighboring actions.
 class PopupButton : public QToolButton {
+    mutable QPushButton appearance_;
+    void syncAppearance() const {appearance_.setText(text());appearance_.setIcon(icon());appearance_.setIconSize(iconSize());}
     QStyleOptionButton buttonOption() const {
         QStyleOptionButton option;option.initFrom(this);option.text=text();option.icon=icon();option.iconSize=iconSize();
         if(isDown())option.state|=QStyle::State_Sunken;else option.state|=QStyle::State_Raised;
@@ -87,10 +89,13 @@ class PopupButton : public QToolButton {
         return option;
     }
 public:
-    PopupButton(){setPopupMode(QToolButton::InstantPopup);setToolButtonStyle(Qt::ToolButtonTextOnly);setProperty("pushAppearance",true);}
-    QSize sizeHint() const override {auto option=buttonOption();return style()->sizeFromContents(QStyle::CT_PushButton,&option,fontMetrics().size(Qt::TextShowMnemonic,text()),this);}
+    PopupButton():appearance_(this){appearance_.hide();setSizePolicy(QSizePolicy::Minimum,QSizePolicy::Fixed);setPopupMode(QToolButton::InstantPopup);setToolButtonStyle(Qt::ToolButtonTextOnly);setProperty("pushAppearance",true);}
+    // Measure and paint through an actual QPushButton so Qt's macOS and
+    // stylesheet paths do not apply tool-button metrics to a push-button option.
+    QSize sizeHint() const override {syncAppearance();return appearance_.sizeHint();}
+    QSize minimumSizeHint() const override {return sizeHint();}
 protected:
-    void paintEvent(QPaintEvent*) override {auto option=buttonOption();QPainter painter(this);style()->drawControl(QStyle::CE_PushButton,&option,&painter,this);}
+    void paintEvent(QPaintEvent*) override {auto option=buttonOption();QPainter painter(this);style()->drawControl(QStyle::CE_PushButton,&option,&painter,&appearance_);}
 };
 const QStringList aspectNames={"16:9","4:3","1:1","9:16 (portrait)","3:4 (portrait)"};
 const double aspectRatios[]={16.0/9,4.0/3,1,9.0/16,3.0/4};
@@ -384,7 +389,7 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
-        formatFolders_,dateFolders_,jobFolders_,jumpToJob_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
 void MainWindow::restoreSettings() {
@@ -468,14 +473,18 @@ QWidget* MainWindow::buildControls() {
     auto* browse=new QPushButton("Choose folder…");browse->setObjectName("chooseOutputFolder");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});folderButtons->addWidget(browse);
     auto* openOutput=new QPushButton("Open output folder");openOutput->setObjectName("openOutputFolder");folderButtons->addWidget(openOutput);destinationLayout->addLayout(folderButtons);
     connect(openOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
-    formatFolders_=check("Create format subfolders","formatSubfolders");destinationLayout->addWidget(formatFolders_);
-    formatFolders_->setToolTip("Group outputs by format: avif/, jxl/ and jpg/ inside the destination folder.");
+    parentFolders_=check("Create source parent subfolder","parentSubfolders");destinationLayout->addWidget(parentFolders_);
+    parentFolders_->setToolTip("Use the source’s immediate parent folder name: iphone/test.png becomes iphone/test_sdr.avif.");
     dateFolders_=check("Create date subfolder","dateSubfolders");destinationLayout->addWidget(dateFolders_);
-    dateFolders_->setToolTip("Create today’s folder using the system’s short date format. Slashes and other filename separators become hyphens. Format subfolders go inside it.");
-    jobFolders_=check("Create job subfolder","jobSubfolders");destinationLayout->addWidget(jobFolders_);jobFolders_->setToolTip("Save in YYYY-MM-DD-Job-N (or YYYY-MM-DD-Temporary). This replaces the separate date subfolder for this batch.");
+    dateFolders_->setToolTip("Create today’s folder using the system’s short date format. Filename separators become hyphens.");
+    jobFolders_=check("Create job subfolder","jobSubfolders");destinationLayout->addWidget(jobFolders_);jobFolders_->setToolTip("Group this batch in Job-N (or Temporary). The date folder is controlled separately.");
+    formatFolders_=check("Create format subfolders","formatSubfolders");destinationLayout->addWidget(formatFolders_);
+    formatFolders_->setToolTip("Group outputs by format: avif, jxl or jpg.");
+    flattenFolders_=check("Flatten subfolder rules","flattenSubfolders");destinationLayout->addWidget(flattenFolders_);
+    flattenFolders_->setToolTip("Join enabled folder names with hyphens in parent–date–job–format order. Off creates nested folders in that order.");
     jumpToJob_=check("Jump to job tab","jumpToJobTab");destinationLayout->addWidget(jumpToJob_);jumpToJob_->setToolTip("Show a conversion’s job when it is queued. Off keeps the current image-list tab and job.");
     sourceFolder_=check("Save to original folder","saveToSourceFolder");destinationLayout->addWidget(sourceFolder_);
-    sourceFolder_->setToolTip("Save beside each source image. Format subfolders, when enabled, are created there.");
+    sourceFolder_->setToolTip("Save beside each source image. Enabled subfolder rules are applied there.");
     renameConflicts_=check("Rename if conflict","renameConflicts");destinationLayout->addWidget(renameConflicts_);
     renameConflicts_->setToolTip("Choose an unused numbered filename instead of replacing existing output files.");
     overwrite_=check("Replace existing output files","overwrite");destinationLayout->addWidget(overwrite_);
@@ -714,14 +723,23 @@ void MainWindow::clearCurrentTab() {
     if(tab==0&&catalog_->scanning())catalog_->clear();else catalog_->removePaths(paths);
     updateFilter();
 }
+OutputLayout MainWindow::outputLayout(qint64 batch) const {
+    OutputLayout layout;
+    if(jobFolders_->isChecked())layout.job_subfolder=batch==0?"Temporary":"Job-"+QString::number(batch);
+    layout.parent_subfolders=parentFolders_->isChecked();layout.date_subfolders=dateFolders_->isChecked();
+    layout.format_subfolders=formatFolders_->isChecked();layout.flatten_subfolders=flattenFolders_->isChecked();
+    layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
+    return layout;
+}
 void MainWindow::openOutputFolder() {
     QString path;
     if(statusFilter_->checkedId()==2){if(viewedJob_==0)path=temporaryJob_.folder;else for(const auto& job:savedJobs_)if(job.number==viewedJob_)path=job.folder;}
     if(path.isEmpty()){
-        path=output_->text().trimmed();
-        if(sourceFolder_->isChecked()){auto paths=selectedPaths();if(paths.isEmpty()&&proxy_->rowCount())paths.append(proxy_->index(0,0).data(Catalog::PathRole).toString());if(paths.isEmpty()){QMessageBox::warning(this,"Cannot open output folder","Select an image to open its source folder.");return;}path=QFileInfo(paths.first()).absolutePath();}
-        if(jobFolders_->isChecked())path=QDir(path).filePath(QDate::currentDate().toString(Qt::ISODate)+(viewedJob_?"-Job-"+QString::number(viewedJob_):"-Temporary"));
-        else if(dateFolders_->isChecked()&&!path.isEmpty())path=QDir(path).filePath(outputDateFolder());
+        auto paths=selectedPaths();if(paths.isEmpty()&&proxy_->rowCount())paths.append(proxy_->index(0,0).data(Catalog::PathRole).toString());
+        if(paths.isEmpty()&&(sourceFolder_->isChecked()||parentFolders_->isChecked())){QMessageBox::warning(this,"Cannot open output folder","Select an image to determine its output folder.");return;}
+        const auto targets=selectedTargets();
+        try {path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),outputLayout(viewedJob_));}
+        catch(const std::exception& e){QMessageBox::warning(this,"Cannot open output folder",QString::fromUtf8(e.what()));return;}
     }
     if(path.isEmpty()||!QDir().mkpath(path)){QMessageBox::warning(this,"Cannot open output folder","Choose a writable output folder.");return;}
     if(!QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(path).absolutePath())))QMessageBox::warning(this,"Cannot open output folder","The system file manager could not open this folder.");
@@ -895,7 +913,7 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
             }
         }
         const qint64 batch=reuseJob?viewedJob_:priority?0:nextJob_;
-        OutputLayout layout;if(jobFolders_->isChecked())layout.job_subfolder=QDate::currentDate().toString(Qt::ISODate)+(batch==0?"-Temporary":"-Job-"+QString::number(batch));layout.format_subfolders=formatFolders_->isChecked();layout.date_subfolders=dateFolders_->isChecked();layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
+        auto layout=outputLayout(batch);
         for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.raw)layout.raw_inputs.insert(record.path);}
         QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())),layout);
         if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");

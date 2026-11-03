@@ -131,6 +131,26 @@ private slots:
         const auto avifRecord=readMetadata(avif);QCOMPARE(avifRecord.width,128);QCOMPARE(avifRecord.format,QString("AVIF"));
         const auto nativeThumbnail=readThumbnail(avif,40);QVERIFY(!nativeThumbnail.isNull());QCOMPARE(nativeThumbnail.width(),40);
     }
+    void pngThumbnailFallback() {
+        const auto path=root("preview-only.png");QImage image(96,48,QImage::Format_RGBA8888);image.fill(QColor(180,95,45));QVERIFY(image.save(path,"PNG"));
+        QFile file(path);QVERIFY(file.open(QIODevice::ReadOnly));auto bytes=file.readAll();file.close();
+        auto put32=[](QByteArray& out,quint32 value){for(int shift=24;shift>=0;shift-=8)out.append(char(value>>shift));};
+        auto chunk=[&](const char* type,const QByteArray& payload){
+            QByteArray out;put32(out,quint32(payload.size()));out.append(type,4);out+=payload;
+            quint32 crc=~0u;for(int i=4;i<out.size();++i){crc^=quint8(out[i]);for(int bit=0;bit<8;++bit)crc=(crc>>1)^(0xedb88320u&quint32(-int(crc&1)));}put32(out,~crc);return out;
+        };
+        // A valid one-frame APNG: native still conversion rejects animation,
+        // while the GUI can display the PNG's first frame from the same bytes.
+        QByteArray actl;put32(actl,1);put32(actl,0);
+        QByteArray fctl;put32(fctl,0);put32(fctl,96);put32(fctl,48);put32(fctl,0);put32(fctl,0);fctl.append(QByteArray::fromHex("0001000a0000"));
+        bytes.insert(33,chunk("acTL",actl)+chunk("fcTL",fctl));
+        QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::Truncate));QCOMPARE(file.write(bytes),qint64(bytes.size()));file.close();
+        QVERIFY_EXCEPTION_THROWN(jxrc::preview(std::filesystem::u8path(path.toUtf8().constData()),32),std::runtime_error);
+        Record metadata;const auto thumb=readThumbnail(path,32,{},&metadata);
+        QCOMPARE(thumb.size(),QSize(32,16));QCOMPARE(thumb.format(),QImage::Format_RGBA8888);
+        QCOMPARE(metadata.width,96);QCOMPARE(metadata.height,48);QVERIFY(!metadata.raw);
+        QCOMPARE(thumb.pixelColor(16,8),QColor(180,95,45));
+    }
     void catalogImportAndFilters() {
         const QString directory=root("catalog");const auto a=makeImage(directory,"a.jpg",160,80,80),b=makeImage(directory,"b.jpg",240,120,800,"2026:01:02 12:00:00");
         const auto c=makeImage(directory+"/nested","c.JPG",100,50,200);QVERIFY(!a.isEmpty()&&!b.isEmpty()&&!c.isEmpty());
@@ -766,7 +786,7 @@ private slots:
         window.findChild<QPushButton*>("statusAll")->click();QVERIFY(!window.findChild<QPushButton*>("cancelJob")->isVisible());QVERIFY(savedJob(window,1)->text().endsWith("*"));window.findChild<QPushButton*>("runningJob")->click();QVERIFY(jobButton->isChecked());QVERIFY(savedJob(window,1)->isChecked());
         // UI edits after submission must not move the pending output.
         window.findChild<QLineEdit*>("outputDirectory")->setText(root("different-job-output"));window.findChild<QCheckBox*>("jobSubfolders")->setChecked(false);
-        QTRY_COMPARE(done.count(),1);const auto folder=output+"/"+QDate::currentDate().toString(Qt::ISODate)+"-Job-1";
+        QTRY_COMPARE(done.count(),1);const auto folder=output+"/"+outputDateFolder()+"/Job-1";
         QVERIFY(QFileInfo::exists(folder+"/a_sdr.avif"));QVERIFY(QFileInfo::exists(folder+"/b_sdr.avif"));QVERIFY(!QFileInfo::exists(root("different-job-output")+"/b_sdr.avif"));
         QCOMPARE(jobButton->text(),QString("Job #1 (2/2/0/0)"));QVERIFY(!savedJob(window,1)->text().endsWith("*"));QVERIFY(window.findChild<QPushButton*>("cancelJob")->x()<jobButton->x());QCOMPARE(savedJob(window,1)->text(),jobButton->text());
         FolderReceiver receiver;QDesktopServices::setUrlHandler("file",&receiver,"open");auto restore=qScopeGuard([]{QDesktopServices::unsetUrlHandler("file");});
@@ -849,6 +869,43 @@ private slots:
         window.findChild<QPushButton*>("convertVisible")->click();QCOMPARE(window.queue()->total(),3);QVERIFY(savedJob(window,1)->isChecked());QVERIFY(!savedJob(window,1)->text().endsWith("(?)"));QVERIFY(!savedJob(window,2));
         auto* cancel=window.findChild<QPushButton*>("cancelJob");QCOMPARE(cancel->text(),QString("Cancel job"));QVERIFY(cancel->isEnabled());cancel->click();
         QTRY_COMPARE(done.count(),1);QCOMPARE(done[0][0].toInt(),1);QCOMPARE(done[0][2].toInt(),2);QCOMPARE(window.catalog()->rowCount(),3);QCOMPARE(window.filterModel()->rowCount(),3);
+    }
+    void outputSubfolderRules() {
+        appSettings().clear();
+        const auto input=root("folder-rules/iphone/test.png"),destination=root("folder-rules/converted");
+        jxrc::Options options;options.target=jxrc::Target::avif;
+        OutputLayout layout;layout.parent_subfolders=true;
+        QCOMPARE(QFileInfo(makeJobs({input},destination,options,layout).first().output).absolutePath(),destination+"/iphone");
+        layout.date_subfolders=true;layout.job_subfolder="Job-3";layout.format_subfolders=true;
+        const QStringList parts={"iphone",outputDateFolder(),"Job-3","avif"};
+        QCOMPARE(outputFolder(input,destination,options.target,layout),destination+"/"+parts.join('/'));
+        layout.flatten_subfolders=true;
+        QCOMPARE(outputFolder(input,destination,options.target,layout),destination+"/"+parts.join('-'));
+        layout.date_subfolders=false;layout.format_subfolders=false;
+        QCOMPARE(outputFolder(input,destination,options.target,layout),destination+"/iphone-Job-3");
+        layout.source_folder=true;
+        QCOMPARE(outputFolder(input,{},options.target,layout),QFileInfo(input).absolutePath()+"/iphone-Job-3");
+        layout.job_subfolder="../escape";
+        QVERIFY_EXCEPTION_THROWN(makeJobs({input},destination,options,layout),std::invalid_argument);
+        {
+            MainWindow window;
+            auto* group=window.findChild<QGroupBox*>("outputDestination");
+            const QStringList names={"parentSubfolders","dateSubfolders","jobSubfolders","formatSubfolders","flattenSubfolders"};
+            int previous=-1;
+            for(const auto& name:names){auto* box=window.findChild<QCheckBox*>(name);QVERIFY(box);const int position=group->layout()->indexOf(box);QVERIFY(position>previous);previous=position;box->setChecked(true);}
+        }
+        MainWindow restored;
+        QVERIFY(restored.findChild<QCheckBox*>("parentSubfolders")->isChecked());
+        QVERIFY(restored.findChild<QCheckBox*>("flattenSubfolders")->isChecked());
+    }
+    void popupButtonMetrics() {
+        appSettings().clear();MainWindow window;window.show();QTest::qWait(20);
+        for(const auto& pair:{qMakePair("thumbnailAspect","thumbnailFit"),qMakePair("statusJob","runningJob")}){
+            auto* popup=window.findChild<QToolButton*>(pair.first);auto* neighbor=window.findChild<QPushButton*>(pair.second);
+            const int height=neighbor->sizeHint().height();QCOMPARE(popup->sizeHint().height(),height);QCOMPARE(popup->height(),neighbor->height());
+            const auto hint=popup->sizeHint();popup->setChecked(true);popup->setDown(true);QCOMPARE(popup->sizeHint(),hint);
+            popup->setDown(false);popup->setChecked(false);QCOMPARE(popup->sizeHint(),hint);
+        }
     }
     void collapsedQueueAndDateFolders() {
         appSettings().clear();

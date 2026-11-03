@@ -388,6 +388,13 @@ static void hdr_png(const fs::path& dir) {
         options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;
         check(jxrc::convert(input,dir/(name+"-linear.jxl"),options).width==3,"HDR PNG processing");
     }
+    // An invalid ancillary ICC chunk must warn, while leaving usable pixels.
+    auto warned=png_chunk(raster_png8,"iCCP",{'b','a','d',0,0});
+    const auto recovered=decode_regular(warned.data(),warned.size());
+    check(recovered.width==3&&recovered.height==2,"PNG metadata warning aborted decoding");
+    const auto thumb=jxrc::preview_bytes(warned,2);
+    check(thumb.width==2&&thumb.height==1,"PNG metadata warning aborted thumbnail");
+
     for(auto tags:std::vector<std::vector<uint8_t>>{{9,16,0,0},{9,16,1,1},{2,16,0,1}}) {
         auto bad=png_chunk(raster_png16,"cICP",tags);fails([&]{decode_regular(bad.data(),bad.size());});
     }

@@ -16,11 +16,14 @@ QString outputDateFolder();
 struct OutputLayout {
     bool format_subfolders = false;
     bool date_subfolders = false;
+    bool parent_subfolders = false;
+    bool flatten_subfolders = false;
     QString job_subfolder;
     bool source_folder = false;
     bool rename_conflicts = false;
     QSet<QString> raw_inputs; // Catalog-identified RAW, including TIFF sensor containers.
 };
+QString outputFolder(const QString& input, const QString& directory, Target target, const OutputLayout& layout);
 QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options, const OutputLayout& layout = {});
 class ConversionQueue : public QObject {
     Q_OBJECT

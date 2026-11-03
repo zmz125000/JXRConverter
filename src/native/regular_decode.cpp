@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdio>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -71,14 +72,28 @@ void png_read(png_structp png, png_bytep out, png_size_t count) {
     if(count>in.size-in.at)png_error(png,"Truncated PNG");
     std::memcpy(out,in.data+in.at,count);in.at+=count;
 }
-void png_warning(png_structp png, png_const_charp text) { png_error(png,text); }
+// Warnings about ancillary metadata (for example conflicting ICC/sRGB
+// combinations) are recoverable. Keep libpng's fatal errors and strict CRC
+// validation, but do not turn a usable PNG into a failed thumbnail.
+void png_warning(png_structp, png_const_charp text) { std::fprintf(stderr,"PNG warning: %s\n",text); }
 RegularImage decode_png(const uint8_t* data,size_t size) {
     RegularImage image;image.format="PNG";
+    bool saw_cicp=false,saw_idat=false;
     for(size_t at=8;at+12<=size;) {
         const auto* p=data+at;
         const uint32_t n=uint32_t(p[0])<<24 | uint32_t(p[1])<<16 | uint32_t(p[2])<<8 | p[3];
         check(n<=size-at-12,"Truncated PNG chunk");
         check(std::memcmp(p+4,"acTL",4)!=0,"Animated PNG is not supported for still conversion");
+        if(!std::memcmp(p+4,"IDAT",4))saw_idat=true;
+        if(!std::memcmp(p+4,"cICP",4)) {
+            // libpng may warn and discard invalid cICP. Never reinterpret an
+            // advertised HDR encoding as ordinary SDR when recovering warnings.
+            check(!saw_cicp&&!saw_idat&&n==4,"Invalid PNG CICP chunk");
+            const auto cp=p[8],tc=p[9];
+            check((cp==1||cp==9||cp==12)&&(tc==16||tc==18||(cp==1&&tc==13))&&p[10]==0&&p[11]==1,
+                  "Unsupported PNG CICP encoding (requires supported primaries and full-range RGB)");
+            saw_cicp=true;
+        }
         at+=size_t(n)+12;
     }
     PngInput input{data,size};std::vector<png_bytep> rows;
