@@ -14,7 +14,11 @@ int main(int argc,char** argv) {
     }
     QApplication app(argc,argv);app.setOrganizationName("JXRConverter");app.setApplicationName("JXRConverter");app.setApplicationVersion(QString::fromStdString(jxrc::version()));
     app.setApplicationDisplayName("JXRConverter v"+QString::fromStdString(jxrc::version()));
+#ifdef Q_OS_MACOS
+    app.setWindowIcon(QIcon(":/icons/jxrconverter-macos.png"));
+#else
     app.setWindowIcon(QIcon(":/icons/jxrconverter.png"));
+#endif
     jxrc::gui::applyDesktopStyle();
     jxrc::gui::MainWindow window;window.show();
     QStringList paths;for(const auto& arg:app.arguments().mid(1))paths<<QFileInfo(arg).absoluteFilePath();window.addPaths(paths);

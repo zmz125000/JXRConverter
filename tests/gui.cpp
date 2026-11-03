@@ -711,7 +711,7 @@ private slots:
             auto* menu=window.findChild<QMenu*>("jobMenu");QCOMPARE(menu->actions().size(),2);QVERIFY(savedJob(window,1)->isChecked());QCOMPARE(savedJob(window,1)->text(),QString("Job #1 (2/2/0/0)"));
             window.findChild<QPushButton*>("statusAll")->click();
             auto* view=window.findChild<FileListView*>();view->selectionModel()->select(window.filterModel()->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
-            window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,2)->isChecked());QCOMPARE(savedJob(window,2)->text(),QString("Job #2 (0/1/1/0)"));
+            window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,2)->isChecked());QCOMPARE(savedJob(window,2)->text(),QString("Quick job #2 (0/1/1/0)"));
             window.addPaths({c});QTRY_COMPARE(window.catalog()->rowCount(),3);
             auto single=[&](int row){bool chosen=false;QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("convertImage");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});view->customContextMenuRequested(view->visualRect(window.filterModel()->index(row,0)).center());return chosen;};
             QVERIFY(single(2));QTRY_COMPARE(done.count(),3);window.findChild<QPushButton*>("statusAll")->click();QVERIFY(single(1));QTRY_COMPARE(done.count(),4);
@@ -884,19 +884,54 @@ private slots:
         layout.date_subfolders=false;layout.format_subfolders=false;
         QCOMPARE(outputFolder(input,destination,options.target,layout),destination+"/iphone-Job-3");
         layout.source_folder=true;
-        QCOMPARE(outputFolder(input,{},options.target,layout),QFileInfo(input).absolutePath()+"/iphone-Job-3");
+        QCOMPARE(outputFolder(input,{},options.target,layout),QFileInfo(input).absolutePath()+"/Converted/Job-3");
         layout.job_subfolder="../escape";
         QVERIFY_EXCEPTION_THROWN(makeJobs({input},destination,options,layout),std::invalid_argument);
         {
             MainWindow window;
             auto* group=window.findChild<QGroupBox*>("outputDestination");
-            const QStringList names={"parentSubfolders","dateSubfolders","jobSubfolders","formatSubfolders","flattenSubfolders"};
+            const QStringList names={"convertedSubfolder","parentSubfolders","dateSubfolders","jobSubfolders","formatSubfolders","flattenSubfolders"};
             int previous=-1;
             for(const auto& name:names){auto* box=window.findChild<QCheckBox*>(name);QVERIFY(box);const int position=group->layout()->indexOf(box);QVERIFY(position>previous);previous=position;box->setChecked(true);}
         }
         MainWindow restored;
         QVERIFY(restored.findChild<QCheckBox*>("parentSubfolders")->isChecked());
         QVERIFY(restored.findChild<QCheckBox*>("flattenSubfolders")->isChecked());
+        auto* parent=restored.findChild<QCheckBox*>("parentSubfolders");auto* original=restored.findChild<QCheckBox*>("saveToSourceFolder");
+        auto* converted=restored.findChild<QCheckBox*>("convertedSubfolder");QVERIFY(converted->isChecked());QVERIFY(!converted->isEnabled());
+        original->setChecked(true);QVERIFY(converted->isEnabled());QVERIFY(!parent->isEnabled());QVERIFY(parent->isChecked());
+        original->setChecked(false);QVERIFY(!converted->isEnabled());QVERIFY(parent->isEnabled());QVERIFY(parent->isChecked());
+    }
+    void sessionQuickJobs() {
+        appSettings().clear();appSettings().setValue("jobs/nextNumber",7);
+        const auto directory=root("quick-input"),destination=root("quick-output");QStringList inputs;
+        for(int i=0;i<5;++i)inputs.append(makeImage(directory,QString::number(i)+".jpg",64,48,100));
+        {
+            MainWindow window;window.show();window.addPaths(inputs);QTRY_COMPARE(window.catalog()->rowCount(),5);
+            window.findChild<QLineEdit*>("outputDirectory")->setText(destination);window.findChild<QCheckBox*>("jobSubfolders")->setChecked(true);
+            auto* view=window.findChild<FileListView*>();auto* selection=view->selectionModel();auto* model=window.filterModel();
+            auto select=[&](int row){selection->select(model->index(row,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);};
+            auto* convert=window.findChild<QPushButton*>("convertSelected");QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
+            select(0);convert->click();QVERIFY(savedJob(window,7));QVERIFY(savedJob(window,7)->text().startsWith("Quick job #7"));
+            select(1);selection->select(model->index(2,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+            QVERIFY(convert->isEnabled());convert->click();QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),2);
+            QTRY_COMPARE(done.count(),1);QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/0_sdr.avif"));QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/2_sdr.avif"));
+            QCOMPARE(savedJob(window,7)->text(),QString("Quick job #7 (3/3/0/0)"));QCOMPARE(appSettings().value("jobs/nextNumber").toInt(),8);
+            window.findChild<QPushButton*>("selectAllImages")->click();convert->click();QTRY_COMPARE(done.count(),2);
+            QVERIFY(savedJob(window,8));QVERIFY(savedJob(window,8)->text().startsWith("Job #8"));
+            select(3);convert->click();QTRY_COMPARE(done.count(),3);
+            QCOMPARE(savedJob(window,7)->text(),QString("Quick job #7 (4/4/0/0)"));QCOMPARE(appSettings().value("jobs/nextNumber").toInt(),9);
+            window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(true);
+        }
+        {
+            MainWindow window;window.show();QVERIFY(savedJob(window,7));QVERIFY(savedJob(window,7)->text().startsWith("Quick job #7"));
+            window.addPaths(inputs);QTRY_COMPARE(window.catalog()->rowCount(),5);
+            auto* view=window.findChild<FileListView*>();view->selectionModel()->select(window.filterModel()->index(0,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+            QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);auto* convert=window.findChild<QPushButton*>("convertSelected");convert->click();QTRY_COMPARE(done.count(),1);
+            QVERIFY(savedJob(window,9));QVERIFY(savedJob(window,9)->text().startsWith("Quick job #9"));
+            window.findChild<QAction*>("clearJobs")->trigger();convert->click();QTRY_COMPARE(done.count(),2);
+            QVERIFY(savedJob(window,1));QVERIFY(savedJob(window,1)->text().startsWith("Quick job #1"));
+        }
     }
     void popupButtonMetrics() {
         appSettings().clear();MainWindow window;window.show();QTest::qWait(20);
@@ -932,7 +967,7 @@ private slots:
             const auto jobs=makeJobs({source},root("dated/output"),options,layout);
             QCOMPARE(QFileInfo(jobs.first().output).absolutePath(),root("dated/output")+"/"+expected+"/avif");
             layout.source_folder=true;
-            QCOMPARE(QFileInfo(makeJobs({source},{},options,layout).first().output).absolutePath(),root("dated")+"/"+expected+"/avif");
+            QCOMPARE(QFileInfo(makeJobs({source},{},options,layout).first().output).absolutePath(),root("dated")+"/Converted/"+expected+"/avif");
         }
         QLocale::setDefault(previous);
         window.findChild<QCheckBox*>("dateSubfolders")->setChecked(true);
@@ -1053,8 +1088,8 @@ private slots:
         jxrc::Options options;options.target=jxrc::Target::avif;options.overwrite=true;
         OutputLayout layout;layout.source_folder=true;layout.format_subfolders=true;layout.rename_conflicts=true;
         auto jobs=makeJobs({a,b},{},options,layout);QCOMPARE(jobs.size(),2);
-        QCOMPARE(QFileInfo(jobs[0].output).absolutePath(),QFileInfo(a).absolutePath()+"/avif");
-        QCOMPARE(QFileInfo(jobs[1].output).absolutePath(),QFileInfo(b).absolutePath()+"/avif");
+        QCOMPARE(QFileInfo(jobs[0].output).absolutePath(),QFileInfo(a).absolutePath()+"/Converted/avif");
+        QCOMPARE(QFileInfo(jobs[1].output).absolutePath(),QFileInfo(b).absolutePath()+"/Converted/avif");
         QVERIFY(!jobs[0].options.overwrite);QVERIFY(!jobs[1].options.overwrite);
         QDir().mkpath(QFileInfo(jobs[0].output).absolutePath());QFile existing(jobs[0].output);QVERIFY(existing.open(QIODevice::WriteOnly));existing.write("keep");existing.close();
         const auto renamed=makeJobs({a,a},{},options,layout);

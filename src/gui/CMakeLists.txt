@@ -21,7 +21,7 @@ add_executable(jxrconverter WIN32 MACOSX_BUNDLE main.cpp)
 add_dependencies(jxrconverter jxrc_update)
 qt_add_resources(jxrconverter app_icons PREFIX "/icons"
     BASE "${PROJECT_SOURCE_DIR}/assets/icons"
-    FILES "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.png")
+    FILES "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter.png" "${PROJECT_SOURCE_DIR}/assets/icons/jxrconverter-macos.png")
 target_link_libraries(jxrconverter PRIVATE jxrc_desktop)
 set_target_properties(jxrconverter PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}"
     MACOSX_BUNDLE_BUNDLE_NAME JXRConverter MACOSX_BUNDLE_GUI_IDENTIFIER org.jxrconverter.desktop

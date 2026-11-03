@@ -22,6 +22,11 @@ order (`iphone/11-3-26/Job-3/avif/`, for example; date spelling follows the syst
 locale). Enable Flatten subfolder rules to join the enabled names into one
 folder, such as `iphone-11-3-26-Job-3-avif/`. Each rule is independent. It can also
 save beside each original image and rename conflicting outputs with a number.
+Saving to the original folder disables and skips the source-parent rule. Its
+Create converted subfolder option defaults on and puts the other rules inside
+`Converted/`; flattening never merges this outer folder.
+Convert selected groups requests of 1–4 images into one Quick job per app
+session, using the global job counter. Selecting work inside Jobs keeps that job.
 Settings are stored in `config/settings.ini` and recent-file/folder history in
 `config/history.json` beside the executable (beside the `.app` on macOS).
 Keep the app folder writable; updates preserve this folder.

@@ -64,7 +64,7 @@ private:
     void removeImageSelection();
     void clearCurrentTab();
     void openOutputFolder();
-    OutputLayout outputLayout(qint64 batch) const;
+    OutputLayout outputLayout(qint64 batch, bool quick = false) const;
     void showJob(qint64 number);
     void updateJobOutput(qint64, const QString&, const QString&, const QString&);
     QString browserScrollKey() const;
@@ -79,7 +79,7 @@ private:
     void refreshJobs();
     void createDraftJob(const QStringList& files);
     bool isDraftJob(qint64 number) const;
-    void recordJob(const QVector<Job>&, bool temporary, bool reuse = false);
+    void recordJob(const QVector<Job>&, bool temporary, bool reuse = false, bool quick = false);
     QString jobText(qint64 number) const;
     QList<QWidget*> persistentControls() const;
     void restoreSettings();
@@ -95,7 +95,7 @@ private:
     void updateCounts();
     void showMetadata();
     void convertFiles(bool selected);
-    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false);
+    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false);
     void checkForUpdates();
     void logMessage(const QString&);
     QVector<Target> selectedTargets() const;
@@ -118,7 +118,7 @@ private:
     QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_;
     QDoubleSpinBox *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
-    QCheckBox *autoAspect_, *portraitAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *loadJobs_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *parentFolders_, *flattenFolders_, *dateFolders_, *jobFolders_, *jumpToJob_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
+    QCheckBox *autoAspect_, *portraitAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *loadJobs_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *convertedFolder_, *parentFolders_, *flattenFolders_, *dateFolders_, *jobFolders_, *jumpToJob_, *sourceFolder_, *renameConflicts_, *overwrite_, *convertGamut_, *bt2020_, *cameraLook_, *linearHdr_;
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
     QPushButton *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_, *cancelJob_;
@@ -139,10 +139,10 @@ private:
     QSet<QString> loggedWarnings_, selectedImages_, selectedTabImages_, rememberedImages_;
     QHash<qint64,QSet<QString>> jobSelections_;
     struct OutputProgress {QString input, state;};
-    struct SavedJob { qint64 number; QStringList files; QHash<QString,OutputProgress> outputs; QString folder; };
+    struct SavedJob { qint64 number; QStringList files; QHash<QString,OutputProgress> outputs; QString folder; bool quick = false; };
     QVector<SavedJob> savedJobs_;
     SavedJob temporaryJob_{0,{},{},{}};
-    qint64 nextJob_ = 1, viewedJob_ = 0;
+    qint64 nextJob_ = 1, viewedJob_ = 0, quickJob_ = -1;
     struct BrowserState {
         QVariantMap controls;
         QString search;

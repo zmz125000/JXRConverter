@@ -14,6 +14,7 @@ int coreCount();
 int recommendedWorkers(int cores);
 QString outputDateFolder();
 struct OutputLayout {
+    bool converted_subfolder = true;
     bool format_subfolders = false;
     bool date_subfolders = false;
     bool parent_subfolders = false;

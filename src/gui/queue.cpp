@@ -43,8 +43,9 @@ QString outputFolder(const QString& input,const QString& directory,Target target
     const QFileInfo source(input);
     QString folder=layout.source_folder?source.absolutePath():directory;
     if(folder.trimmed().isEmpty())throw std::invalid_argument("Choose an output folder");
+    if(layout.source_folder&&layout.converted_subfolder)folder=QDir(folder).filePath("Converted");
     QStringList parts;
-    if(layout.parent_subfolders) {
+    if(layout.parent_subfolders&&!layout.source_folder) {
         const auto parent=QDir(source.absolutePath()).dirName();
         if(!QDir(source.absolutePath()).isRoot()&&!parent.isEmpty())parts.append(parent);
     }
