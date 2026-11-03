@@ -39,7 +39,8 @@ sRGB/BT.709 primaries and clamps negative RGB channels. SDR targets use their
 normal sRGB range; HDR targets retain their selected transfer and HDR brightness
 range. It overrides both BT.2020 controls. Untouched scRGB → linear JXL keeps its
 direct signed/extended path, just as with scRGB → BT.2020 disabled. The CLI
-option is `--srgb-clamp`.
+option is `--srgb-clamp`. GUI-generated filenames add `_srgb` before the extension
+when enabled, for example `photo_sdr_srgb.avif`.
 
 **Reset pixel processing** restores exposure, resizing, gamut conversion, and
 sRGB clamp to their defaults. It leaves quality and RAW rendering settings alone.

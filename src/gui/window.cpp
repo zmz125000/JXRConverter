@@ -888,7 +888,9 @@ void MainWindow::updateAutoThumbnailAspect() {
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
 void MainWindow::updateCounts() {
-    progress_->setFormat(mode_->currentIndex()==1&&maxEdge_->value()>0?QString("%p% (%v/%m) (max edge %1 px)").arg(maxEdge_->value()):QString("%p% (%v/%m)"));
+    QStringList processingNotes;
+    if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("Max Edge %1").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB Clamp");}
+    progress_->setFormat(QString("%p% (%v/%m)")+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));

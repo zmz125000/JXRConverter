@@ -68,6 +68,8 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
     validate(options);QVector<Job> result;QSet<QString> outputs;
     const int target=int(options.target);
     const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl"};
+    QString suffix=suffixes[target];
+    if(options.mode==Mode::process&&options.srgb_clamp)suffix.insert(suffix.lastIndexOf('.'),"_srgb");
     static const QSet<QString> rawExtensions={"dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     auto pathKey=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
     QSet<QString> sources;for(const auto& input:inputs)sources.insert(pathKey(input));
@@ -79,11 +81,11 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
             else if(options.raw.hdr_mode==RawHdrMode::custom)stem+="_hdr_custom";
         }
         const QString folder=outputFolder(input,directory,options.target,layout);
-        QString filename=stem+"_"+suffixes[target];int n=2;
+        QString filename=stem+"_"+suffix;int n=2;
         auto outputPath=[&]{return QDir(folder).absoluteFilePath(filename);};
         while(outputs.contains(pathKey(outputPath())) ||
               (layout.rename_conflicts && (QFileInfo::exists(outputPath()) || sources.contains(pathKey(outputPath())))))
-            filename=stem+"_"+QString::number(n++)+"_"+suffixes[target];
+            filename=stem+"_"+QString::number(n++)+"_"+suffix;
         const QString output=outputPath();outputs.insert(pathKey(output));
         if(sources.contains(pathKey(output)))throw std::invalid_argument("Output would replace an input file");
         Options snapshot=options;if(layout.rename_conflicts)snapshot.overwrite=false;
