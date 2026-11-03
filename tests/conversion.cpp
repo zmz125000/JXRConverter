@@ -179,6 +179,10 @@ static void signed_float_jxl(const fs::path& dir) {
         check(info.bits==32 && info.hdr && info.transfer=="Linear" && info.primaries=="BT.709","Preset changed scRGB encoding");
     }
     options.quality.preset=jxrc::Preset::lossless;
+    options.srgb_clamp=true;options.target=jxrc::Target::jxl_linear;
+    const auto clampedDirect=dir/"scrgb-clamp-direct.jxl";jxrc::convert(path,clampedDirect,options);
+    check(bytes(clampedDirect)==copy,"sRGB clamp altered the direct scRGB path");
+    options.srgb_clamp=false;
     options.convert_gamut=false;
     check(jxrc::Options{}.convert_gamut,"scRGB gamut conversion must default on");
     for(auto target:{jxrc::Target::avif_pq,jxrc::Target::jxl_pq,jxrc::Target::jxl_linear}) {
@@ -226,6 +230,63 @@ static void signed_float_jxl(const fs::path& dir) {
 
 }
 
+static void srgb_clamping(const fs::path& dir) {
+    jxrc::Options o;o.mode=jxrc::Mode::process;o.srgb_clamp=true;o.quality.preset=jxrc::Preset::lossless;
+    std::vector<float> referencePixels(16*16*4,.5f);const auto referencePath=dir/"reference-srgb.jpg";
+    check(encode_still_export_f32(referencePixels.data(),16,16,0,0,referencePath.string().c_str(),StillEncodeQuality(0))==0,"Reference sRGB JPEG");
+    const auto referenceJpeg=bytes(referencePath),referenceIcc=source_jpeg_icc(referenceJpeg.data(),referenceJpeg.size());
+    check(!referenceIcc.empty(),"Reference sRGB ICC missing");
+    auto has709=[&](const fs::path& path){
+        const auto info=jxrc::inspect(path);
+        if(info.format=="JPEG"){const auto data=bytes(path);return source_jpeg_icc(data.data(),data.size())==referenceIcc;}
+        if(info.format=="AVIF") {
+            const auto data=bytes(path);std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> decoder(avifDecoderCreate(),avifDecoderDestroy);
+            if(!decoder||avifDecoderSetIOMemory(decoder.get(),data.data(),data.size())!=AVIF_RESULT_OK||avifDecoderParse(decoder.get())!=AVIF_RESULT_OK)return false;
+            const auto* image=decoder->image;
+            return image->colorPrimaries==1&&(!image->icc.size||(image->icc.size==referenceIcc.size()&&!std::memcmp(image->icc.data,referenceIcc.data(),referenceIcc.size())));
+        }
+        return info.primaries=="BT.709";
+    };
+    auto invalid=o;invalid.mode=jxrc::Mode::preserve;fails([&]{jxrc::validate(invalid);});
+    invalid=o;invalid.target=jxrc::Target::jxl;invalid.jpeg_transcoding=true;fails([&]{jxrc::validate(invalid);});
+    for(int cp:{9,12}) {
+        std::vector<float> pixels(16*16*4);
+        for(size_t i=0;i<pixels.size();i+=4){pixels[i]=.05f;pixels[i+1]=1.5f;pixels[i+2]=.1f;pixels[i+3]=.5f;}
+        StillSourceColor color;color.bits=32;color.exponent_bits=8;color.transfer=8;color.primaries=cp;color.intensity_target=1000.f;
+        const auto input=dir/("wide-clamp-"+std::to_string(cp)+".jxl");
+        check(encode_jxl_source(16,16,pixels.data(),true,color,input.string().c_str(),StillEncodeQuality(0))==0,"Clamp source fixture");
+        jxrc::ConversionSession session(input);
+        for(auto target:{jxrc::Target::jxl_linear,jxrc::Target::jxl_pq,jxrc::Target::avif_pq,jxrc::Target::jpeg_gainmap,jxrc::Target::avif_gainmap,jxrc::Target::jxl_scrgb}) {
+            o.target=target;const auto output=dir/("clamped-"+std::to_string(cp)+"-"+std::to_string(int(target)));
+            session.convert(output,o);const auto info=jxrc::inspect(output);check(has709(output),"sRGB clamp failed to tag output primaries");
+            if(target==jxrc::Target::jxl_linear) {
+                std::vector<float> expected,actual;unsigned w=0,h=0;uhdr_color_gamut_t gamut;bool hdr=false;int transfer=0;
+                auto source=bytes(input),encoded=bytes(output);
+                check(decode_jxl_to_linear_f32(source.data(),source.size(),expected,w,h,&gamut,&hdr,&transfer,false,nullptr)==0,"Clamp source decode");
+                check(decode_jxl_to_linear_f32(encoded.data(),encoded.size(),actual,w,h,&gamut,&hdr,&transfer,false,nullptr)==0,"Clamped output decode");
+                float r=expected[0],g=expected[1],b=expected[2];
+                if(cp==9)linear_bt2020_to_bt709(r,g,b);else linear_p3_to_bt709(r,g,b);
+                const float reference[]={std::max(0.f,r),std::max(0.f,g),std::max(0.f,b),expected[3]};
+                // Linear JXL quantizes half samples and luminance metadata.
+                for(unsigned c=0;c<4;++c)if(std::abs(actual[c]-reference[c])>=(c==3?.0001f:std::max(.002f,std::abs(reference[c])*.001f)))throw std::runtime_error("Clamp pixel mismatch: source "+std::to_string(cp)+", channel "+std::to_string(c)+", actual "+std::to_string(actual[c])+", expected "+std::to_string(reference[c]));
+                check(actual[1]>1.f,"sRGB gamut clamp destroyed HDR headroom");
+            }
+        }
+        // Changing the toggle must invalidate the shared prepared render.
+        o.target=jxrc::Target::jxl_linear;o.srgb_clamp=false;
+        const auto reused=dir/("unclamp-reused-"+std::to_string(cp)),fresh=dir/("unclamp-fresh-"+std::to_string(cp));
+        session.convert(reused,o);jxrc::convert(input,fresh,o);check(bytes(reused)==bytes(fresh),"Clamped render leaked into another output");
+        o.srgb_clamp=true;
+    }
+    // Integer SDR shortcuts must not bypass a requested gamut conversion.
+    StillSourceColor color;color.bits=8;color.transfer=13;color.primaries=12;
+    const uint8_t pixels[]={240,30,20,128};const auto input=dir/"p3-integer.jxl";
+    check(encode_jxl_source(1,1,pixels,false,color,input.string().c_str(),StillEncodeQuality(0))==0,"P3 SDR fixture");
+    for(auto target:{jxrc::Target::jpeg,jxrc::Target::jxl,jxrc::Target::avif}) {
+        o.target=target;const auto output=dir/("sdr-clamp-"+std::to_string(int(target)));jxrc::convert(input,output,o);
+        const auto info=jxrc::inspect(output);check(has709(output)&&info.bits==8,"SDR shortcut bypassed clamp or changed depth");
+    }
+}
 static void shared_render(const fs::path& dir) {
     const auto source=dir/"session.png";write(source,raster_png8);
     jxrc::ConversionSession session(source);
@@ -511,6 +572,7 @@ int main(int argc,char** argv) try {
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--srgb-clamp") {srgb_clamping(dir);signed_float_jxl(dir);std::cout<<"sRGB clamp tests passed\n";return 0;}
     // BMFF is a container, not an AVIF signature. Canon CR3 must reach LibRaw.
     const std::vector<uint8_t> cr3_header={0,0,0,24,'f','t','y','p','c','r','x',' ',0,0,0,1,'c','r','x',' ','i','s','o','m'};
     check(!is_avif_input(cr3_header.data(),cr3_header.size()),"CR3 routed to AVIF decoder");
@@ -519,6 +581,7 @@ int main(int argc,char** argv) try {
     std::memcpy(avif_header.data()+8,"mif1",4);
     check(is_avif_input(avif_header.data(),avif_header.size()),"AVIF compatible brand rejected");
     check(!is_avif_input(cr3_header.data(),8),"Truncated BMFF identified as AVIF");
+    srgb_clamping(dir);
     shared_render(dir);
     signed_float_jxl(dir);
     regular_images(dir);jpeg_avif_paths(dir);

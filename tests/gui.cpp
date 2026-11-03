@@ -1003,6 +1003,18 @@ private slots:
         mode->setCurrentIndex(0);const auto preserved=window.options();QCOMPARE(preserved.mode,jxrc::Mode::preserve);QCOMPARE(preserved.raw.exposure,0.f);QCOMPARE(preserved.raw.hdr_mode,jxrc::RawHdrMode::source);
         QVERIFY(!window.findChild<QDoubleSpinBox*>("rawExposure")->isEnabled());
     }
+    void srgbClampControls() {
+        appSettings().clear();
+        {
+            MainWindow window;auto* clamp=window.findChild<QCheckBox*>("srgbClamp");auto* gamut=window.findChild<QCheckBox*>("convertGamut");auto* mode=window.findChild<QComboBox*>("conversionMode");
+            QVERIFY(clamp);QVERIFY(!clamp->isChecked());mode->setCurrentIndex(1);clamp->setChecked(true);
+            QVERIFY(window.options().srgb_clamp);QVERIFY(!gamut->isEnabled());QVERIFY(gamut->isChecked());
+            mode->setCurrentIndex(0);QVERIFY(!clamp->isEnabled());QVERIFY(!window.options().srgb_clamp);
+            mode->setCurrentIndex(1);QVERIFY(window.options().srgb_clamp);
+        }
+        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("srgbClamp")->isChecked());QVERIFY(restored.options().srgb_clamp);}
+        appSettings().clear();
+    }
     void jpegTranscodingControls() {
         MainWindow window;
         auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);

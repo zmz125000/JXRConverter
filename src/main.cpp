@@ -16,13 +16,14 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
   --jxl-distance 0..3           Custom JXL distance (selects custom preset)
   --avif-depth 10|12            Custom AVIF maximum depth (selects custom preset)
   --downsize-gainmap            Halve gain-map size (selects custom preset)
-  --jpeg-transcoding           Lossless JPEG coefficients to SDR JXL (no exposure/resize)
+  --jpeg-transcoding           Lossless JPEG coefficients to SDR JXL (no pixel edits)
   --threads 0..65535            Per-conversion CPU budget; 0 = automatic
   --keep-exif                   Keep source EXIF where supported
   --overwrite                   Replace existing output after successful encoding
 Processing controls:
   --exposure -3..3              Linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing
+  --srgb-clamp                 Limit output gamut to sRGB/BT.709 (keeps HDR transfer/range)
   --no-convert-gamut           Keep scRGB / BT.709 primaries (conversion defaults on)
   --no-extended-bt2020          Disable extended BT.2020 working conversion for JXL
 RAW controls (process mode):
@@ -72,6 +73,7 @@ int run(int argc,char** argv) {
         else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}
         else if(arg=="--keep-exif")o.keep_exif=true;
         else if(arg=="--overwrite")o.overwrite=true;
+        else if(arg=="--srgb-clamp")o.srgb_clamp=true;
         else if(arg=="--convert-gamut")o.convert_gamut=true;
         else if(arg=="--no-convert-gamut")o.convert_gamut=false;
         else if(arg=="--no-extended-bt2020")o.extended_bt2020=false;

@@ -43,6 +43,7 @@ struct Options {
     bool jpeg_transcoding = false; // Eligible SDR JPEG coefficients to JXL, without exposure/resizing.
     bool keep_exif = false;
     bool overwrite = false;
+    bool srgb_clamp = false; // Process mode: constrain output gamut to sRGB/BT.709; retain HDR transfer/headroom.
     bool extended_bt2020 = true;
     bool convert_gamut = true; // Process mode: convert scRGB to BT.2020 for wider viewer compatibility.
 };

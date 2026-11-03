@@ -167,10 +167,10 @@ void validate(const Options& o) {
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
     range(r.highlight_stops,0,3,"highlight stops");range(r.shoulder,0,1,"shoulder");range(r.target_nits,1000,10000,"target nits");
     range(r.shadows,-1,1,"shadows");range(r.midtones,-1,1,"midtones");range(r.highlights,-1,1,"highlights");
-    if(o.jpeg_transcoding&&(o.target!=Target::jxl||o.exposure||o.max_edge))throw std::invalid_argument("JPEG transcoding requires SDR JXL without exposure or resizing");
+    if(o.jpeg_transcoding&&(o.target!=Target::jxl||o.exposure||o.max_edge||o.srgb_clamp))throw std::invalid_argument("JPEG transcoding requires SDR JXL without exposure, resizing or sRGB clamping");
     if(o.mode==Mode::preserve) {
         const RawControls d;
-        if(o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
+        if(o.srgb_clamp||o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
             throw std::invalid_argument("Pixel and RAW controls require --mode process");
         if(o.target==Target::jxl_pq||o.target==Target::avif_pq)
             throw std::invalid_argument("An explicit transfer conversion requires --mode process; preserve uses the source transfer");
@@ -189,11 +189,11 @@ struct ConversionSession::Impl {
 };
 namespace {
 bool scrgb_output(const Options& o) {return o.target==Target::jxl_scrgb;}
-bool convert_gamut(const Options& o) {return o.convert_gamut && !scrgb_output(o);}
+bool convert_gamut(const Options& o) {return o.convert_gamut && !o.srgb_clamp && !scrgb_output(o);}
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
-    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,format==3&&o.extended_bt2020,(format==3||format==4)&&convert_gamut(o),raw_kind,
+    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
         format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr);
@@ -226,7 +226,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg) && !o.exposure && !o.max_edge) {
+    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg) && !o.exposure && !o.max_edge && !o.srgb_clamp) {
         if(format==6) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
             direct_sdr=!regular->hdr();
@@ -235,7 +235,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
     // Plain JPEG/AVIF targets keep an existing SDR base and gain map when
     // no pixel edit is requested, independently of the selected process mode.
-    const bool direct_gainmap=cache.gainmap && !o.exposure && !o.max_edge &&
+    const bool direct_gainmap=cache.gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp &&
         (o.target==Target::jpeg||o.target==Target::avif);
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
@@ -287,7 +287,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
             else if(format==7)rc=decode_heif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.keep_exif?&exif:nullptr);
-            else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):o.extended_bt2020),o.keep_exif?&exif:nullptr);
+            else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):(o.extended_bt2020&&!o.srgb_clamp)),o.keep_exif?&exif:nullptr);
             else if(format==4) {
                 if((linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve))
                     cache.scrgb=decode_jxr_scrgb(bytes.data(),bytes.size(),linear,w,h,cache.half_jxr);
@@ -343,6 +343,20 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 for(size_t i=0;i<linear.size();++i)if(i%4!=3)linear[i]*=multiplier;
             }
             if(format!=5&&o.max_edge)scale_rgba_f32_max_edge(linear,w,h,o.max_edge);
+            if(o.srgb_clamp&&!cache.scrgb) {
+                // Rematrix both HDR and paired RAW SDR pixels before encoding.
+                // Keep HDR headroom above 1; SDR encoders apply their normal
+                // [0,1] range. Untouched scRGB retains its direct signed path.
+                auto clampGamut=[&](std::vector<float>& pixels) {
+                    for(size_t i=0;i<pixels.size();i+=4) {
+                        auto& r=pixels[i];auto& g=pixels[i+1];auto& b=pixels[i+2];
+                        if(gamut==UHDR_CG_BT_2100)linear_bt2020_to_bt709(r,g,b);
+                        else if(gamut==UHDR_CG_DISPLAY_P3)linear_p3_to_bt709(r,g,b);
+                        for(unsigned c=0;c<3;++c)if(!std::isfinite(pixels[i+c])||pixels[i+c]<0.f)pixels[i+c]=0.f;
+                    }
+                };
+                clampGamut(linear);clampGamut(raw_sdr);gamut=UHDR_CG_BT_709;
+            }
             cache.previous=o;cache.ready=true;
         }
         auto output_exif=exif;prepare_export_exif(output_exif,w,h);
