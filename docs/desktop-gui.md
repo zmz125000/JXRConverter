@@ -40,3 +40,8 @@ normal sRGB range; HDR targets retain their selected transfer and HDR brightness
 range. It overrides both BT.2020 controls. Untouched scRGB → linear JXL keeps its
 direct signed/extended path, just as with scRGB → BT.2020 disabled. The CLI
 option is `--srgb-clamp`.
+
+**Reset pixel processing** restores exposure, resizing, gamut conversion, and
+sRGB clamp to their defaults. It leaves quality and RAW rendering settings alone.
+**Load filters** on the top toolbar restores saved searches and image filters at
+startup. It defaults off; display preferences and conversion settings still load.

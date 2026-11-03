@@ -1003,6 +1003,30 @@ private slots:
         mode->setCurrentIndex(0);const auto preserved=window.options();QCOMPARE(preserved.mode,jxrc::Mode::preserve);QCOMPARE(preserved.raw.exposure,0.f);QCOMPARE(preserved.raw.hdr_mode,jxrc::RawHdrMode::source);
         QVERIFY(!window.findChild<QDoubleSpinBox*>("rawExposure")->isEnabled());
     }
+    void startupFilterPreference() {
+        appSettings().clear();
+        const auto orange=makeImage(root("startup-filters"),"orange.jpg",64,48,100),purple=makeImage(root("startup-filters"),"purple.jpg",64,48,200);
+        appSettings().setValue("controls/search","not-a-file");appSettings().setValue("search/applied","not-a-file");
+        appSettings().setValue("controls/instantFilter","also-missing");appSettings().setValue("controls/todayFilter",true);
+        appSettings().setValue("controls/dateFilter",true);appSettings().setValue("controls/metadataFilters",true);
+        appSettings().setValue("controls/formatFilter","png");appSettings().setValue("controls/exposure",1.2);
+        {
+            MainWindow window;window.addPaths({orange,purple});QTRY_COMPARE(window.filterModel()->rowCount(),2);
+            QVERIFY(!window.findChild<QCheckBox*>("loadFilters")->isChecked());QCOMPARE(window.options().exposure,1.2f);
+            window.findChild<QLineEdit*>("search")->setText("orange");QTest::keyClick(window.findChild<QLineEdit*>("search"),Qt::Key_Return);
+            QTRY_COMPARE(window.filterModel()->rowCount(),1);window.findChild<QCheckBox*>("loadFilters")->setChecked(true);
+        }
+        {
+            MainWindow restored;restored.addPaths({orange,purple});QTRY_COMPARE(restored.filterModel()->rowCount(),1);
+            QCOMPARE(restored.filterModel()->index(0,0).data(Catalog::PathRole).toString(),orange);
+            QVERIFY(restored.findChild<QCheckBox*>("loadFilters")->isChecked());restored.findChild<QCheckBox*>("loadFilters")->setChecked(false);
+        }
+        {
+            MainWindow restored;restored.addPaths({orange,purple});QTRY_COMPARE(restored.filterModel()->rowCount(),2);
+            QVERIFY(restored.findChild<QLineEdit*>("search")->text().isEmpty());QCOMPARE(restored.options().exposure,1.2f);
+        }
+        appSettings().clear();
+    }
     void srgbClampControls() {
         appSettings().clear();
         {

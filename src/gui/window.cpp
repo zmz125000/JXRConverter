@@ -146,6 +146,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     });
     loadFolder_=check("Load last folder","loadLastFolder");loadFiles_=check("Load last files","loadLastFiles");toolbar->addWidget(loadFolder_);toolbar->addWidget(loadFiles_);
     loadJobs_=check("Load jobs","loadPreviousJobs");loadJobs_->setToolTip("Restore saved job lists on startup. Job images load only when you select a job.");toolbar->addWidget(loadJobs_);
+    loadFilters_=check("Load filters","loadFilters");loadFilters_->setToolTip("Restore saved search and image filters at startup. Off starts with no search or image filters.");toolbar->addWidget(loadFilters_);
     clearJobs_=toolbar->addAction("Clear jobs");clearJobs_->setObjectName("clearJobs");clearJobs_->setToolTip("Clear saved jobs and reset job numbering. Images already in the library stay available.");connect(clearJobs_,&QAction::triggered,this,&MainWindow::clearJobs);
     auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
     recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
@@ -366,7 +367,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto settings=appSettings();restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",200).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
-    restoreSettings();appliedSearch_=settings.value("search/applied",search_->text()).toString();direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
+    restoreSettings();appliedSearch_=loadFilters_->isChecked()?settings.value("search/applied",search_->text()).toString():QString{};direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     catalog_->setAspectSampling(autoAspect_->isChecked());updateMode();updateFilter();updatePresentation();updateCounts();requestAspectSample(false);
     QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
 
@@ -389,13 +390,18 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,
-        convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
+}
+QList<QWidget*> MainWindow::filterControls() const {
+    return {search_,instant_,metadataFilters_,today_,format_,range_,minImageEdge_,megapixels_,dateEnabled_,dateFrom_,dateTo_};
 }
 void MainWindow::restoreSettings() {
     auto settings=appSettings();
+    loadFilters_->setChecked(settings.value("controls/loadFilters",false).toBool());
+    const auto filters=filterControls();
     for(auto* widget:persistentControls()) {
-        if(!widget)continue;
+        if(!widget||(!loadFilters_->isChecked()&&filters.contains(widget)))continue;
         const auto key="controls/"+widget->objectName();
         if(settings.contains(key)){const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),settings.value(key));}
     }
@@ -454,6 +460,10 @@ QWidget* MainWindow::buildControls() {
     processingForm->addRow(srgbClamp_);
     connect(srgbClamp_,&QCheckBox::toggled,this,&MainWindow::updateMode);
     processingForm->addRow("Exposure (EV)",exposure_);processingForm->addRow("Max edge (px)",maxEdge_);processingForm->addRow(bt2020_);layout->addWidget(processing_);
+    const QList<QWidget*> pixelControls={exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_};
+    for(auto* widget:pixelControls)widget->setProperty("pixelDefault",widget->property(settingProperty(widget)));
+    auto* resetPixels=new QPushButton("Reset pixel processing");resetPixels->setObjectName("resetPixelProcessing");processingForm->addRow(resetPixels);
+    connect(resetPixels,&QPushButton::clicked,this,[this,pixelControls]{for(auto* widget:pixelControls){const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),widget->property("pixelDefault"));}updateMode();});
     raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawMode_->setCurrentIndex(1);rawLayout->addRow("HDR mode",rawMode_);
     rawCustom_=new QWidget;auto* rawForm=new QFormLayout(rawCustom_);rawForm->setContentsMargins(0,0,0,0);
     rawExposure_=real(-3,3,0,0.1,"rawExposure");wb_=combo({"Camera","Auto","Daylight","Cloudy","Shade","Tungsten","Fluorescent","Flash","Kelvin"},"rawWhiteBalance");kelvin_=spin(2000,12000,5200,"rawKelvin");kelvin_->setSingleStep(100);
@@ -878,6 +888,7 @@ void MainWindow::updateAutoThumbnailAspect() {
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
 void MainWindow::updateCounts() {
+    progress_->setFormat(mode_->currentIndex()==1&&maxEdge_->value()>0?QString("%p% (%v/%m) (max edge %1 px)").arg(maxEdge_->value()):QString("%p% (%v/%m)"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
