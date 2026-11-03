@@ -41,6 +41,7 @@ Features:
 8. HDR boost rendering for RAW images.
 
 See [port status](docs/port-status.md) for the supported scope and remaining work.
+See the [conversion matrix](docs/conversion-matrix.md) for input classes, output formats and processing paths.
 
 <a href="https://github.com/zmz125000/JXRConverter/releases">
 <img alt="Get it on GitHub" src="https://github.com/zmz125000/LocalViewer-art/blob/master/get-it-on-github.svg" width="200px"/>
