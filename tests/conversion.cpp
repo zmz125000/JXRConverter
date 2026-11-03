@@ -733,6 +733,34 @@ int main(int argc,char** argv) try {
     jxrc::convert(jpeg,dir/"jpeg-preserved.jxl",o);
     o.mode=jxrc::Mode::process;jxrc::convert(jpeg,dir/"jpeg-direct.jxl",o);
     check(bytes(dir/"jpeg-direct.jxl")==bytes(dir/"jpeg-preserved.jxl"),"JPEG SDR direct pixels changed");
+    // Original-profile exports must retain the actual ICC bytes. Merely asking
+    // for an ICC size also succeeds when libjxl synthesizes a replacement.
+    const auto jpegBytes=bytes(jpeg),sourceIcc=source_jpeg_icc(jpegBytes.data(),jpegBytes.size());
+    check(!sourceIcc.empty(),"SDR JPEG fixture missing ICC");
+    for(auto preset:{jxrc::Preset::lossless,jxrc::Preset::high,jxrc::Preset::medium,jxrc::Preset::low,jxrc::Preset::custom}) {
+        o.quality.preset=preset;
+        const auto output=dir/("jpeg-icc-"+std::to_string(int(preset))+".jxl");jxrc::convert(jpeg,output,o);
+        const auto encoded=bytes(output);auto dec=JxlDecoderMake(nullptr);
+        check(JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING|JXL_DEC_FULL_IMAGE)==JXL_DEC_SUCCESS,"ICC export events");
+        JxlDecoderSetInput(dec.get(),encoded.data(),encoded.size());JxlDecoderCloseInput(dec.get());
+        std::vector<uint8_t> pixels(64*48*4);const JxlPixelFormat format{4,JXL_TYPE_UINT8,JXL_NATIVE_ENDIAN,0};
+        bool saw=false,complete=false;
+        for(;;){
+            const auto status=JxlDecoderProcessInput(dec.get());
+            if(status==JXL_DEC_BASIC_INFO){
+                JxlBasicInfo info{};check(JxlDecoderGetBasicInfo(dec.get(),&info)==JXL_DEC_SUCCESS&&info.uses_original_profile,"ICC export did not retain original profile");
+            } else if(status==JXL_DEC_COLOR_ENCODING){
+                size_t size=0;check(JxlDecoderGetICCProfileSize(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&size)==JXL_DEC_SUCCESS,"ICC export profile size");
+                std::vector<uint8_t> actual(size);
+                check(JxlDecoderGetColorAsICCProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,actual.data(),actual.size())==JXL_DEC_SUCCESS&&actual==sourceIcc,"JXL did not preserve source ICC bytes");
+                saw=true;
+            } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER)check(JxlDecoderSetImageOutBuffer(dec.get(),&format,pixels.data(),pixels.size())==JXL_DEC_SUCCESS,"ICC export output buffer");
+            else if(status==JXL_DEC_FULL_IMAGE){complete=true;break;}
+            else if(status==JXL_DEC_SUCCESS)break;
+            else check(status!=JXL_DEC_ERROR&&status!=JXL_DEC_NEED_MORE_INPUT,"ICC export pixel decode");
+        }
+        check(saw&&complete,"ICC export missing profile or image");
+    }
     o={};o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl;o.max_edge=20;o.exposure=1;
     r=jxrc::convert(jpeg,dir/"resized.jxl",o);check(r.width==20&&r.height==15,"Resize dimensions");
     const auto resizedBytes=bytes(dir/"resized.jxl");

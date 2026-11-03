@@ -105,6 +105,10 @@ JXL inputs use the source-preserving integer path even in Process pixels mode.
 When exposure, resizing or HDR-to-SDR conversion requires processing, the working
 buffer stays float32 and the encoder writes sRGB-transfer integer pixels: 8-bit
 for sources of 8 bits or less, otherwise 16-bit. Primaries match the encoded RGB.
+Source ICC profiles stay attached for lossless and lossy SDR JXL (modular), matching
+JPEG/AVIF ColorSync behavior; lossy XYB is reserved for encodes without an ICC.
+ICC-preserving lossy exports explicitly select Modular encoding to avoid the
+known artifacts of non-XYB VarDCT.
 Linear HDR/scRGB and PQ targets retain their separate encoding contracts.
 
 **JXL lossless JPEG transcoding** is available in both conversion modes for SDR
