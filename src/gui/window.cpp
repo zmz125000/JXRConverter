@@ -329,11 +329,11 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);updateBackgroundMetadata();});
     connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
     connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(column);direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
-    connect(smoothScrolling_,&QCheckBox::toggled,this,&MainWindow::updatePresentation);
+    connect(smoothScrolling_,&QCheckBox::toggled,this,[this](bool enabled){list_->setSmoothScrolling(enabled);table_->setSmoothScrolling(enabled);});
     connect(autoAspect_,&QCheckBox::toggled,this,[this](bool on){catalog_->setAspectSampling(on);if(on){if(!portraitAspect_->isChecked()&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);}else{aspectSamplePending_=false;aspectTimer_->stop();}});
     connect(portraitAspect_,&QCheckBox::toggled,this,[this](bool on){if(!autoAspect_->isChecked())return;if(!on&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);});
     connect(list_,&FileListView::viewportChanged,this,[this]{if(!changingAspect_&&viewMode_->checkedId()==0&&!(aspectSamplePending_&&!aspectViewportSample_))requestAspectSample(true);});
-    connect(thumbnailFit_,&QPushButton::toggled,this,&MainWindow::updatePresentation);
+    connect(thumbnailFit_,&QPushButton::toggled,this,[this](bool fill){thumbnailFit_->setText(fill?"Fill":"Fit");delegate_->fill=fill;table_->setFillThumbnails(fill);list_->viewport()->update();});
     connect(viewMode_,&QButtonGroup::idClicked,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
     connect(list_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{if(!changingAspect_&&viewMode_->checkedId()==0)requestAspectSample(true);});
     connect(list_,&FileListView::bulkSelectionChanged,this,[this](bool selecting){bulkSelecting_=selecting;});
@@ -341,7 +341,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(selection_,&QItemSelectionModel::selectionChanged,this,&MainWindow::changeSelection);
     for(auto* view:QList<QAbstractItemView*>{list_,table_})connect(view,&QAbstractItemView::clicked,this,[this](const QModelIndex& index){rememberedImages_.insert(index.data(Catalog::PathRole).toString());showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,[this]{syncSelection();updateCounts();});connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
-    connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{requestAspectSample(false);});
+    connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{requestAspectSample(list_->verticalScrollBar()->value()>0);});
     connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);selectedTabImages_.remove(path);rememberedImages_.remove(path);for(auto& selected:jobSelections_)selected.remove(path);}});
     connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())aspectSamplePending_=false;updateFilter();});
     connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{aspectSamplePending_=false;loggedWarnings_.clear();selectedImages_.clear();selectedTabImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
@@ -818,7 +818,10 @@ void MainWindow::addPaths(const QStringList& paths) {
     bool changed=false;
     for(const auto& path:paths){const QFileInfo info(path);if(info.isDir()){const auto canonical=info.canonicalFilePath();recentFolders_.removeAll(canonical);recentFolders_.prepend(canonical);changed=true;}}
     if(changed){while(recentFolders_.size()>30)recentFolders_.removeLast();saveHistory();}
-    if(!paths.isEmpty()){statusFilter_->button(0)->setChecked(true);updateFilter();catalog_->addPaths(paths,recursive_->isChecked());}
+    if(!paths.isEmpty()){
+        if(statusFilter_->checkedId()!=0){statusFilter_->button(0)->setChecked(true);updateFilter();}
+        catalog_->addPaths(paths,recursive_->isChecked());
+    }
 }
 
 void MainWindow::updateFilter() {

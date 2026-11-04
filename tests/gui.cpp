@@ -668,6 +668,28 @@ private slots:
         window.findChild<QPushButton*>("statusFinished")->click();
         window.findChild<QPushButton*>("statusRemember")->click();QTRY_COMPARE(bar->value(),rememberedPosition);
         window.findChild<QPushButton*>("statusAll")->click();QTRY_COMPARE(bar->value(),allPosition);
+        // Appending a folder while already in All must not reset the viewport.
+        window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
+        const auto addition=root("tab-scroll-added");makeImage(addition,"zz-added.jpg",32,24,100);
+        window.addPaths({addition});QTRY_COMPARE(window.catalog()->rowCount(),51);QTest::qWait(30);
+        QCOMPARE(bar->value(),allPosition);
+        window.addPaths({addition});QTRY_VERIFY(!window.catalog()->scanning());QTest::qWait(30);
+        QCOMPARE(bar->value(),allPosition);
+        // Paint/scroll-behaviour toggles must not relayout or restore stale scroll positions.
+        window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
+        for(int mode:{0,1,2}) {
+            window.findChild<QButtonGroup*>("viewMode")->button(mode)->click();QTest::qWait(30);
+            QAbstractItemView* active=mode==2?static_cast<QAbstractItemView*>(window.findChild<FileTableView*>()):view;
+            auto* scroll=active->verticalScrollBar();QVERIFY(scroll->maximum()>0);
+            active->selectionModel()->setCurrentIndex(window.filterModel()->index(0,0),QItemSelectionModel::NoUpdate);
+            const int position=scroll->maximum()*2/3;scroll->setValue(position);
+            const auto current=active->currentIndex();const auto selected=active->selectionModel()->selectedRows().size();
+            for(int repeat=0;repeat<2;++repeat){
+                window.findChild<QCheckBox*>("smoothScrolling")->toggle();window.findChild<QPushButton*>("thumbnailFit")->click();QTest::qWait(30);
+                QCOMPARE(scroll->value(),position);QCOMPARE(active->currentIndex(),current);QCOMPARE(active->selectionModel()->selectedRows().size(),selected);
+            }
+        }
+        window.findChild<QButtonGroup*>("viewMode")->button(1)->click();QTest::qWait(30);
         // Filters, presentation and sorting belong to each tab too.
         auto* instant=window.findChild<QLineEdit*>("instantFilter");instant->setText("00.jpg");
         auto* size=window.findChild<QSlider*>("thumbnailSize");size->setValue(300);
