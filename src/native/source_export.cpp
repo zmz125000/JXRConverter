@@ -1,5 +1,5 @@
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
-#include "hdr_encode.h"
+#include "codec_api.h"
 #include "hdr_parallel.h"
 #include "regular_decode.h"
 #include "heif_decode.h"
@@ -354,8 +354,7 @@ bool gain_map_cicp(avifImage* image) {
 }
 
 int write_avif_source(avifImage* image,const char* path,StillEncodeQuality quality) {
-    if((image->transferCharacteristics==16 || image->transferCharacteristics==18) &&
-       (image->colorPrimaries==1 || image->colorPrimaries==9 || image->colorPrimaries==12))avifRWDataFree(&image->icc);
+    if(!complete_avif_color_metadata(image,nullptr,true))return -81;
     if (quality.exif_size && avifImageSetMetadataExif(image,quality.exif,quality.exif_size)!=AVIF_RESULT_OK) return -81;
     std::unique_ptr<avifEncoder,decltype(&avifEncoderDestroy)> encoder(avifEncoderCreate(),avifEncoderDestroy);
     if(!encoder)return -81;

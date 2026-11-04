@@ -830,6 +830,140 @@ static void hlg_outputs(const fs::path& dir) {
     }
 }
 
+static std::vector<uint8_t> png_fallback_profile(std::vector<uint8_t> data) {
+    for(size_t at=8;at+12<=data.size();) {
+        const uint32_t n=uint32_t(data[at])<<24|uint32_t(data[at+1])<<16|uint32_t(data[at+2])<<8|data[at+3];
+        check(n<=data.size()-at-12,"ICC PNG chunk bounds");
+        if(!std::memcmp(data.data()+at+4,"cICP",4))data.erase(data.begin()+at,data.begin()+at+n+12);
+        else at+=n+12;
+    }
+    return decode_regular(data.data(),data.size()).icc;
+}
+
+static void check_jxl_color(const std::vector<uint8_t>& data,unsigned cp,unsigned tc) {
+    auto decoder=JxlDecoderMake(nullptr);JxlDecoderSubscribeEvents(decoder.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING);
+    JxlDecoderSetInput(decoder.get(),data.data(),data.size());JxlDecoderCloseInput(decoder.get());
+    JxlBasicInfo info{};
+    for(;;) {
+        const auto status=JxlDecoderProcessInput(decoder.get());
+        if(status==JXL_DEC_BASIC_INFO)check(JxlDecoderGetBasicInfo(decoder.get(),&info)==JXL_DEC_SUCCESS,"Color audit JXL basic info");
+        else if(status==JXL_DEC_COLOR_ENCODING) {
+            JxlColorEncoding color{};
+            check(JxlDecoderGetColorAsEncodedProfile(decoder.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS,"JXL native color encoding missing");
+            check(color.primaries==(cp==12?JXL_PRIMARIES_P3:static_cast<JxlPrimaries>(cp))&&unsigned(color.transfer_function)==tc&&color.white_point==JXL_WHITE_POINT_D65,"JXL source primaries or transfer incorrect");
+            size_t icc_size=0;check(JxlDecoderGetICCProfileSize(decoder.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&icc_size)==JXL_DEC_SUCCESS&&icc_size>128,"JXL cannot expose an ICC profile for its native color encoding");
+            check(info.intensity_target>0,"JXL intensity metadata missing");
+            if(tc==18)check(info.intensity_target==1000.f,"JXL HLG reference display changed");
+            return;
+        } else check(status!=JXL_DEC_ERROR&&status!=JXL_DEC_NEED_MORE_INPUT&&status!=JXL_DEC_SUCCESS,"Color audit JXL decode");
+    }
+}
+
+static void output_color_metadata(const fs::path& dir) {
+    std::vector<float> pixels(16*16*4);
+    for(size_t i=0;i<pixels.size();i+=4){pixels[i]=4;pixels[i+1]=.25f;pixels[i+2]=.1f;pixels[i+3]=1;}
+    for(auto gamut:{UHDR_CG_BT_709,UHDR_CG_DISPLAY_P3,UHDR_CG_BT_2100}) {
+        const unsigned cp=gamut==UHDR_CG_BT_2100?9:gamut==UHDR_CG_DISPLAY_P3?12:1;
+        const auto reference=dir/("color-reference-"+std::to_string(cp)+".jpg");
+        check(encode_still_export_f32(pixels.data(),16,16,cp==9?2:cp==12?1:0,0,reference.string().c_str(),StillEncodeQuality(0))==0,"Color audit ICC reference JPEG");
+        const auto reference_data=bytes(reference),expected=source_jpeg_icc(reference_data.data(),reference_data.size());
+        check(expected.size()>128&&!std::memcmp(expected.data()+36,"acsp",4),"Color audit reference ICC invalid");
+        const auto source=dir/("color-audit-"+std::to_string(cp)+".jxl");
+        check(encode_jxl_f32(16,16,pixels.data(),gamut,true,source.string().c_str(),StillEncodeQuality(0),false)==0,"Color audit source");
+        jxrc::ConversionSession session(source);
+        for(auto preset:{jxrc::Preset::lossless,jxrc::Preset::medium})for(int id=0;id<=13;++id) {
+            jxrc::Options options;options.mode=jxrc::Mode::process;options.target=static_cast<jxrc::Target>(id);options.quality.preset=preset;options.extended_bt2020=false;options.convert_gamut=false;
+            const auto output=dir/("color-audit-"+std::to_string(cp)+"-"+std::to_string(int(preset))+"-"+std::to_string(id));
+            try{session.convert(output,options);}catch(const std::exception& error){throw std::runtime_error(output.filename().string()+": "+error.what());}const auto data=bytes(output);
+            if(id==0||id==1) {
+                check(source_jpeg_icc(data.data(),data.size())==expected,"JPEG SDR/base ICC does not describe output pixels");
+                if(id==1) {
+                    const std::string markers(data.begin(),data.end());
+                    check(markers.find("hdrgm:Version")!=std::string::npos&&markers.find("urn:iso:std:iso:ts:21496:-1")!=std::string::npos,"Ultra HDR missing XMP or ISO gain-map metadata");
+                }
+            } else if(id==9||id==10||id==11) {
+                const auto png=decode_regular(data.data(),data.size());const unsigned tc=id==9?13:id==10?16:18;
+                check(png.primaries==cp&&png.transfer==tc,"PNG CICP incorrect");
+                if(id==9)check(png_fallback_profile(data)==expected,"SDR PNG ICC fallback incorrect");
+                else check(png_light_chunk(data).size()==2,"HDR PNG missing light levels");
+            } else if(id==4||id==5||id==6||id==13) {
+                auto decoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+                check(avifDecoderSetIOMemory(decoder.get(),data.data(),data.size())==AVIF_RESULT_OK&&avifDecoderParse(decoder.get())==AVIF_RESULT_OK&&avifDecoderNextImage(decoder.get())==AVIF_RESULT_OK,"Color audit AVIF decode");
+                const auto* image=decoder->image;const unsigned tc=id==5?16:id==13?18:13;
+                check(image->colorPrimaries==cp&&image->transferCharacteristics==tc&&image->yuvRange==AVIF_RANGE_FULL,"AVIF CICP or range incorrect");
+                if(id==4)check(image->icc.size==expected.size()&&!std::memcmp(image->icc.data,expected.data(),expected.size()),"SDR AVIF ICC incorrect");
+                else check(image->icc.size==0,"HDR AVIF has a conflicting ICC");
+                if(id==6)check(image->gainMap&&image->gainMap->altColorPrimaries==cp&&image->gainMap->altTransferCharacteristics==16&&image->gainMap->altCLLI.maxPALL>0,"ISO gain-map alternate color metadata missing");
+                else if(tc==16||tc==18)check(image->clli.maxCLL>0&&image->clli.maxPALL>0,"HDR AVIF missing clli");
+            } else check_jxl_color(data,id==8?1:cp,id==2?13:id==7?16:id==12?18:8);
+        }
+        // CICP-only source transcodes must also offer an SDR ICC fallback.
+        const auto raster=dir/("color-cicp-only-"+std::to_string(cp)+".png");
+        const uint8_t opaque[]={40,80,120,255,160,60,20,255};StillSourceColor source_color;source_color.primaries=cp;
+        check(encode_png_source(2,1,opaque,false,source_color,raster.string().c_str(),StillEncodeQuality(0))==0,"CICP-only opaque source fixture");
+        auto unprofiled=bytes(raster);
+        for(size_t at=8;at+12<=unprofiled.size();) {
+            const uint32_t n=uint32_t(unprofiled[at])<<24|uint32_t(unprofiled[at+1])<<16|uint32_t(unprofiled[at+2])<<8|unprofiled[at+3];
+            if(!std::memcmp(unprofiled.data()+at+4,"iCCP",4))unprofiled.erase(unprofiled.begin()+at,unprofiled.begin()+at+n+12);
+            else at+=n+12;
+        }
+        write(raster,unprofiled);
+        for(auto target:{jxrc::Target::jpeg,jxrc::Target::png,jxrc::Target::jxl,jxrc::Target::avif}) {
+            jxrc::Options options;options.target=target;options.quality.preset=jxrc::Preset::lossless;
+            const auto output=dir/("color-direct-"+std::to_string(cp)+"-"+std::to_string(int(target)));try{jxrc::convert(raster,output,options);}catch(const std::exception& error){throw std::runtime_error(output.filename().string()+": "+error.what());}const auto data=bytes(output);
+            if(target==jxrc::Target::jpeg)check(source_jpeg_icc(data.data(),data.size())==expected,"Direct JPEG ICC fallback missing");
+            else if(target==jxrc::Target::png)check(png_fallback_profile(data)==expected,"Direct PNG ICC fallback missing");
+            else if(target==jxrc::Target::jxl)check_jxl_color(data,cp,13);
+            else {
+                auto decoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+                check(avifDecoderSetIOMemory(decoder.get(),data.data(),data.size())==AVIF_RESULT_OK&&avifDecoderParse(decoder.get())==AVIF_RESULT_OK,"Direct AVIF color decode");
+                check(decoder->image->icc.size==expected.size()&&!std::memcmp(decoder->image->icc.data,expected.data(),expected.size()),"Direct AVIF ICC fallback missing");
+            }
+        }
+        for(unsigned tc:{16u,18u})for(unsigned depth:{8u,10u,12u}) {
+            const auto output=dir/("color-avif-levels-"+std::to_string(cp)+"-"+std::to_string(tc)+"-"+std::to_string(depth)+".avif");
+            StillEncodeQuality quality(4,0,100,depth);
+            check(encode_avif_f32(16,16,pixels.data(),gamut,tc==16?1:3,output.string().c_str(),quality)==0,"AVIF quantized HDR metadata fixture");
+            const auto data=bytes(output);auto decoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+            check(avifDecoderSetIOMemory(decoder.get(),data.data(),data.size())==AVIF_RESULT_OK&&avifDecoderParse(decoder.get())==AVIF_RESULT_OK&&avifDecoderNextImage(decoder.get())==AVIF_RESULT_OK,"AVIF light-level decode");
+            auto* image=decoder->image;std::vector<uint16_t> packed(pixels.size());
+            avifRGBImage rgb;avifRGBImageSetDefaults(&rgb,image);rgb.depth=16;rgb.format=AVIF_RGB_FORMAT_RGBA;rgb.alphaPremultiplied=AVIF_FALSE;
+            rgb.pixels=reinterpret_cast<uint8_t*>(packed.data());rgb.rowBytes=16*8;
+            check(avifImageYUVToRGB(image,&rgb)==AVIF_RESULT_OK,"AVIF light-level RGB decode");
+            std::vector<float> linear;uhdr_color_gamut_t decoded_gamut;
+            cicp_rgb_to_linear(rgb.pixels,16*16,16,cp,tc,linear,decoded_gamut);
+            double peak=0,sum=0;
+            for(size_t i=0;i<linear.size();i+=4){const double light=std::min(double(std::max({linear[i],linear[i+1],linear[i+2]}))*203.,tc==16?10000.:1000.);peak=std::max(peak,light);sum+=light;}
+            check(std::abs(double(image->clli.maxCLL)-peak)<1.1&&std::abs(double(image->clli.maxPALL)-sum/256.)<1.1,"AVIF clli does not describe its quantized HDR codes");
+            // A still AVIF transcode retains its valid source content-light box.
+            jxrc::Options options;options.target=jxrc::Target::avif;options.quality.preset=jxrc::Preset::lossless;
+            const auto copy=dir/(output.filename().string()+"-copy.avif");try{jxrc::convert(output,copy,options);}catch(const std::exception& error){throw std::runtime_error(copy.filename().string()+": "+error.what());}
+            const auto copied=bytes(copy);auto decoded_copy=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+            check(avifDecoderSetIOMemory(decoded_copy.get(),copied.data(),copied.size())==AVIF_RESULT_OK&&avifDecoderParse(decoded_copy.get())==AVIF_RESULT_OK,"AVIF light-level copy decode");
+            check(decoded_copy->image->clli.maxCLL==image->clli.maxCLL&&decoded_copy->image->clli.maxPALL==image->clli.maxPALL,"Source AVIF clli not preserved");
+            if(depth==12) {
+                const auto png_source=dir/(output.filename().string()+"-source.png"),from_png=dir/(output.filename().string()+"-from-png.avif");
+                check(encode_png_f32(16,16,pixels.data(),gamut,tc,16,png_source.string().c_str(),quality)==0,"HDR PNG direct-source fixture");
+                jxrc::convert(png_source,from_png,options);const auto direct_data=bytes(from_png);
+                auto direct_decoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+                check(avifDecoderSetIOMemory(direct_decoder.get(),direct_data.data(),direct_data.size())==AVIF_RESULT_OK&&avifDecoderParse(direct_decoder.get())==AVIF_RESULT_OK,"Direct HDR PNG to AVIF metadata parse");
+                check(direct_decoder->image->transferCharacteristics==tc&&!direct_decoder->image->icc.size&&direct_decoder->image->clli.maxCLL>0&&direct_decoder->image->clli.maxPALL>0,"Direct HDR AVIF missing CICP or clli");
+            }
+        }
+        // The alternate HDR light-level average must use maxRGB, not (R+G+B)/3.
+        for(bool half:{false,true}) {
+            const auto output=dir/("color-gain-levels-"+std::to_string(cp)+"-"+std::to_string(half)+".avif");
+            auto values=std::vector<uint16_t>(pixels.size());std::transform(pixels.begin(),pixels.end(),values.begin(),float_to_half);
+            check((half?encode_avif_f16(16,16,values.data(),gamut,2,output.string().c_str(),StillEncodeQuality(0)):
+                encode_avif_f32(16,16,pixels.data(),gamut,2,output.string().c_str(),StillEncodeQuality(0)))==0,"Gain-map metadata fixture");
+            const auto data=bytes(output);auto decoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+            check(avifDecoderSetIOMemory(decoder.get(),data.data(),data.size())==AVIF_RESULT_OK&&avifDecoderParse(decoder.get())==AVIF_RESULT_OK&&decoder->image->gainMap,"Gain-map metadata decode");
+            const auto light=decoder->image->gainMap->altCLLI;
+            check(light.maxCLL==812&&light.maxPALL==812,"ISO alternate MaxFALL is not the frame average of maxRGB");
+        }
+    }
+}
+
 static Exiv2::ExifData photographic_fixture() {
     Exiv2::ExifData exif;
     exif["Exif.Image.Make"]="JXRC";exif["Exif.Image.Model"]="Test Camera";
@@ -937,6 +1071,7 @@ int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}

@@ -32,6 +32,17 @@ PNG SDR/source, PQ, and HLG outputs are available. PNG preservation and untouche
 
 PQ and HLG PNG exports include `cLLI` content light levels, recalculated from the final encoded samples even for direct transcodes or depth changes. MaxCLL is the maximum display-linear RGB component in nits; MaxFALL is the frame average of each pixel's maximum RGB component (CTA-861 convention, without alpha weighting). HLG measurements use the same 1000-nit, gamma 1.2 reference display as the decoder. Metadata does not rescale PQ or HLG pixel values; SDR PNG does not receive `cLLI`.
 
+Color metadata follows each format's native contract:
+
+| Output | SDR color description | HDR color description |
+| --- | --- | --- |
+| JPEG | Matching ICC profile, or the preserved source ICC | Ultra HDR keeps an ICC-tagged SDR base plus both XMP and ISO 21496-1 gain-map metadata |
+| PNG | Preserved ICC, or a matching ICC fallback for known SDR RGB CICP; grayscale can use native PNG color tags | Full-range RGB `cICP` plus measured `cLLI` for PQ/HLG |
+| JXL | Native color encoding (also exposed as ICC by libjxl), or preserved source ICC | Native primaries/transfer and intensity metadata; scRGB explicitly uses BT.709 primaries and an 80-nit unit |
+| AVIF | ICC plus CICP for processed SDR; direct exports retain custom ICCs and add fallbacks for supported RGB CICP | PQ/HLG CICP plus `clli`; ISO gain maps describe both renditions and alternate HDR light levels |
+
+Generated ISO gain-map AVIF uses CICP for its SDR base, because adding a base ICC prevents libavif's gain-map reconstruction. AVIF light levels use the same maxRGB convention as PNG. Source AVIF content-light metadata is retained when present; newly generated HDR metadata is measured after transfer quantization. Mastering-display metadata (`mDCV`/`mdcv`) is not invented when the source mastering display is unknown.
+
 HLG output is available for PNG, JXL, and AVIF in Process pixels mode. The encoders use the inverse BT.2100 display transform at a 1000-nit reference peak (gamma 1.2) before encoding HLG. Out-of-range values are clipped; HLG output does not add highlight detail to SDR inputs.
 
 PQ JXL pixel-processing exports record the measured maximum RGB channel level in nits as `intensity_target` (MaxCLL), bounded to 1–10,000 nits. PQ codes still use the absolute 10,000-nit reference; the metadata does not rescale pixel brightness. Linear JXL retains its own luminance normalization, and direct scRGB JXL retains its 80-nit reference.

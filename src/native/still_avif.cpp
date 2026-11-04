@@ -1,5 +1,5 @@
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
-#include "hdr_encode.h"
+#include "codec_api.h"
 #include "hdr_parallel.h"
 #include "ultrahdr/icc.h"
 
@@ -9,6 +9,7 @@
 #include <array>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <numeric>
 #include <vector>
@@ -26,11 +27,11 @@ avifColorPrimaries primaries(uhdr_color_gamut_t gamut) {
            gamut == UHDR_CG_DISPLAY_P3 ? AVIF_COLOR_PRIMARIES_SMPTE432 : AVIF_COLOR_PRIMARIES_BT709;
 }
 
-bool set_sdr_profile(avifImage* image, uhdr_color_gamut_t gamut) {
+bool set_sdr_profile(avifImage* image, uhdr_color_gamut_t gamut,uhdr_color_transfer_t transfer=UHDR_CT_SRGB) {
     // CICP alone cannot describe BT.2020 + sRGB to every platform decoder.
-    // Embed the profile of the *encoded* pixels, not the original source ICC:
-    // the source TRC has already been converted to sRGB by this encoder.
-    auto profile = ultrahdr::IccHelper::writeIccProfile(UHDR_CT_SRGB, gamut);
+    // Describe the encoded pixels: processing uses the sRGB curve, while a
+    // direct source export may retain a linear curve instead.
+    auto profile = ultrahdr::IccHelper::writeIccProfile(transfer, gamut);
     if (!profile || profile->getLength() <= ultrahdr::kICCIdentifierSize) return false;
     // IccHelper returns a JPEG APP2 payload. AVIF needs the bare ICC profile.
     return avifImageSetProfileICC(image,
@@ -52,7 +53,8 @@ Image make_image(unsigned w, unsigned h, unsigned depth, uhdr_color_gamut_t gamu
     return image;
 }
 
-int write_avif(avifImage* image, const char* path, StillEncodeQuality quality) {
+int write_avif(avifImage* image, const char* path, StillEncodeQuality quality,const avifRGBImage* rgb=nullptr,bool color_metadata_ready=false) {
+    if(!color_metadata_ready&&!complete_avif_color_metadata(image,rgb))return -77;
     if (quality.exif_size && avifImageSetMetadataExif(image, quality.exif, quality.exif_size) != AVIF_RESULT_OK) return -78;
     Encoder encoder(avifEncoderCreate(), avifEncoderDestroy);
     if (!encoder) return -71;
@@ -88,6 +90,53 @@ avifRGBImage rgb_view(const avifImage* image, uint8_t* pixels, unsigned depth, u
     return rgb;
 }
 } // namespace
+
+// Keep ICC and CICP consistent, and provide HDR light levels in the native
+// AVIF clli box. Gain-map SDR bases deliberately use CICP: libavif requires it
+// to reconstruct the ISO alternate rendition. Never invent mastering-display
+// (mdcv) metadata: the source's mastering display is not known here.
+bool complete_avif_color_metadata(avifImage* image,const avifRGBImage* rgb,bool preserve_hdr_metadata) {
+    const auto cp=image->colorPrimaries,tc=image->transferCharacteristics;
+    if(cp!=1&&cp!=9&&cp!=12)return true;
+    const auto gamut=cp==9?UHDR_CG_BT_2100:cp==12?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
+    if(tc!=16&&tc!=18) {
+        if(!image->icc.size&&!image->gainMap&&image->yuvFormat!=AVIF_PIXEL_FORMAT_YUV400&&(tc==13||tc==8))
+            return set_sdr_profile(image,gamut,tc==8?UHDR_CT_LINEAR:UHDR_CT_SRGB);
+        return true;
+    }
+    avifRWDataFree(&image->icc);
+    if(preserve_hdr_metadata&&(image->clli.maxCLL||image->clli.maxPALL))return true;
+    std::vector<uint8_t> decoded;
+    avifRGBImage source;
+    if(!rgb) {
+        decoded.resize(size_t(image->width)*image->height*8);
+        source=rgb_view(image,decoded.data(),16,2);
+        if(avifImageYUVToRGB(image,&source)!=AVIF_RESULT_OK)return false;
+        rgb=&source;
+    }
+    std::vector<uint16_t> row(size_t(image->width)*4);
+    std::vector<float> linear;
+    const unsigned maximum=(1u<<rgb->depth)-1;
+    double peak=0.,sum=0.;
+    for(unsigned y=0;y<image->height;++y) {
+        const auto* input=rgb->pixels+size_t(y)*rgb->rowBytes;
+        for(size_t i=0;i<row.size();++i) {
+            uint16_t code=input[i];if(rgb->depth>8)std::memcpy(&code,input+i*2,2);
+            row[i]=static_cast<uint16_t>((uint32_t(code)*65535u+maximum/2)/maximum);
+        }
+        uhdr_color_gamut_t decoded_gamut;
+        cicp_rgb_to_linear(reinterpret_cast<const uint8_t*>(row.data()),image->width,16,cp,tc,linear,decoded_gamut);
+        for(unsigned x=0;x<image->width;++x) {
+            const auto* p=linear.data()+size_t(x)*4;
+            const double nits=std::clamp(double(std::max({p[0],p[1],p[2]}))*kSdrWhiteNits,0.,tc==16?10000.:1000.);
+            peak=std::max(peak,nits);sum+=nits;
+        }
+    }
+    // Integer-nit upper bounds (unlike PNG's 0.0001-nit fixed point).
+    image->clli.maxCLL=static_cast<uint16_t>(std::ceil(peak));
+    image->clli.maxPALL=static_cast<uint16_t>(std::ceil(sum/(double(image->width)*image->height)));
+    return true;
+}
 
 int encode_avif_u8(unsigned w, unsigned h, const uint8_t* rgba, uhdr_color_gamut_t gamut,
                    const char* path, StillEncodeQuality quality) {
@@ -146,8 +195,8 @@ int encode_avif_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t g
                 luminance[c] = half_to_float(rgba[i * 4 + c]);
                 peak = std::max(peak, luminance[c]);
             }
-            // Per-pixel RGB average follows libavif's CLLI convention.
-            sum += (luminance[0] + luminance[1] + luminance[2]) / 3.0;
+            // CTA-861 / AVIF clli uses the frame average of per-pixel maxRGB.
+            sum += std::max({luminance[0],luminance[1],luminance[2]});
             float alpha = half_to_float(rgba[i * 4 + 3]);
             if (!std::isfinite(alpha)) alpha = 0.f;
             alpha = std::clamp(alpha, 0.f, 1.f);
@@ -206,8 +255,9 @@ int encode_avif_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t g
         map->altCLLI = clli;
     }
     // YUV and gain-map planes now own all pixels needed by the encoder.
+    if(!complete_avif_color_metadata(image.get(),&base_rgb))return -77;
     std::vector<uint16_t>().swap(encoded);
-    return write_avif(image.get(), path, quality);
+    return write_avif(image.get(), path, quality,nullptr,true);
 }
 
 // Quantize once, after transfer conversion, directly to the requested AV1 depth.
@@ -234,7 +284,7 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
             for(unsigned c=0;c<3;++c) {
                 float v=rgba[i*4+c];if(!std::isfinite(v))v=0;
                 v=std::clamp(v,0.f,kMaxLinear);
-                peak=std::max(peak,v);luminance+=v/3.f;
+                peak=std::max(peak,v);luminance=std::max(luminance,v);
                 const float base=gain_map&&sdr_base?sdr_base[i*4+c]:v;
                 const float code=hlg?hlg_rgb[c]:pq?linear_to_pq_code(v):srgb_oetf(base);
                 const unsigned packed=static_cast<unsigned>(std::lround(code*maximum));
@@ -272,5 +322,5 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
         map->altMatrixCoefficients=image->matrixCoefficients;
         map->altYUVRange=AVIF_RANGE_FULL;map->altDepth=depth;map->altPlaneCount=3;map->altCLLI=clli;
     }
-    return write_avif(image.get(),path,quality);
+    return write_avif(image.get(),path,quality,&base_rgb);
 }

@@ -111,10 +111,23 @@ int encode_png_source(unsigned w,unsigned h,const void* pixels,bool sixteen,
     const bool gray=color.channels<=2||(color.icc_size>=20&&!std::memcmp(color.icc+16,"GRAY",4));
     const bool alpha=color.channels==2||color.channels==4;
     const unsigned channels=(gray?1:3)+(alpha?1:0),depth=quality.png_depth(color.bits);
+    // Preserve a source profile verbatim. When RGB source codes have only known
+    // SDR CICP tags, add the matching ICC fallback for readers that ignore cICP.
+    const bool need_profile=!color.icc_size&&!gray&&(color.primaries==1||color.primaries==9||color.primaries==12)&&
+        (color.transfer==13||color.transfer==8);
+    auto profile=need_profile?ultrahdr::IccHelper::writeIccProfile(
+            color.transfer==8?UHDR_CT_LINEAR:UHDR_CT_SRGB,
+            color.primaries==9?UHDR_CG_BT_2100:color.primaries==12?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709):nullptr;
+    if(need_profile&&(!profile||profile->getLength()<=ultrahdr::kICCIdentifierSize))return -106;
+    auto tagged=color;
+    if(profile&&profile->getLength()>ultrahdr::kICCIdentifierSize) {
+        tagged.icc=static_cast<const uint8_t*>(profile->getData())+ultrahdr::kICCIdentifierSize;
+        tagged.icc_size=profile->getLength()-ultrahdr::kICCIdentifierSize;
+    }
     std::vector<uint8_t> exif;
     if(quality.exif_size)exif.assign(quality.exif,quality.exif+quality.exif_size);
     prepare_export_exif(exif,dw,dh);quality.exif=exif.data();quality.exif_size=exif.size();
-    return write_png(dw,dh,depth,channels,gray,color,path,quality,[&](unsigned y,uint8_t* row){
+    return write_png(dw,dh,depth,channels,gray,tagged,path,quality,[&](unsigned y,uint8_t* row){
         for(unsigned x=0;x<dw;++x) {
             unsigned sx=x,sy=y;
             switch(color.orientation) {
@@ -136,7 +149,7 @@ int encode_png_source(unsigned w,unsigned h,const void* pixels,bool sixteen,
                 put_sample(row,size_t(x)*channels+c,v,depth);
             }
         }
-    });
+    },profile&&color.transfer==13);
 }
 
 // F32 stays in display-linear light until the final transfer and quantization.

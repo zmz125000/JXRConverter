@@ -18,6 +18,9 @@ void scale_rgba_f16_max_edge(std::vector<uint16_t>&,unsigned&,unsigned&,unsigned
 void scale_rgba_f32_max_edge(std::vector<float>&,unsigned&,unsigned&,unsigned);
 int encode_still_export_f32(const float*,unsigned,unsigned,int,int,const char*,StillEncodeQuality,const float* sdr_base = nullptr);
 int encode_png_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,int,int,const char*,StillEncodeQuality);
+struct avifImage;
+struct avifRGBImage;
+bool complete_avif_color_metadata(avifImage*,const avifRGBImage* = nullptr,bool preserve_hdr_metadata = false);
 
 
 jxrc::ImageInfo inspect_jxr(const uint8_t*,size_t);
