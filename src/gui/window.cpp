@@ -105,6 +105,25 @@ public:
 protected:
     bool eventFilter(QObject* object,QEvent* event) override {if(object==reference_&&event->type()==QEvent::Resize)setFixedWidth(reference_->width());return QWidget::eventFilter(object,event);}
 };
+class HeightMatchedButton : public QPushButton {
+    QWidget* reference_;
+    bool square_;
+    void matchHeight() {
+        const int height=reference_->isVisible()?reference_->height():reference_->sizeHint().height();
+        if(square_)setFixedSize(height,height);else setFixedHeight(height);
+    }
+public:
+    HeightMatchedButton(const QString& text,QWidget* reference,bool square=false)
+        :QPushButton(text),reference_(reference),square_(square) {
+        reference_->ensurePolished();reference_->installEventFilter(this);matchHeight();
+    }
+protected:
+    bool eventFilter(QObject* object,QEvent* event) override {
+        if(object==reference_&&(event->type()==QEvent::Resize||event->type()==QEvent::Show||
+            event->type()==QEvent::StyleChange||event->type()==QEvent::FontChange))matchHeight();
+        return QPushButton::eventFilter(object,event);
+    }
+};
 class FloatingClearButton : public QPushButton {
     QPlainTextEdit* edit_;
     void anchor(){adjustSize();const auto rect=edit_->viewport()->geometry();move(rect.right()-width()-7,rect.top()+8);raise();}
@@ -248,7 +267,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,10);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1,Qt::AlignBottom);
-    progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();
+    progressStop_=new HeightMatchedButton("■",progress_,true);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->hide();
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
@@ -256,7 +275,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
-    updater_=new Updater(this);auto* updateButton=new QPushButton("Update");updateButton->setObjectName("updateApplication");toolbar->addWidget(updateButton);
+    auto* theme=combo({"Auto","Light","Dark"},"theme");
+    updater_=new Updater(this);auto* updateButton=new HeightMatchedButton("Update",theme);updateButton->setObjectName("updateApplication");toolbar->addWidget(updateButton);
     connect(updateButton,&QPushButton::clicked,this,[this]{if(!queue_->busy())updater_->start();});
     connect(updater_,&Updater::statusChanged,updateButton,&QPushButton::setText);
     connect(updater_,&Updater::message,this,&MainWindow::logMessage);
@@ -265,7 +285,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(updateTimer_,&QTimer::timeout,this,&MainWindow::checkForUpdates);
     connect(checkUpdates_,&QCheckBox::toggled,this,[this](bool on){if(on)checkForUpdates();else updateTimer_->stop();});
     connect(updater_,&Updater::busyChanged,this,[this,updateButton](bool busy){updateButton->setEnabled(!busy);updateCounts();});
-    auto* theme=combo({"Auto","Light","Dark"},"theme");toolbar->addWidget(theme);
+    toolbar->addWidget(theme);
     theme->setCurrentIndex(appSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
     connect(theme,&QComboBox::currentIndexChanged,this,[theme]{appSettings().setValue("appearance/theme",theme->currentIndex());applyDesktopStyle(theme->currentIndex());});
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)

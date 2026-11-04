@@ -49,7 +49,7 @@ void applyDesktopStyle(int theme) {
         QPushButton[primary="true"][noSelection="true"] { background: #c4e3d3; color: #567565; }
         QPushButton#cancelQueue[running="true"], QPushButton#stopProgress { background: #b83e3e; color: white; }
         QPushButton#toggleOutput { padding: 2px 7px; }
-        QPushButton#stopProgress { padding: 1px; }
+        QPushButton#stopProgress { padding: 0px; border-radius: 0px; }
         QProgressBar { border: 1px solid palette(mid); border-radius: 4px; text-align: center; min-height: 17px; }
         QProgressBar::chunk { background: #72ad93; }
     )");

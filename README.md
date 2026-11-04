@@ -119,6 +119,7 @@ For supported formats and conversion paths, see the [conversion matrix](docs/con
 Those links are unrelated to the project.
 - [Pictureflect Photo Viewer](https://pictureflect.com/)
 - [Special K Image Viewer](https://github.com/SpecialKO/SKIV)
+- [HDRFrame](https://apps.microsoft.com/detail/9p4ngn61cr4t)
 
 ## License
 
