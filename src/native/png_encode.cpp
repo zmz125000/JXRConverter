@@ -19,6 +19,42 @@ struct PngWriter {
     }
 };
 
+struct PngLightLevels { double peak=0.,average=0.; };
+
+// CTA-861 content light levels use max(R,G,B) in display-linear nits,
+// without alpha weighting. Analyze the actual output codes so quantization,
+// clipping and HLG's gamut-dependent 1000-nit reference OOTF are accounted for.
+// Keep only one expanded row, rather than allocating another full image.
+template<class Row>
+PngLightLevels png_light_levels(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
+                               const StillSourceColor& color,std::vector<uint8_t>& row,Row& fill) {
+    std::vector<uint16_t> codes(size_t(w)*4);
+    std::vector<float> linear;
+    PngLightLevels levels;
+    for(unsigned y=0;y<h;++y) {
+        fill(y,row.data());
+        for(unsigned x=0;x<w;++x) {
+            for(unsigned c=0;c<3;++c) {
+                const size_t at=size_t(x)*channels+(gray?0:c);
+                codes[size_t(x)*4+c]=depth==8?uint16_t(row[at])*257u:
+                    (uint16_t(row[at*2])<<8)|row[at*2+1];
+            }
+            codes[size_t(x)*4+3]=65535;
+        }
+        uhdr_color_gamut_t gamut;
+        cicp_rgb_to_linear(reinterpret_cast<const uint8_t*>(codes.data()),w,16,
+                           color.primaries,color.transfer,linear,gamut);
+        for(unsigned x=0;x<w;++x) {
+            const auto* p=linear.data()+size_t(x)*4;
+            const double nits=std::clamp(double(std::max({p[0],p[1],p[2]}))*kSdrWhiteNits,
+                                         0.,color.transfer==16?double(kMaxNits):1000.);
+            levels.peak=std::max(levels.peak,nits);levels.average+=nits;
+        }
+    }
+    levels.average/=double(w)*h;
+    return levels;
+}
+
 // Owners exist before setjmp; libpng errors cannot skip their destructors.
 // Metadata precedes IDAT and 16-bit rows use PNG byte order.
 template<class Row>
@@ -26,6 +62,9 @@ int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
               const StillSourceColor& color,const char* path,StillEncodeQuality quality,Row fill,bool matching_cicp=false) {
     if(!w||!h||uint64_t(w)*h>80000000||(depth!=8&&depth!=16)||!path)return -100;
     std::vector<uint8_t> row(size_t(w)*channels*(depth/8));
+    const bool hdr=color.transfer==16||color.transfer==18;
+    if(hdr&&color.primaries!=1&&color.primaries!=9&&color.primaries!=12)return -105;
+    const auto light=hdr?png_light_levels(w,h,depth,channels,gray,color,row,fill):PngLightLevels{};
     PngWriter writer;
     writer.file=std::fopen(path,"wb");if(!writer.file)return -101;
     writer.png=png_create_write_struct(PNG_LIBPNG_VER_STRING,nullptr,nullptr,nullptr);
@@ -37,7 +76,6 @@ int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
     const bool alpha=channels==2||channels==4;
     const int type=gray?(alpha?PNG_COLOR_TYPE_GRAY_ALPHA:PNG_COLOR_TYPE_GRAY):(alpha?PNG_COLOR_TYPE_RGBA:PNG_COLOR_TYPE_RGB);
     png_set_IHDR(png,info,w,h,depth,type,PNG_INTERLACE_NONE,PNG_COMPRESSION_TYPE_DEFAULT,PNG_FILTER_TYPE_DEFAULT);
-    const bool hdr=color.transfer==16||color.transfer==18;
     if(!hdr&&color.icc_size) {
         const char* name=matching_cicp?(color.primaries==9?"BT.2020":color.primaries==12?"Display P3":"sRGB"):"Source";
         png_set_iCCP(png,info,name,PNG_COMPRESSION_TYPE_BASE,color.icc,static_cast<png_uint_32>(color.icc_size));
@@ -48,6 +86,8 @@ int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
         png_set_cICP(png,info,static_cast<png_byte>(color.primaries),static_cast<png_byte>(color.transfer),0,1);
         if(color.primaries==1&&color.transfer==13&&!color.icc_size)png_set_sRGB(png,info,PNG_sRGB_INTENT_RELATIVE);
     }
+    if(hdr)png_set_cLLI_fixed(png,info,static_cast<png_uint_32>(std::llround(light.peak*10000.)),
+                                     static_cast<png_uint_32>(std::llround(light.average*10000.)));
     if(quality.exif_size)png_set_eXIf_1(png,info,static_cast<png_uint_32>(quality.exif_size),const_cast<png_bytep>(quality.exif));
     png_write_info(png,info);
     for(unsigned y=0;y<h;++y){fill(y,row.data());png_write_row(png,row.data());}

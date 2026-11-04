@@ -568,7 +568,88 @@ static void hdr_png(const fs::path& dir) {
 }
 
 // Exercise the direct source path separately from the F32 processing boundary.
+// Read the wire format independently of libpng's cLLI accessors.
+static std::vector<uint32_t> png_light_chunk(const std::vector<uint8_t>& data) {
+    const auto u32=[&](size_t at){return uint32_t(data[at])<<24|uint32_t(data[at+1])<<16|uint32_t(data[at+2])<<8|data[at+3];};
+    std::vector<uint32_t> result;bool pixels=false;
+    for(size_t at=8;at+12<=data.size();) {
+        const auto size=u32(at);check(size<=data.size()-at-12,"cLLI PNG chunk bounds");
+        if(!std::memcmp(data.data()+at+4,"IDAT",4))pixels=true;
+        if(!std::memcmp(data.data()+at+4,"cLLI",4)) {
+            check(!pixels&&size==8&&result.empty(),"cLLI size, order or duplicates");
+            result={u32(at+8),u32(at+12)};
+        }
+        at+=size+12;
+    }
+    return result;
+}
+
+static void check_png_light_levels(const fs::path& path,unsigned cp,unsigned transfer) {
+    const auto data=bytes(path);const auto levels=png_light_chunk(data);
+    if(transfer==13){check(levels.empty(),"SDR PNG has HDR cLLI metadata");return;}
+    check(levels.size()==2,"HDR PNG missing cLLI");
+    const auto png=decode_regular(data.data(),data.size());
+    const double yr=cp==9?.2627:cp==12?.2289746:.2126,yb=cp==9?.0593:cp==12?.0792869:.0722;
+    double peak=0,sum=0;
+    for(size_t i=0;i<size_t(png.width)*png.height;++i) {
+        double rgb[3];
+        for(unsigned c=0;c<3;++c) {
+            uint16_t code=png.pixels[i*4+c];if(png.bits==16)std::memcpy(&code,png.pixels.data()+(i*4+c)*2,2);
+            const double v=double(code)/(png.bits==8?255.:65535.);
+            if(transfer==16) {
+                const double n=std::pow(v,32./2523.);
+                rgb[c]=10000.*std::pow(std::max(n-3424./4096.,0.)/(2413./128.-2392./128.*n),16384./2610.);
+            } else rgb[c]=v<=.5?v*v/3.:(std::exp((v-.55991073)/.17883277)+.28466892)/12.;
+        }
+        if(transfer==18) {
+            const double scale=1000.*std::pow(yr*rgb[0]+(1-yr-yb)*rgb[1]+yb*rgb[2],.2);
+            for(auto& channel:rgb)channel*=scale;
+        }
+        const double light=std::min(std::max({rgb[0],rgb[1],rgb[2]}),transfer==16?10000.:1000.);
+        peak=std::max(peak,light);sum+=light;
+    }
+    // Production's shared EOTF lookup is float; this reference uses double.
+    const double average=sum/(double(png.width)*png.height);
+    check(std::abs(double(levels[0])/10000.-peak)<std::max(.002,peak*.0001),"PNG MaxCLL differs from decoded output peak");
+    check(std::abs(double(levels[1])/10000.-average)<std::max(.002,average*.0001),"PNG MaxFALL differs from decoded output frame average");
+}
+
+static void png_content_light(const fs::path& dir) {
+    // Colored pixels distinguish maxRGB from weighted Y; straight alpha must
+    // not change content metadata. Invalid and clipped input is measured only
+    // after encoding, including HLG scene-channel clipping and PNG quantization.
+    const float input[]={7350.f/203.f,1,.2f,0, .1f,2,.3f,.5f, .05f,.1f,.2f,1,
+                         NAN,INFINITY,-1,1, 0,0,0,1, .3f,4,.2f,.25f};
+    for(unsigned transfer:{13u,16u,18u})for(unsigned depth:{8u,16u})
+        for(auto gamut:{UHDR_CG_BT_709,UHDR_CG_DISPLAY_P3,UHDR_CG_BT_2100}) {
+            const unsigned cp=gamut==UHDR_CG_BT_2100?9:gamut==UHDR_CG_DISPLAY_P3?12:1;
+            const auto stem="png-light-"+std::to_string(transfer)+"-"+std::to_string(depth)+"-"+std::to_string(cp);
+            const auto path=dir/(stem+".png");StillEncodeQuality quality(0);
+            check(encode_png_f32(3,2,input,gamut,transfer,depth,path.string().c_str(),quality)==0,"PNG light-level encode");
+            check_png_light_levels(path,cp,transfer);
+            const auto data=bytes(path);const auto png=decode_regular(data.data(),data.size());
+            StillSourceColor color;color.bits=depth;color.channels=4;color.primaries=cp;color.transfer=transfer;color.orientation=6;
+            quality.png_auto_bits=false;quality.png_bits=depth==8?16:8;
+            const auto direct=dir/(stem+"-direct.png");
+            check(encode_png_source(3,2,png.pixels.data(),depth==16,color,direct.string().c_str(),quality)==0,"Direct PNG light-level encode");
+            check_png_light_levels(direct,cp,transfer);
+        }
+    for(unsigned transfer:{16u,18u}) {
+        const float black[]={0,0,0,1};const auto path=dir/("png-light-black-"+std::to_string(transfer)+".png");
+        check(encode_png_f32(1,1,black,UHDR_CG_BT_2100,transfer,16,path.string().c_str(),StillEncodeQuality(0))==0,"Black HDR PNG encode");
+        check(png_light_chunk(bytes(path))==std::vector<uint32_t>({0,0}),"Black PNG invented a minimum light level");
+        for(unsigned depth:{8u,16u}) {
+            const uint8_t gray8[]={0,0,255,255};const uint16_t gray16[]={0,0,65535,65535};
+            const auto grayPath=dir/("png-light-gray-"+std::to_string(transfer)+"-"+std::to_string(depth)+".png");
+            StillSourceColor color;color.bits=depth;color.channels=2;color.primaries=9;color.transfer=transfer;
+            check(encode_png_source(2,1,depth==8?static_cast<const void*>(gray8):gray16,depth==16,color,grayPath.string().c_str(),StillEncodeQuality(0))==0,"Gray HDR PNG encode");
+            check_png_light_levels(grayPath,9,transfer);
+        }
+    }
+}
+
 static void png_outputs(const fs::path& dir) {
+    png_content_light(dir);
     for(unsigned depth:{8u,16u})for(unsigned cp:{1u,9u,12u})for(unsigned tc:{13u,16u,18u}) {
         const auto stem="png-out-"+std::to_string(depth)+"-"+std::to_string(cp)+"-"+std::to_string(tc);
         const auto input=dir/(stem+".png");
