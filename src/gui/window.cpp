@@ -58,7 +58,6 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
-#include <QStatusBar>
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -201,7 +200,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     list_->setModel(proxy_);table_->setModel(proxy_);list_->setSelectionModel(selection_);table_->setSelectionModel(selection_);
     table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);for(int column:{Catalog::Captured,Catalog::Created,Catalog::Modified,Catalog::ExifDate})table_->setColumnWidth(column,170);for(int column:{Catalog::Path,Catalog::Error,Catalog::MetadataWarning})table_->setColumnWidth(column,300);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
     views_->addWidget(list_);views_->addWidget(table_);layout->addWidget(views_,1);
-    counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");
+    counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");counts_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
+    libraryMessageTimer_=new QTimer(this);libraryMessageTimer_->setSingleShot(true);connect(libraryMessageTimer_,&QTimer::timeout,this,[this]{libraryMessage_.clear();updateCounts();});
     auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addWidget(counts_);actionsLayout->addStretch();
     statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
     auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
@@ -244,11 +244,11 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* button:{visible_,selected_})button->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
-    auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,12);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1);
+    auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,10);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1,Qt::AlignBottom);
     progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
-    auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot);progressLayout->addLayout(progressRow);
+    auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
     connect(progressStop_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,0,Qt::AlignHCenter);
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
@@ -349,8 +349,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         updateCounts();showMetadata();if(autoAspect_->isChecked()&&aspectSamplePending_)aspectTimer_->start();
         for(int row=first.row();row<=last.row();++row){const auto& record=catalog_->record(row);if(record.metadataWarning.isEmpty())continue;const auto warning=record.path+"\n"+record.metadataWarning;if(!loggedWarnings_.contains(warning)){loggedWarnings_.insert(warning);logMessage("Warning: "+warning);}}
     });
-    connect(catalog_,&Catalog::scanStateChanged,this,[this](bool scanning){statusBar()->showMessage(scanning?"Scanning folders…":"Folder scan complete",scanning?0:4000);updateCounts();});
-    connect(catalog_,&Catalog::scanError,this,[this](const QString& error){statusBar()->showMessage(error,6000);logMessage("Scan error: "+error);});
+    connect(catalog_,&Catalog::scanStateChanged,this,[this](bool scanning){showLibraryMessage(scanning?"Scanning folders…":"Folder scan complete",scanning?0:4000);updateCounts();});
+    connect(catalog_,&Catalog::scanError,this,[this](const QString& error){showLibraryMessage(error,6000);logMessage("Scan error: "+error);});
     connect(queue_,&ConversionQueue::outputStarted,this,[this](qint64 batch,const QString& input,const QString& output){updateJobOutput(batch,input,output,"Running");});
     connect(queue_,&ConversionQueue::outputFinished,this,[this](qint64 batch,const QString& input,const QString& output,const QString& state){updateJobOutput(batch,input,output,state);});
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
@@ -800,8 +800,8 @@ void MainWindow::saveHistory() {
     const auto directory=configDirectory();
     QDir().mkpath(directory);QSaveFile file(directory+"/history.json");
     QJsonObject object;object.insert("version",1);object.insert("folders",QJsonArray::fromStringList(recentFolders_));object.insert("files",QJsonArray::fromStringList(recentFiles_));object.insert("lastFiles",QJsonArray::fromStringList(lastFiles_));
-    if(!file.open(QIODevice::WriteOnly)){statusBar()->showMessage("Cannot save recent history",5000);return;}
-    const auto data=QJsonDocument(object).toJson();if(file.write(data)!=data.size()||!file.commit())statusBar()->showMessage("Cannot save recent history",5000);
+    if(!file.open(QIODevice::WriteOnly)){showLibraryMessage("Cannot save recent history",5000);return;}
+    const auto data=QJsonDocument(object).toJson();if(file.write(data)!=data.size()||!file.commit())showLibraryMessage("Cannot save recent history",5000);
 }
 void MainWindow::addDroppedPaths(const QStringList& paths) {
     QStringList files;
@@ -900,13 +900,18 @@ void MainWindow::updateAutoThumbnailAspect() {
     aspectSamplePending_=false;setThumbnailAspect(choice);
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
+void MainWindow::showLibraryMessage(const QString& message,int timeout) {
+    libraryMessage_=message;libraryMessageTimer_->stop();
+    if(timeout>0)libraryMessageTimer_->start(timeout);
+    updateCounts();
+}
 void MainWindow::updateCounts() {
     QStringList processingNotes;
     if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));if(rawAutoExposure_->isChecked())processingNotes.append("AE");}
     progress_->setFormat(QString("%p% (%v/%m)")+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
-    counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(catalog_->scanning()?" · scanning…":""));
+    counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
     progressStop_->setVisible(queue_->busy());

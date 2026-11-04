@@ -94,6 +94,7 @@ private:
     void requestAspectSample(bool viewport);
     void setThumbnailAspect(int index);
     void updateCounts();
+    void showLibraryMessage(const QString& message, int timeout = 0);
     void showMetadata();
     void convertFiles(bool selected);
     void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false);
@@ -126,6 +127,8 @@ private:
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit *inspector_, *outputLog_;
     QTimer* updateTimer_;
+    QTimer* libraryMessageTimer_;
+    QString libraryMessage_;
     QTimer* jobSaveTimer_;
     QAction* clearJobs_;
     QActionGroup* jobActions_;

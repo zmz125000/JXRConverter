@@ -1,3 +1,4 @@
+#include <QStatusBar>
 #include <QtTest>
 #include <QAbstractItemModelTester>
 #include <QCheckBox>
@@ -596,6 +597,11 @@ private slots:
         const auto a=makeImage(root("footer"),"a.jpg",32,24,100),b=makeImage(root("footer"),"b.jpg",32,24,100),c=makeImage(root("footer"),"c.jpg",32,24,100);
         window.addPaths({a,b,c});QTRY_COMPARE(window.catalog()->rowCount(),3);
         auto* footer=window.findChild<QWidget*>("libraryActions");auto* view=window.findChild<FileListView*>();
+        QTRY_VERIFY(window.findChild<QLabel*>("catalogCounts")->text().contains("Folder scan complete"));
+        QVERIFY(!window.findChild<QStatusBar*>());
+        QTRY_COMPARE(progress->mapToGlobal(QPoint(0,progress->height())).y(),footer->mapToGlobal(QPoint(0,footer->height())).y());
+        window.findChild<QPushButton*>("toggleOutput")->click();
+        QTRY_COMPARE(progress->mapToGlobal(QPoint(0,progress->height())).y(),footer->mapToGlobal(QPoint(0,footer->height())).y());
         footer->findChild<QPushButton*>("selectAllImages")->click();QCOMPARE(view->selectionModel()->selectedRows().size(),3);
         footer->findChild<QPushButton*>("deselectImages")->click();QVERIFY(view->selectionModel()->selectedRows().isEmpty());
         window.catalog()->setStatus(b,"Done");window.catalog()->setStatus(c,"Failed","failure");
