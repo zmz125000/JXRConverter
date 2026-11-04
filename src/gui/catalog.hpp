@@ -32,7 +32,7 @@ QImage readThumbnail(const QString& path, int edge = 384, const std::function<bo
 class Catalog : public QAbstractTableModel {
     Q_OBJECT
 public:
-    enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, Created, Modified, ExifDate, ColumnCount };
+    enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, Created, Modified, ExifDate, Width, Height, MaxEdge, Megapixels, AspectRatio, Hdr, Gainmap, Raw, Path, Error, MetadataWarning, ColumnCount };
     enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole };
     explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 128*1024);
     ~Catalog() override;

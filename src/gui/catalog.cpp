@@ -167,7 +167,7 @@ Catalog::~Catalog() {
 int Catalog::rowCount(const QModelIndex& parent) const { return parent.isValid()?0:records_.size(); }
 int Catalog::columnCount(const QModelIndex& parent) const { return parent.isValid()?0:ColumnCount; }
 QVariant Catalog::headerData(int section, Qt::Orientation orientation, int role) const {
-    static const QStringList headers = {"Name","Format","Dimensions","File size","Image date","Camera","Lens","ISO","Aperture","Shutter","Focal length","Transfer","Primaries","Bit depth","Status","Created","Modified","EXIF date"};
+    static const QStringList headers = {"Name","Format","Dimensions","File size","Image date","Camera","Lens","ISO","Aperture","Shutter","Focal length","Transfer","Primaries","Bit depth","Status","Created","Modified","EXIF date","Width","Height","Max edge","Megapixels","Aspect ratio","HDR","Gain map","RAW","Full path","Error","Metadata warning"};
     if (orientation == Qt::Horizontal && role == Qt::DisplayRole && section >= 0 && section < headers.size()) return headers[section];
     return {};
 }
@@ -194,6 +194,15 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     case Shutter:return r.shutter>0?(r.shutter<1?QString("1/%1 s").arg(std::round(1/r.shutter)):QString("%1 s").arg(r.shutter)):QString{};
     case Focal:return r.focal>0?QString("%1 mm").arg(r.focal):QString{};
     case Transfer:return r.transfer; case Primaries:return r.primaries; case Bits:return r.bits?QString::number(r.bits):QString{};
+    case Width:return r.width>0?QString::number(r.width):QString{};
+    case Height:return r.height>0?QString::number(r.height):QString{};
+    case MaxEdge:return r.width>0&&r.height>0?QString::number(std::max(r.width,r.height)):QString{};
+    case Megapixels:return r.width>0&&r.height>0?QString::number(double(r.width)*r.height/1e6,'f',2):QString{};
+    case AspectRatio:return r.width>0&&r.height>0?QString("%1:1").arg(double(r.width)/r.height,0,'f',3):QString{};
+    case Hdr:return r.inspected?QString(r.hdr?"Yes":"No"):QString{};
+    case Gainmap:return r.inspected?QString(r.gainmap?"Yes":"No"):QString{};
+    case Raw:return r.inspected?QString(r.raw?"Yes":"No"):QString{};
+    case Path:return r.path;case Error:return r.error;case MetadataWarning:return r.metadataWarning;
     case Status:return r.status; default:return {};
     }
 }
@@ -424,7 +433,7 @@ void CatalogFilter::setFilter(const Filter& filter) {
 #endif
 }
 QString catalogFieldKey(int column) {
-    static const QStringList keys={"name","format","dimensions","size","date","camera","lens","iso","aperture","shutter","focal","transfer","primaries","bits","status","created","modified","exifdate"};
+    static const QStringList keys={"name","format","dimensions","size","date","camera","lens","iso","aperture","shutter","focal","transfer","primaries","bits","status","created","modified","exifdate","width","height","maxedge","megapixels","aspect","hdr","gainmap","raw","path","error","metadatawarning"};
     return keys.value(column);
 }
 bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
@@ -433,7 +442,7 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     if(f.status==3&&!r.status.startsWith("Done")&&r.status!="Skipped")return false;
     if(f.status==4&&r.status!="Failed")return false;
     const QString haystack=r.path+" "+r.format+" "+dimensions(r)+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+QString::number(r.bits)+" bit "+r.exif.keys().join(' ')+" "+r.exif.values().join(' ');
-    static const QRegularExpression terms(R"((?:(name|format|dimensions|size|date|camera|lens|iso|aperture|shutter|focal|transfer|primaries|bits|status|created|modified|exifdate):)?("(?:\\.|[^"\\])*"|[^\s]+))");
+    static const QRegularExpression terms(R"((?:(name|format|dimensions|size|date|camera|lens|iso|aperture|shutter|focal|transfer|primaries|bits|status|created|modified|exifdate|width|height|maxedge|megapixels|aspect|hdr|gainmap|raw|path|error|metadatawarning):)?("(?:\\.|[^"\\])*"|[^\s]+))");
     auto matches=terms.globalMatch(f.search);
     while(matches.hasNext()) {
         const auto match=matches.next();const auto field=match.captured(1);auto value=match.captured(2);
@@ -474,7 +483,11 @@ bool CatalogFilter::lessThan(const QModelIndex& left,const QModelIndex& right) c
     const auto* model=static_cast<Catalog*>(sourceModel());const auto& a=model->record(left.row());const auto& b=model->record(right.row());
     auto numeric=[&](double x,double y){return x==y?a.path<b.path:x<y;};
     switch(left.column()) {
-    case Catalog::Dimensions:return numeric(double(a.width)*a.height,double(b.width)*b.height);
+    case Catalog::Width:return numeric(a.width,b.width);case Catalog::Height:return numeric(a.height,b.height);
+    case Catalog::MaxEdge:return numeric(std::max(a.width,a.height),std::max(b.width,b.height));
+    case Catalog::AspectRatio:return numeric(a.height>0?double(a.width)/a.height:0,b.height>0?double(b.width)/b.height:0);
+    case Catalog::Hdr:return numeric(a.hdr,b.hdr);case Catalog::Gainmap:return numeric(a.gainmap,b.gainmap);case Catalog::Raw:return numeric(a.raw,b.raw);
+    case Catalog::Megapixels:case Catalog::Dimensions:return numeric(double(a.width)*a.height,double(b.width)*b.height);
     case Catalog::Size:return numeric(a.bytes,b.bytes);case Catalog::Captured:return a.imageDate()==b.imageDate()?a.path<b.path:a.imageDate()<b.imageDate();
     case Catalog::Created:return a.created==b.created?a.path<b.path:a.created<b.created;
     case Catalog::Modified:return a.modified==b.modified?a.path<b.path:a.modified<b.modified;
