@@ -106,6 +106,10 @@ static void raw_auto_exposure(const fs::path& dir) {
     const float lift=std::exp2(meanLog(contrastAuto)-meanLog(contrastOff));
     check(highlight>.5f,"RAW highlight fixture has no exposed subject");
     check(lift<=std::max(1.f,.95f/highlight)+.001f,"RAW auto exposure overexposed highlights against a dark background");
+    controls.auto_exposure_protect_highlights=false;
+    const auto unguarded=decode(contrast);
+    check(meanLog(unguarded)>meanLog(contrastAuto)+.1f,"Disabling RAW AE highlight protection did not restore average-only metering");
+    controls.auto_exposure_protect_highlights=true;
     // Equivalent manual EV must match when both run before the nonlinear look.
     const float meteredEV=std::clamp(std::log2(.18f)-meanLog(original),-6.f,6.f);
     controls.linear_hdr=false;const auto cameraAuto=decode(data);controls.auto_exposure=false;controls.exposure=meteredEV;

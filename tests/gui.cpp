@@ -1036,17 +1036,19 @@ private slots:
         appSettings().clear();
         {
             MainWindow window;auto* automatic=window.findChild<QCheckBox*>("rawAutoExposure");QVERIFY(automatic);QVERIFY(!automatic->isChecked());
+            auto* guard=window.findChild<QCheckBox*>("rawProtectHighlights");QVERIFY(guard);QVERIFY(guard->isChecked());QVERIFY(!guard->isEnabled());
             auto* form=qobject_cast<QFormLayout*>(automatic->parentWidget()->layout());QVERIFY(form);
             int autoRow=-1,lookRow=-1;QFormLayout::ItemRole role;
-            form->getWidgetPosition(automatic,&autoRow,&role);form->getWidgetPosition(window.findChild<QCheckBox*>("rawCameraLook"),&lookRow,&role);QCOMPARE(lookRow,autoRow+1);
+            form->getWidgetPosition(automatic,&autoRow,&role);form->getWidgetPosition(window.findChild<QCheckBox*>("rawCameraLook"),&lookRow,&role);QCOMPARE(lookRow,autoRow+2);
             auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);automatic->setChecked(true);
             for(int rawMode:{0,1,2}){window.findChild<QComboBox*>("rawMode")->setCurrentIndex(rawMode);QVERIFY(automatic->isEnabled());QVERIFY(window.options().raw.auto_exposure);}
+            QVERIFY(guard->isEnabled());guard->setChecked(false);QVERIFY(!window.options().raw.auto_exposure_protect_highlights);
             window.findChild<QDoubleSpinBox*>("rawExposure")->setValue(.7);QCOMPARE(window.options().raw.exposure,.7f);
             mode->setCurrentIndex(0);QVERIFY(!automatic->isEnabled());QVERIFY(!window.options().raw.auto_exposure);mode->setCurrentIndex(1);
         }
         {
-            MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("rawAutoExposure")->isChecked());
-            restored.findChild<QPushButton*>("resetRaw")->click();QVERIFY(!restored.findChild<QCheckBox*>("rawAutoExposure")->isChecked());QVERIFY(!restored.options().raw.auto_exposure);
+            MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("rawAutoExposure")->isChecked());QVERIFY(!restored.findChild<QCheckBox*>("rawProtectHighlights")->isChecked());
+            restored.findChild<QPushButton*>("resetRaw")->click();QVERIFY(!restored.findChild<QCheckBox*>("rawAutoExposure")->isChecked());QVERIFY(!restored.options().raw.auto_exposure);QVERIFY(restored.findChild<QCheckBox*>("rawProtectHighlights")->isChecked());
         }
         appSettings().clear();
     }

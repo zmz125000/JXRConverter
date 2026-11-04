@@ -196,7 +196,7 @@ auto processing_key(const Options& o,int format) {
     return std::make_tuple(o.mode,format==5?0.f:o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
         format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
-        r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr,r.auto_exposure);
+        r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr,r.auto_exposure,r.auto_exposure_protect_highlights);
 }
 }
 ConversionSession::ConversionSession(const std::filesystem::path& input):impl_(new Impl) {impl_->input=input;}

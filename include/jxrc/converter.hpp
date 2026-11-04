@@ -32,6 +32,7 @@ struct RawControls {
     bool camera_look = true;
     bool linear_hdr = false;
     bool auto_exposure = false; // Meter scene-linear pixels before the camera look; exposure adds compensation.
+    bool auto_exposure_protect_highlights = true; // Limit automatic brightening using RGB highlights.
 };
 struct Options {
     Mode mode = Mode::preserve;

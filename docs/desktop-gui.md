@@ -38,13 +38,14 @@ Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV**
 Boost highlights and Custom modes. It meters the white-balanced linear image
 before the camera look, tone sliders and HDR boost. A trimmed geometric mean
 of up to 50,000 luminance samples targets 18% gray. A 99th-percentile RGB highlight
-guard limits added brightening to keep diffuse highlights below camera white,
+guard (**AE Protect highlights**, on by default) limits added brightening to keep diffuse highlights below camera white,
 while retaining existing HDR headroom. Automatic correction is limited to ±6 EV. Black pixels are ignored; an entirely black image gets no
 correction. In Custom mode, Exposure (EV) adds compensation to the metered result.
 Metering does not depend on boost target or shoulder, and gain-map exports apply
 the same exposure to their SDR base and HDR rendition. This adjusts brightness;
 it cannot recover clipped sensor data. CLI/library: `--raw-auto-exposure` /
-`RawControls::auto_exposure`.
+`RawControls::auto_exposure`. Disable the guard using `--raw-ae-no-highlight-protection`
+or `RawControls::auto_exposure_protect_highlights = false`.
 
 In Custom RAW settings, **Disable HDR boost** forces the effective HDR shoulder to 0 while retaining its saved value. This disables highlight lift and its accompanying color restoration; exposure, tone controls, Highlight stops compression and the target cap still apply. Unchecking restores the saved shoulder, and Reset RAW rendering clears the toggle.
 

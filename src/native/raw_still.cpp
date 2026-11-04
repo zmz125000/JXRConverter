@@ -155,7 +155,7 @@ float sampled_peak_luma(const uint8_t* base, int w, int h, int colors, int bits)
 // ±6 EV. Limit positive correction using the 99th-percentile RGB highlight,
 // so shadows cannot push normally exposed diffuse highlights above camera white.
 // Baseline exposure is included in metering; user EV is added afterward.
-float metered_exposure_ev(const libraw_processed_image_t* img, float camera_white, float baseline_ev, int space) {
+float metered_exposure_ev(const libraw_processed_image_t* img, float camera_white, float baseline_ev, int space, bool protect_highlights) {
     if(!img||img->bits!=16||!(camera_white>0.f))return 0.f;
     const size_t count=static_cast<size_t>(img->width)*img->height;
     const size_t step=std::max<size_t>(1,(count+49999)/50000);
@@ -178,7 +178,7 @@ float metered_exposure_ev(const libraw_processed_image_t* img, float camera_whit
     double sum=0;for(size_t i=trim;i<logs.size()-trim;++i)sum+=logs[i];
     const float mean=static_cast<float>(sum/(logs.size()-2*trim));
     float ev=std::clamp(std::log2(.18f)-mean-baseline_ev,-6.f,6.f);
-    if(ev>0.f) {
+    if(ev>0.f&&protect_highlights) {
         const size_t index=(highlights.size()-1)*99/100;
         std::nth_element(highlights.begin(),highlights.begin()+index,highlights.end());
         // Preserve pre-existing sensor headroom: this guard only limits added
@@ -774,7 +774,7 @@ float highlight_fit(const LibRaw& raw, float sat_fit) {
 bool process_open_raw(HeadroomRaw& raw, const uint8_t* tiff, size_t tiff_len, int max_edge, int present, float panel_boost,
                       int demosaic_qual, int wb_mode, float exposure_ev, float highlight_stops, int kelvin,
                       bool hdr_linear, bool camera_look, float shoulder, float shadows, float midtones, float highlights,
-                      Decoded& out, bool float_output = false, bool auto_exposure = false) {
+                      Decoded& out, bool float_output = false, bool auto_exposure = false, bool protect_highlights = true) {
     configure_process(raw, present, max_edge, demosaic_qual, wb_mode, kelvin);
     if (raw.unpack() != LIBRAW_SUCCESS) return false;
     if (raw.dcraw_process() != LIBRAW_SUCCESS) return false;
@@ -794,7 +794,7 @@ bool process_open_raw(HeadroomRaw& raw, const uint8_t* tiff, size_t tiff_len, in
     const float user_ev = std::isfinite(exposure_ev) ? exposure_ev : 0.f;
     const float baseline_ev = skip_look ? 0.f : dng_baseline_ev(raw);
     int space = present >= 2 ? 2 : (present == 1 ? 1 : 0);
-    const float auto_ev = auto_exposure ? metered_exposure_ev(img, camera_white, baseline_ev, space) : 0.f;
+    const float auto_ev = auto_exposure ? metered_exposure_ev(img, camera_white, baseline_ev, space, protect_highlights) : 0.f;
     const float pack_ev = baseline_ev + auto_ev + user_ev;
     float temp = 5500.f;
     if (wb_mode == 8) {
@@ -832,7 +832,7 @@ int decode_raw(const uint8_t* data, size_t size, const jxrc::RawControls& contro
         (controls.hdr_mode==jxrc::RawHdrMode::source?10000.f:float(controls.target_nits))/203.f,
         3,controls.white_balance,controls.exposure,controls.highlight_stops,controls.kelvin,
         controls.linear_hdr,controls.camera_look,controls.shoulder,controls.shadows,
-        controls.midtones,controls.highlights,result,false,controls.auto_exposure)) return -3;
+        controls.midtones,controls.highlights,result,false,controls.auto_exposure,controls.auto_exposure_protect_highlights)) return -3;
     w=result.w; h=result.h; gamut=result.gamut; pixels=std::move(result.pixels);
     return 0;
 }
@@ -859,6 +859,6 @@ int decode_raw_f32(const uint8_t* data,size_t size,const jxrc::RawControls& cont
     if(!process_open_raw(raw,data,size,max_edge,hdr?(controls.hdr_mode==jxrc::RawHdrMode::source?3:4):1,
         (controls.hdr_mode==jxrc::RawHdrMode::source?10000.f:float(controls.target_nits))/203.f,
         3,controls.white_balance,controls.exposure,controls.highlight_stops,controls.kelvin,
-        controls.linear_hdr,controls.camera_look,controls.shoulder,controls.shadows,controls.midtones,controls.highlights,result,true,controls.auto_exposure))return -3;
+        controls.linear_hdr,controls.camera_look,controls.shoulder,controls.shadows,controls.midtones,controls.highlights,result,true,controls.auto_exposure,controls.auto_exposure_protect_highlights))return -3;
     w=result.w;h=result.h;gamut=result.gamut;pixels=std::move(result.linear);sdr=std::move(result.sdr);return 0;
 }

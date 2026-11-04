@@ -29,6 +29,7 @@ Processing controls:
 RAW controls (process mode):
   --raw-mode source|boost|custom  Source headroom, default boost, or custom controls
   --raw-auto-exposure           Meter linear RAW to 18% gray before the camera look
+  --raw-ae-no-highlight-protection  Disable the auto-exposure RGB highlight guard
   --raw-exposure -3..3          Exposure in stops; compensation when auto is on
   --raw-wb camera|auto|daylight|cloudy|shade|tungsten|fluorescent|flash|kelvin
   --raw-kelvin 2000..12000      Used with --raw-wb kelvin
@@ -82,6 +83,7 @@ int run(int argc,char** argv) {
         else if(arg=="--max-edge"){const int v=integer(value());if(v<0)throw std::invalid_argument("max-edge must be nonnegative");o.max_edge=v;}
         else if(arg=="--raw-mode"){o.raw.hdr_mode=choice<jxrc::RawHdrMode>(value(),{{"source",jxrc::RawHdrMode::source},{"boost",jxrc::RawHdrMode::boost},{"custom",jxrc::RawHdrMode::custom}});raw_mode=true;}
         else if(arg=="--raw-auto-exposure")o.raw.auto_exposure=true;
+        else if(arg=="--raw-ae-no-highlight-protection")o.raw.auto_exposure_protect_highlights=false;
         else if(arg=="--raw-exposure")o.raw.exposure=number(value());
         else if(arg=="--raw-wb")o.raw.white_balance=choice<int>(value(),{{"camera",0},{"auto",1},{"daylight",2},{"cloudy",3},{"shade",4},{"tungsten",5},{"fluorescent",6},{"flash",7},{"kelvin",8}});
         else if(arg=="--raw-kelvin")o.raw.kelvin=integer(value());
