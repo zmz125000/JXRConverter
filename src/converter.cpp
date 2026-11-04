@@ -2,6 +2,7 @@
 #include "jxrc/version.hpp"
 #include "reader_pixels.h"
 #include "codec_api.h"
+#include "render_analysis.h"
 #include "working_pixels.h"
 #include "input_format.h"
 #include "heif_decode.h"
@@ -182,6 +183,7 @@ struct ConversionSession::Impl {
     std::filesystem::path input;
     std::vector<uint8_t> bytes,exif;
     std::vector<float> linear,raw_sdr;
+    RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
     bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false;
     uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
@@ -361,10 +363,12 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 };
                 clampGamut(linear);clampGamut(raw_sdr);gamut=UHDR_CG_BT_709;
             }
+            cache.analysis.bind(linear.data(),size_t(w)*h,gamut);
             cache.previous=o;cache.ready=true;
         }
         auto output_exif=exif;prepare_export_exif(output_exif,w,h);
         q.exif=output_exif.data();q.exif_size=output_exif.size();q.source_bits=cache.bits;
+        q.analysis=&cache.analysis;
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
         int rc;
         if(cache.scrgb) {

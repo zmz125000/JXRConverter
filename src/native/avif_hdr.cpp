@@ -1,4 +1,5 @@
 #include "working_pixels.h"
+#include "render_analysis.h"
 #include "heif_decode.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
@@ -647,6 +648,8 @@ int decode_heif_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>
 int decode_heif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,unsigned edge) {
     return decode_heif_linear(data,size,rgba,w,h,gamut,edge,nullptr);
 }
+
+const std::vector<float>& pq_linear_lut() {return avif_linear_lut(AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084);}
 
 // PNG samples have already been expanded by libpng, without gamma conversion.
 template<class Sample> static void cicp_rgb_to_linear_impl(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,

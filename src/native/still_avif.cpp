@@ -1,5 +1,6 @@
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "codec_api.h"
+#include "render_analysis.h"
 #include "hdr_parallel.h"
 #include "ultrahdr/icc.h"
 
@@ -53,8 +54,18 @@ Image make_image(unsigned w, unsigned h, unsigned depth, uhdr_color_gamut_t gamu
     return image;
 }
 
-int write_avif(avifImage* image, const char* path, StillEncodeQuality quality,const avifRGBImage* rgb=nullptr,bool color_metadata_ready=false) {
-    if(!color_metadata_ready&&!complete_avif_color_metadata(image,rgb))return -77;
+int write_avif(avifImage* image, const char* path, StillEncodeQuality quality,const avifRGBImage* rgb=nullptr,bool color_metadata_ready=false,RenderAnalysis* analysis=nullptr) {
+    if(!color_metadata_ready) {
+        const auto* cached=analysis?analysis->cached_light(image->transferCharacteristics,image->depth):nullptr;
+        if(cached) {
+            image->clli.maxCLL=static_cast<uint16_t>(std::ceil(cached->peak));
+            image->clli.maxPALL=static_cast<uint16_t>(std::ceil(cached->average));
+        } else {
+            ContentLightLevels light;
+            if(!complete_avif_color_metadata(image,rgb,false,&light))return -77;
+            if(analysis&&image->transferCharacteristics==18)analysis->record_hlg(image->depth,light);
+        }
+    }
     if (quality.exif_size && avifImageSetMetadataExif(image, quality.exif, quality.exif_size) != AVIF_RESULT_OK) return -78;
     Encoder encoder(avifEncoderCreate(), avifEncoderDestroy);
     if (!encoder) return -71;
@@ -95,7 +106,7 @@ avifRGBImage rgb_view(const avifImage* image, uint8_t* pixels, unsigned depth, u
 // AVIF clli box. Gain-map SDR bases deliberately use CICP: libavif requires it
 // to reconstruct the ISO alternate rendition. Never invent mastering-display
 // (mdcv) metadata: the source's mastering display is not known here.
-bool complete_avif_color_metadata(avifImage* image,const avifRGBImage* rgb,bool preserve_hdr_metadata) {
+bool complete_avif_color_metadata(avifImage* image,const avifRGBImage* rgb,bool preserve_hdr_metadata,ContentLightLevels* measured) {
     const auto cp=image->colorPrimaries,tc=image->transferCharacteristics;
     if(cp!=1&&cp!=9&&cp!=12)return true;
     const auto gamut=cp==9?UHDR_CG_BT_2100:cp==12?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
@@ -135,6 +146,7 @@ bool complete_avif_color_metadata(avifImage* image,const avifRGBImage* rgb,bool 
     // Integer-nit upper bounds (unlike PNG's 0.0001-nit fixed point).
     image->clli.maxCLL=static_cast<uint16_t>(std::ceil(peak));
     image->clli.maxPALL=static_cast<uint16_t>(std::ceil(sum/(double(image->width)*image->height)));
+    if(measured)*measured={peak,sum/(double(image->width)*image->height)};
     return true;
 }
 
@@ -266,6 +278,9 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
     if(!rgba||!path||!w||!h||uint64_t(w)*h>80000000||mode<0||mode>3)return -70;
     const size_t pixels=size_t(w)*h;
     const bool pq=mode==1,gain_map=mode==2,hlg=mode==3;
+    auto* analysis=quality.analysis&&quality.analysis->matches(rgba,pixels,gamut)?quality.analysis:nullptr;
+    const bool collect=pq&&analysis&&!analysis->pq_ready();
+    std::array<PqAnalysisAccumulator,8> statistics{};
     const unsigned depth=quality.avif_depth(),maximum=(1u<<depth)-1;
     auto image=make_image(w,h,depth,gamut,pq,quality);
     if(!image)return -71;
@@ -278,19 +293,22 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
     hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned job){
         float peak=0.f;double sum=0;
         for(size_t i=begin;i<end;++i) {
-            float luminance=0;
+            float luminance=0,raw_peak=0.f,code_peak=0.f;
             float hlg_rgb[3]={rgba[i*4],rgba[i*4+1],rgba[i*4+2]};
             if(hlg)linear_to_hlg_rgb(hlg_rgb[0],hlg_rgb[1],hlg_rgb[2],gamut);
             for(unsigned c=0;c<3;++c) {
                 float v=rgba[i*4+c];if(!std::isfinite(v))v=0;
+                if(collect)raw_peak=std::max(raw_peak,v);
                 v=std::clamp(v,0.f,kMaxLinear);
                 peak=std::max(peak,v);luminance=std::max(luminance,v);
                 const float base=gain_map&&sdr_base?sdr_base[i*4+c]:v;
                 const float code=hlg?hlg_rgb[c]:pq?linear_to_pq_code(v):srgb_oetf(base);
+                if(collect)code_peak=std::max(code_peak,code);
                 const unsigned packed=static_cast<unsigned>(std::lround(code*maximum));
                 if(depth==8)encoded8[i*4+c]=static_cast<uint8_t>(packed);else encoded[i*4+c]=static_cast<uint16_t>(packed);
                 if(gain_map)hdr_codes[i*4+c]=static_cast<uint16_t>(std::lround(linear_to_pq_code(v)*65535.f));
             }
+            if(collect)statistics[job].observe(raw_peak,code_peak);
             sum+=luminance;
             const float alpha=std::isfinite(rgba[i*4+3])?std::clamp(rgba[i*4+3],0.f,1.f):0.f;
             const unsigned packedAlpha=static_cast<unsigned>(std::lround(alpha*maximum));
@@ -299,6 +317,7 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
         }
         peaks[job]=peak;averages[job]=sum;
     });
+    if(collect)analysis->record_pq(statistics);
     avifContentLightLevelInformationBox clli{};
     clli.maxCLL=static_cast<uint16_t>(std::lround(*std::max_element(peaks.begin(),peaks.end())*kSdrWhiteNits));
     clli.maxPALL=static_cast<uint16_t>(std::lround(std::accumulate(averages.begin(),averages.end(),0.0)/pixels*kSdrWhiteNits));
@@ -322,5 +341,5 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
         map->altMatrixCoefficients=image->matrixCoefficients;
         map->altYUVRange=AVIF_RANGE_FULL;map->altDepth=depth;map->altPlaneCount=3;map->altCLLI=clli;
     }
-    return write_avif(image.get(),path,quality,&base_rgb);
+    return write_avif(image.get(),path,quality,&base_rgb,false,analysis);
 }

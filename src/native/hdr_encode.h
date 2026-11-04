@@ -10,8 +10,10 @@
 
 #include "ultrahdr_api.h"
 
+class RenderAnalysis;
 /** One captured export quality selection; existing native callers default to High. */
 struct StillEncodeQuality {
+    RenderAnalysis* analysis = nullptr; // Optional metadata cache for the borrowed F32 render.
     // Borrowed TIFF EXIF for this synchronous encode; never owns image pixels.
     const uint8_t* exif = nullptr;
     size_t exif_size = 0;

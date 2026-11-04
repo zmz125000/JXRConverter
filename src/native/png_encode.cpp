@@ -1,4 +1,5 @@
 #include "codec_api.h"
+#include "render_analysis.h"
 #include "exif_metadata.h"
 #include "ultrahdr/icc.h"
 #include <png.h>
@@ -19,7 +20,7 @@ struct PngWriter {
     }
 };
 
-struct PngLightLevels { double peak=0.,average=0.; };
+using PngLightLevels=ContentLightLevels;
 
 // CTA-861 content light levels use max(R,G,B) in display-linear nits,
 // without alpha weighting. Analyze the actual output codes so quantization,
@@ -59,12 +60,14 @@ PngLightLevels png_light_levels(unsigned w,unsigned h,unsigned depth,unsigned ch
 // Metadata precedes IDAT and 16-bit rows use PNG byte order.
 template<class Row>
 int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
-              const StillSourceColor& color,const char* path,StillEncodeQuality quality,Row fill,bool matching_cicp=false) {
+              const StillSourceColor& color,const char* path,StillEncodeQuality quality,Row fill,bool matching_cicp=false,RenderAnalysis* analysis=nullptr) {
     if(!w||!h||uint64_t(w)*h>80000000||(depth!=8&&depth!=16)||!path)return -100;
     std::vector<uint8_t> row(size_t(w)*channels*(depth/8));
     const bool hdr=color.transfer==16||color.transfer==18;
     if(hdr&&color.primaries!=1&&color.primaries!=9&&color.primaries!=12)return -105;
-    const auto light=hdr?png_light_levels(w,h,depth,channels,gray,color,row,fill):PngLightLevels{};
+    const auto* cached=hdr&&analysis?analysis->cached_light(color.transfer,depth):nullptr;
+    const auto light=cached?*cached:hdr?png_light_levels(w,h,depth,channels,gray,color,row,fill):PngLightLevels{};
+    if(analysis&&color.transfer==18&&!cached)analysis->record_hlg(depth,light);
     PngWriter writer;
     writer.file=std::fopen(path,"wb");if(!writer.file)return -101;
     writer.png=png_create_write_struct(PNG_LIBPNG_VER_STRING,nullptr,nullptr,nullptr);
@@ -155,7 +158,9 @@ int encode_png_source(unsigned w,unsigned h,const void* pixels,bool sixteen,
 // F32 stays in display-linear light until the final transfer and quantization.
 int encode_png_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t gamut,
                    int transfer,int depth,const char* path,StillEncodeQuality quality) {
-    if(!rgba||(transfer!=13&&transfer!=16&&transfer!=18))return -100;
+    if(!rgba||!w||!h||uint64_t(w)*h>80000000||(depth!=8&&depth!=16)||(transfer!=13&&transfer!=16&&transfer!=18))return -100;
+    auto* analysis=quality.analysis&&quality.analysis->matches(rgba,size_t(w)*h,gamut)?quality.analysis:nullptr;
+    if(analysis&&transfer==16)analysis->pq_levels(depth);
     StillSourceColor color;color.primaries=gamut==UHDR_CG_BT_2100?9:gamut==UHDR_CG_DISPLAY_P3?12:1;
     color.transfer=transfer;
     // Match AVIF's SDR profile so readers without PNG cICP support still see
@@ -178,5 +183,5 @@ int encode_png_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t ga
                 put_sample(row,size_t(x)*4+c,unsigned(std::lround(v*(depth==8?255.f:65535.f))),depth);
             }
         }
-    },true);
+    },true,analysis);
 }

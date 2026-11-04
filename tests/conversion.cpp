@@ -1,5 +1,6 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
+#include "render_analysis.h"
 #include "input_format.h"
 #include "hdr_parallel.h"
 #include "regular_decode.h"
@@ -391,6 +392,59 @@ static void srgb_clamping(const fs::path& dir) {
         const auto info=jxrc::inspect(output);check(has709(output)&&info.bits==8,"SDR shortcut bypassed clamp or changed depth");
     }
 }
+// Shared metadata must produce the same files as independent codec calls,
+// regardless of encoder order or precision, without rescanning for each target.
+static void shared_output_analysis(const fs::path& dir) {
+    std::vector<float> pixels(32*24*4);
+    for(size_t i=0;i<pixels.size();i+=4) {
+        pixels[i]=float(i%197)/11.f;pixels[i+1]=float(i%83)/23.f;pixels[i+2]=float(i%41)/37.f;pixels[i+3]=float(i%7)/6.f;
+    }
+    pixels[0]=NAN;pixels[1]=-1;pixels[2]=INFINITY;pixels[4]=100.f;
+    auto encode=[&](int target,const fs::path& output,StillEncodeQuality quality,const float* input) {
+        const auto path=output.string();int rc;
+        if(target==0||target==3)rc=encode_png_f32(32,24,input,UHDR_CG_BT_2100,16,target==0?16:8,path.c_str(),quality);
+        else if(target==1)rc=encode_jxl_f32(32,24,input,UHDR_CG_BT_2100,true,path.c_str(),quality,true);
+        else if(target==4||target==6)rc=encode_png_f32(32,24,input,UHDR_CG_BT_2100,18,target==4?8:16,path.c_str(),quality);
+        else if(target==5||target==7){quality.custom_avif_depth=target==5?8:10;rc=encode_avif_f32(32,24,input,UHDR_CG_BT_2100,3,path.c_str(),quality);}
+        else {quality.custom_avif_depth=target==8?8:12;rc=encode_avif_f32(32,24,input,UHDR_CG_BT_2100,1,path.c_str(),quality);}
+        check(rc==0,"Shared metadata encode failed");
+    };
+    for(int first:{0,1,2}) {
+        RenderAnalysis analysis;analysis.bind(pixels.data(),32*24,UHDR_CG_BT_2100);
+        StillEncodeQuality shared(4,0,100,12),independent=shared;shared.analysis=&analysis;
+        std::vector<int> order={first};for(int target=0;target<=8;++target)if(target!=first)order.push_back(target);
+        for(int target:order) {
+            const auto shared_path=dir/("analysis-shared-"+std::to_string(first)+"-"+std::to_string(target));
+            const auto single_path=dir/("analysis-single-"+std::to_string(first)+"-"+std::to_string(target));
+            encode(target,shared_path,shared,pixels.data());encode(target,single_path,independent,pixels.data());
+            check(bytes(shared_path)==bytes(single_path),"Shared metadata changed output pixels, profile or light levels");
+            check(analysis.pq_builds()==1,"PQ metadata recomputed for another encoder/depth");
+        }
+        check(analysis.cached_light(18,8)&&analysis.cached_light(18,10)&&analysis.cached_light(18,16),"HLG metadata not cached by bit depth");
+        check(!analysis.cached_light(18,12),"HLG metadata incorrectly shared between different precisions");
+        // A copied/differently rendered buffer must never borrow stale metadata.
+        auto changed=pixels;changed[4]=.5f;changed[8]=.8f;
+        const auto shared_path=dir/"analysis-other-buffer",single_path=dir/"analysis-other-single";
+        encode(0,shared_path,shared,changed.data());encode(0,single_path,independent,changed.data());
+        check(bytes(shared_path)==bytes(single_path),"Metadata cache accepted another pixel buffer");
+        analysis.bind(changed.data(),32*24,UHDR_CG_BT_2100);
+        check(!analysis.pq_ready()&&!analysis.cached_light(18,8),"Rebinding a render retained stale metadata");
+        encode(0,shared_path,shared,changed.data());check(bytes(shared_path)==bytes(single_path),"Changed render retained stale metadata");
+        check(analysis.pq_builds()==1&&analysis.peak()<100.f,"Changed render did not rebuild its peak");
+    }
+    // Exercise ConversionSession invalidation, not only the native cache API.
+    std::fill(pixels.begin(),pixels.end(),.5f);for(size_t i=3;i<pixels.size();i+=4)pixels[i]=1.f;pixels[0]=6.f;
+    const auto source=dir/"analysis-session-source.jxl";
+    check(encode_jxl_f32(32,24,pixels.data(),UHDR_CG_BT_2100,true,source.string().c_str(),StillEncodeQuality(0),false)==0,"Analysis session source");
+    jxrc::ConversionSession session(source);
+    for(float exposure:{0.f,1.f,-.5f})for(auto target:{jxrc::Target::jxl_pq,jxrc::Target::avif_pq,jxrc::Target::png_hdr}) {
+        jxrc::Options options;options.mode=jxrc::Mode::process;options.target=target;options.exposure=exposure;options.quality.preset=jxrc::Preset::lossless;
+        const auto shared_path=dir/"analysis-session-output",single_path=dir/"analysis-session-single";
+        session.convert(shared_path,options);jxrc::convert(source,single_path,options);
+        check(bytes(shared_path)==bytes(single_path),"Session metadata cache failed to invalidate changed processing controls");
+    }
+}
+
 static void shared_render(const fs::path& dir) {
     const auto source=dir/"session.png";write(source,raster_png8);
     jxrc::ConversionSession session(source);
@@ -1071,7 +1125,7 @@ int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
-    if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
@@ -1087,7 +1141,7 @@ int main(int argc,char** argv) try {
     check(is_avif_input(avif_header.data(),avif_header.size()),"AVIF compatible brand rejected");
     check(!is_avif_input(cr3_header.data(),8),"Truncated BMFF identified as AVIF");
     srgb_clamping(dir);
-    shared_render(dir);
+    shared_render(dir);shared_output_analysis(dir);
     signed_float_jxl(dir);
     pq_jxl_peak(dir);
     raw_auto_exposure(dir);

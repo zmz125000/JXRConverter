@@ -1,6 +1,7 @@
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "hdr_encode.h"
 #include "hdr_parallel.h"
+#include "render_analysis.h"
 
 
 #include <algorithm>
@@ -251,34 +252,48 @@ int encode_jxl_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg
         return encode_jxl_pixels(w,h,encoded.data(),cg,path,quality,JXL_TYPE_UINT16,JXL_TRANSFER_FUNCTION_HLG,1000.f);
     }
     if(!hdr&&!pq)return encode_jxl_sdr_f32(w,h,rgba,cg,path,quality);
+    auto* analysis=quality.analysis&&quality.analysis->matches(rgba,pixels,cg)?quality.analysis:nullptr;
+    const bool collect=pq&&analysis&&!analysis->pq_ready();
+    std::array<PqAnalysisAccumulator,8> statistics{};
     float peak=pq?kMaxLinear:1.f;
     float pq_intensity=1.f;
-    if(hdr||pq) {
+    if((hdr||pq)&&!collect) {
         float found=1.f;
-        const unsigned jobs=hdr_pixel_jobs(pixels);
-        std::array<float,8> peaks{};
-        hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned job){
-            float local=pq?0.f:1.f;
-            for(size_t i=begin;i<end;++i)for(unsigned c=0;c<3;++c)
-                if(std::isfinite(rgba[4*i+c]))local=std::max(local,rgba[4*i+c]);
-            peaks[job]=local;
-        });
-        found=*std::max_element(peaks.begin(),peaks.end());
+        if(analysis)found=analysis->peak();
+        else {
+            const unsigned jobs=hdr_pixel_jobs(pixels);
+            std::array<float,8> peaks{};
+            hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned job){
+                float local=pq?0.f:1.f;
+                for(size_t i=begin;i<end;++i)for(unsigned c=0;c<3;++c)
+                    if(std::isfinite(rgba[4*i+c]))local=std::max(local,rgba[4*i+c]);
+                peaks[job]=local;
+            });
+            found=*std::max_element(peaks.begin(),peaks.end());
+        }
         if(pq)pq_intensity=std::clamp(found*kSdrWhiteNits,1.f,kMaxNits);
         else peak=std::max(found,400.f/kSdrWhiteNits);
     }
     std::vector<float> encoded(pixels*4);
-    hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned){
+    hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned job){
         for(size_t i=begin;i<end;++i) {
+            float raw_peak=0.f,code_peak=0.f;
             for(unsigned c=0;c<3;++c) {
                 float v=rgba[4*i+c];if(!std::isfinite(v))v=0.f;
+                if(collect)raw_peak=std::max(raw_peak,v);
                 if(pq||!hdr)v=std::clamp(v,0.f,peak);
                 encoded[4*i+c]=pq?linear_to_pq_code(v):v/peak;
+                if(collect)code_peak=std::max(code_peak,encoded[4*i+c]);
             }
+            if(collect)statistics[job].observe(raw_peak,code_peak);
             float alpha=rgba[4*i+3];if(!std::isfinite(alpha))alpha=0.f;
             encoded[4*i+3]=std::clamp(alpha,0.f,1.f);
         }
     });
+    if(collect) {
+        analysis->record_pq(statistics);
+        pq_intensity=std::clamp(analysis->peak()*kSdrWhiteNits,1.f,kMaxNits);
+    }
     const float intensity=pq?pq_intensity:hdr?peak*kSdrWhiteNits:kSdrWhiteNits;
     if(pq || (hdr && quality.jxl_half)) {
         std::vector<uint16_t> packed(encoded.size());
