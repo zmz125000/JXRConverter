@@ -470,7 +470,7 @@ QWidget* MainWindow::buildControls() {
     raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawMode_->setCurrentIndex(1);rawLayout->addRow("HDR mode",rawMode_);
     rawAutoExposure_=check("Auto exposure","rawAutoExposure");
     connect(rawAutoExposure_,&QCheckBox::toggled,this,&MainWindow::updateCounts);
-    rawAutoExposure_->setToolTip("Meter the linear RAW image to 18% gray before the camera look and HDR boost. In Custom mode, Exposure (EV) adds compensation. Automatic correction is limited to ±6 EV.");
+    rawAutoExposure_->setToolTip("Meter the linear RAW image to 18% gray before the camera look and HDR boost. In Custom mode, Exposure (EV) adds compensation. Automatic correction is limited to ±6 EV; a highlight guard limits brightening to avoid overexposure.");
     rawCustom_=new QWidget;auto* rawForm=new QFormLayout(rawCustom_);rawForm->setContentsMargins(0,0,0,0);
     rawExposure_=real(-3,3,0,0.1,"rawExposure");rawExposure_->setToolTip("Exposure before the camera look. With Auto exposure on, this is compensation added to the metered exposure.");wb_=combo({"Camera","Auto","Daylight","Cloudy","Shade","Tungsten","Fluorescent","Flash","Kelvin"},"rawWhiteBalance");kelvin_=spin(2000,12000,5200,"rawKelvin");kelvin_->setSingleStep(100);
     highlight_=real(0,3,0,0.1,"rawHighlightStops");shoulder_=real(0,1,0.5,0.05,"rawShoulder");nits_=spin(1000,10000,1500,"rawTargetNits");nits_->setSingleStep(100);

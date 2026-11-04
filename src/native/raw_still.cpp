@@ -152,27 +152,41 @@ float sampled_peak_luma(const uint8_t* base, int w, int h, int colors, int bits)
 // Meter the developed scene-linear image, not the camera curve or HDR boost.
 // Trim 1% from each end of sampled log luminance so hot pixels/speculars do not
 // dominate. Ignore black, aim at 18% gray, and limit automatic correction to
-// ±6 EV. Baseline exposure is included in metering; user EV is added afterward.
+// ±6 EV. Limit positive correction using the 99th-percentile RGB highlight,
+// so shadows cannot push normally exposed diffuse highlights above camera white.
+// Baseline exposure is included in metering; user EV is added afterward.
 float metered_exposure_ev(const libraw_processed_image_t* img, float camera_white, float baseline_ev, int space) {
     if(!img||img->bits!=16||!(camera_white>0.f))return 0.f;
     const size_t count=static_cast<size_t>(img->width)*img->height;
     const size_t step=std::max<size_t>(1,(count+49999)/50000);
     const float yr=space==2?.2627f:space==1?.2289746f:.2126f;
     const float yb=space==2?.0593f:space==1?.0792869f:.0722f;
-    std::vector<float> logs;logs.reserve(std::min<size_t>(count,50000));
+    std::vector<float> logs, highlights;logs.reserve(std::min<size_t>(count,50000));highlights.reserve(logs.capacity());
     for(size_t i=0;i<count;i+=step) {
         const int x=i%img->width,y=i/img->width;
         const float r=sample_component(img->data,16,img->colors,x,y,img->width,0);
         const float g=img->colors>1?sample_component(img->data,16,img->colors,x,y,img->width,1):r;
         const float b=img->colors>2?sample_component(img->data,16,img->colors,x,y,img->width,2):r;
         const float luma=yr*r+(1.f-yr-yb)*g+yb*b;
-        if(std::isfinite(luma)&&luma>=1.f)logs.push_back(std::log2(luma/camera_white));
+        if(std::isfinite(luma)&&luma>=1.f) {
+            logs.push_back(std::log2(luma/camera_white));
+            highlights.push_back(std::max({r,g,b})/camera_white);
+        }
     }
     if(logs.empty())return 0.f;
     std::sort(logs.begin(),logs.end());const size_t trim=logs.size()/100;
     double sum=0;for(size_t i=trim;i<logs.size()-trim;++i)sum+=logs[i];
     const float mean=static_cast<float>(sum/(logs.size()-2*trim));
-    return std::clamp(std::log2(.18f)-mean-baseline_ev,-6.f,6.f);
+    float ev=std::clamp(std::log2(.18f)-mean-baseline_ev,-6.f,6.f);
+    if(ev>0.f) {
+        const size_t index=(highlights.size()-1)*99/100;
+        std::nth_element(highlights.begin(),highlights.begin()+index,highlights.end());
+        // Preserve pre-existing sensor headroom: this guard only limits added
+        // brightening. It does not force existing HDR highlights back into SDR.
+        const float safe_lift=std::max(0.f,std::log2(.95f/highlights[index])-baseline_ev);
+        ev=std::min(ev,safe_lift);
+    }
+    return ev;
 }
 
 // Stops below the highlight anchor where the HDR gain starts.

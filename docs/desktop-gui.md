@@ -37,8 +37,9 @@ Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV**
 **Auto exposure** in RAW rendering is off by default and works in Source headroom,
 Boost highlights and Custom modes. It meters the white-balanced linear image
 before the camera look, tone sliders and HDR boost. A trimmed geometric mean
-of up to 50,000 luminance samples targets 18% gray, with automatic correction
-limited to ±6 EV. Black pixels are ignored; an entirely black image gets no
+of up to 50,000 luminance samples targets 18% gray. A 99th-percentile RGB highlight
+guard limits added brightening to keep diffuse highlights below camera white,
+while retaining existing HDR headroom. Automatic correction is limited to ±6 EV. Black pixels are ignored; an entirely black image gets no
 correction. In Custom mode, Exposure (EV) adds compensation to the metered result.
 Metering does not depend on boost target or shoulder, and gain-map exports apply
 the same exposure to their SDR base and HDR rendition. This adjusts brightness;

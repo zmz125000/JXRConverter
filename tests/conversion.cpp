@@ -90,6 +90,22 @@ static void raw_auto_exposure(const fs::path& dir) {
     for(size_t i=0;i<automatic.size();++i)check(std::abs(compensation[i]-automatic[i]*(i%4==3?1.f:2.f))<.0001f,"RAW auto exposure cancelled or doubled manual compensation");
     controls.exposure=0;const auto dim=dir/"auto-dim.dng";dng(dim,.25f);const auto dimAuto=decode(bytes(dim));
     check(std::abs(std::exp2(meanLog(dimAuto))-.18f)<.0001f,"RAW auto exposure failed for dim input");
+    // A dark background must not drive an otherwise exposed bright subject into clipping.
+    auto contrast=data;
+    const size_t sensor=contrast.size()-8192;
+    for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x) {
+        const uint16_t value=x>=40?10000:80;
+        const size_t offset=sensor+(y*64+x)*2;
+        contrast[offset]=uint8_t(value);contrast[offset+1]=uint8_t(value>>8);
+    }
+    controls.auto_exposure=false;const auto contrastOff=decode(contrast);
+    controls.auto_exposure=true;const auto contrastAuto=decode(contrast);
+    std::vector<float> peaks;
+    for(size_t i=0;i<contrastOff.size();i+=4)peaks.push_back(std::max({contrastOff[i],contrastOff[i+1],contrastOff[i+2]}));
+    std::sort(peaks.begin(),peaks.end());const float highlight=peaks[(peaks.size()-1)*99/100];
+    const float lift=std::exp2(meanLog(contrastAuto)-meanLog(contrastOff));
+    check(highlight>.5f,"RAW highlight fixture has no exposed subject");
+    check(lift<=std::max(1.f,.95f/highlight)+.001f,"RAW auto exposure overexposed highlights against a dark background");
     // Equivalent manual EV must match when both run before the nonlinear look.
     const float meteredEV=std::clamp(std::log2(.18f)-meanLog(original),-6.f,6.f);
     controls.linear_hdr=false;const auto cameraAuto=decode(data);controls.auto_exposure=false;controls.exposure=meteredEV;
