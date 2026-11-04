@@ -535,7 +535,7 @@ void MainWindow::updateMode() {
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
-    custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(selectedTargets().contains(Target::jxl)&&(!process||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked())));
+    custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(!process||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     convertGamut_->setEnabled(!srgbClamp_->isChecked());bt2020_->setEnabled(!srgbClamp_->isChecked());
     updateOutputSettings();updateCounts();
 }
