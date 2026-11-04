@@ -71,7 +71,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
     } else if(bytes.size()>=4&&bytes[0]=='I'&&bytes[1]=='I'&&bytes[2]==0xbc&&bytes[3]==1) {
         out=inspect_jxr(bytes.data(),bytes.size());
     } else if(is_regular_image(bytes.data(),bytes.size())) {
-        out=inspect_regular(decode_regular(bytes.data(),bytes.size()));
+        out=inspect_regular(bytes.data(),bytes.size());
     } else {
         auto storage=std::make_unique<LibRaw>();
         auto& raw=*storage;

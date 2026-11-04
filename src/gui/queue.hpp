@@ -12,6 +12,7 @@ namespace jxrc::gui {
 struct Job { QString input, output; Options options; qint64 batch = 0; };
 int coreCount();
 int recommendedWorkers(int cores);
+bool hdrInput(const QString& path);
 QString outputDateFolder();
 struct OutputLayout {
     bool converted_subfolder = true;

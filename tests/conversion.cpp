@@ -565,6 +565,15 @@ static void hdr_png(const fs::path& dir) {
         check(source.hdr() && source.transfer==tc && source.primaries==cp && source.icc.empty(),"HDR PNG cICP priority");
         const auto info=jxrc::inspect(input);
         check(info.hdr && info.bits==depth && info.transfer==(tc==16?"PQ":"HLG"),"HDR PNG inspection");
+        // A broken IDAT must not prevent a metadata-only HDR routing decision.
+        // Actual decoding still rejects it; this proves inspection skips pixels.
+        auto broken=png;
+        for(size_t at=8;at+12<=broken.size();) {
+            const size_t n=size_t(broken[at])<<24|size_t(broken[at+1])<<16|size_t(broken[at+2])<<8|broken[at+3];
+            if(!std::memcmp(broken.data()+at+4,"IDAT",4)){if(n)broken[at+8]^=0xff;break;}at+=n+12;
+        }
+        check(jxrc::inspect_bytes(broken).hdr,"PNG HDR routing decoded pixel data");
+        fails([&]{decode_regular(broken.data(),broken.size());});
         std::vector<float> linear;uhdr_color_gamut_t gamut;regular_to_linear(source,linear,gamut);
         check(gamut==(cp==9?UHDR_CG_BT_2100:cp==12?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709),"HDR PNG primaries");
         const auto& codes=depth==16?expected_png16:expected_png8;const double max=depth==16?65535:255;

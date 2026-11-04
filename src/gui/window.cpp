@@ -464,7 +464,7 @@ QWidget* MainWindow::buildControls() {
     outputFormatsLayout->addWidget(targets_);
     auto* targetActions=new QHBoxLayout;
     acceptSdr_=check("Accept SDR formats","acceptSdr",appSettings().value("conversion/acceptSdr",false).toBool());
-    acceptSdr_->setToolTip("For HDR targets, include SDR-source filenames using the SDR output equivalent. The scRGB HDR target converts them to scRGB. Like LocalViewer, JXL, JXR and RAW filenames are in the HDR group; JPEG, AVIF, PNG, WebP, TIFF, BMP and GIF are in the SDR group regardless of their contents.");
+    acceptSdr_->setToolTip("For HDR targets, include SDR sources using the SDR output equivalent. The scRGB target converts them to scRGB. PNG and JXL are checked for HDR color metadata; linear sources, JXR and RAW are routed to HDR without scanning pixel brightness. JPEG, AVIF, HEIC, WebP, TIFF, BMP and GIF remain in the SDR format group.");
     connect(acceptSdr_,&QCheckBox::toggled,this,[](bool on){appSettings().setValue("conversion/acceptSdr",on);});
     targetActions->addWidget(acceptSdr_);targetActions->addStretch();
     auto* clearTargets=new QPushButton("None");clearTargets->setObjectName("clearTargets");clearTargets->setToolTip("Deselect all output formats.");targetActions->addWidget(clearTargets);
@@ -978,9 +978,9 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         QMap<int,QStringList> inputsByTarget;
+        const bool needsHdr=std::any_of(targets.cbegin(),targets.cend(),[](Target target){return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png;});
         for(const auto& path:paths) {
-            const auto extension=QFileInfo(path).suffix().toLower();
-            const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif"&&extension!="heic"&&extension!="heif"&&extension!="hif"&&extension!="png"&&extension!="webp"&&extension!="tif"&&extension!="tiff"&&extension!="bmp"&&extension!="gif";
+            const bool hdrGroup=!needsHdr||exactTargets||hdrInput(path);
             for(auto target:targets) {
                 const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap||target==Target::png_hdr||target==Target::png_hlg||target==Target::jxl_hlg||target==Target::avif_hlg;
                 if(hdrTarget&&!hdrGroup&&!exactTargets) {

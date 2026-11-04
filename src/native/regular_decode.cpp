@@ -76,7 +76,7 @@ void png_read(png_structp png, png_bytep out, png_size_t count) {
 // combinations) are recoverable. Keep libpng's fatal errors and strict CRC
 // validation, but do not turn a usable PNG into a failed thumbnail.
 void png_warning(png_structp, png_const_charp text) { std::fprintf(stderr,"PNG warning: %s\n",text); }
-RegularImage decode_png(const uint8_t* data,size_t size) {
+RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false) {
     RegularImage image;image.format="PNG";
     bool saw_cicp=false,saw_idat=false;
     for(size_t at=8;at+12<=size;) {
@@ -84,6 +84,7 @@ RegularImage decode_png(const uint8_t* data,size_t size) {
         const uint32_t n=uint32_t(p[0])<<24 | uint32_t(p[1])<<16 | uint32_t(p[2])<<8 | p[3];
         check(n<=size-at-12,"Truncated PNG chunk");
         check(std::memcmp(p+4,"acTL",4)!=0,"Animated PNG is not supported for still conversion");
+        if(metadata_only&&!std::memcmp(p+4,"eXIf",4))copy_metadata(image.exif,p+8,n);
         if(!std::memcmp(p+4,"IDAT",4))saw_idat=true;
         if(!std::memcmp(p+4,"cICP",4)) {
             // libpng may warn and discard invalid cICP. Never reinterpret an
@@ -134,6 +135,7 @@ RegularImage decode_png(const uint8_t* data,size_t size) {
             }
         }
     }
+    if(metadata_only){image.orientation=regular_orientation(image.exif);return image;}
     const bool transparency=png_get_valid(png,info,PNG_INFO_tRNS)!=0;
     if(color==PNG_COLOR_TYPE_PALETTE)png_set_palette_to_rgb(png);
     if(color==PNG_COLOR_TYPE_GRAY && depth<8)png_set_expand_gray_1_2_4_to_8(png);
@@ -311,6 +313,11 @@ RegularImage decode_regular(const uint8_t* data,size_t size) {
     if(tiff_signature(data,size))return decode_tiff(data,size);
     if(signature(data,size,"BM",2) || signature(data,size,"GIF87a",6) || signature(data,size,"GIF89a",6))return decode_bitmap(data,size);
     throw std::runtime_error("Unsupported regular image format");
+}
+jxrc::ImageInfo inspect_regular(const uint8_t* data,size_t size) {
+    // Color and dimensions are available before IDAT. Inspection must not
+    // decompress a full raster just to decide whether an HDR target accepts it.
+    return inspect_regular(signature(data,size,"\x89PNG\r\n\x1a\n",8)?decode_png(data,size,true):decode_regular(data,size));
 }
 jxrc::ImageInfo inspect_regular(const RegularImage& image) {
     jxrc::ImageInfo out;out.width=image.width;out.height=image.height;out.bits=image.bits;out.format=image.format;out.hdr=image.hdr();

@@ -995,6 +995,34 @@ private slots:
             QVERIFY(savedJob(window,1));QVERIFY(savedJob(window,1)->text().startsWith("Quick job #1"));
         }
     }
+    void mixedSourceHdrTargets() {
+        appSettings().clear();
+        const auto directory=root("mixed-hdr-input"),destination=root("mixed-hdr-output");
+        QDir().mkpath(directory);
+        const auto sdr=directory+"/sdr.png";QImage image(32,24,QImage::Format_RGB32);image.fill(QColor(90,110,130));QVERIFY(image.save(sdr,"PNG"));
+        auto convert=[&](const QString& name,jxrc::Target target){
+            const auto output=directory+"/"+name;jxrc::Options options;options.target=target;options.mode=jxrc::Mode::process;
+            jxrc::convert(std::filesystem::u8path(sdr.toStdString()),std::filesystem::u8path(output.toStdString()),options);return output;
+        };
+        const auto pq=convert("pq.png",jxrc::Target::png_hdr),hlg=convert("hlg.png",jxrc::Target::png_hlg);
+        const auto sdrJxl=convert("sdr.jxl",jxrc::Target::jxl),linear=convert("linear.jxl",jxrc::Target::jxl_linear);
+        QVERIFY(!hdrInput(sdr));QVERIFY(!hdrInput(sdrJxl));QVERIFY(hdrInput(pq));QVERIFY(hdrInput(hlg));
+        QVERIFY(hdrInput(linear)); // SDR-range pixels still have a linear HDR encoding.
+        QVERIFY(hdrInput(directory+"/unopened.jxr"));QVERIFY(hdrInput(directory+"/unopened.dng"));
+        MainWindow window;window.show();window.addPaths({sdr,pq,hlg,sdrJxl,linear});QTRY_COMPARE(window.catalog()->rowCount(),5);
+        window.findChild<QLineEdit*>("outputDirectory")->setText(destination);
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        for(int i=0;i<targets->count();++i){const auto t=jxrc::Target(targets->item(i)->data(Qt::UserRole).toInt());targets->item(i)->setCheckState(t==jxrc::Target::png||t==jxrc::Target::png_hdr?Qt::Checked:Qt::Unchecked);}
+        auto* accept=window.findChild<QCheckBox*>("acceptSdr");QVERIFY(!accept->isChecked());
+        QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);
+        QCOMPARE(window.queue()->total(),8);QCOMPARE(done[0][1].toInt(),0);
+        QVERIFY(QFileInfo::exists(destination+"/sdr_sdr.png"));QVERIFY(!QFileInfo::exists(destination+"/sdr_hdr.png"));
+        QVERIFY(QFileInfo::exists(destination+"/pq_hdr.png"));QVERIFY(QFileInfo::exists(destination+"/hlg_hdr.png"));QVERIFY(QFileInfo::exists(destination+"/linear_hdr.png"));
+        // Enabling the existing fallback alone still produces SDR equivalents
+        // for SDR inputs, deduplicated against the explicit SDR target.
+        accept->setChecked(true);window.findChild<QPushButton*>("statusAll")->click();window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),2);
+        QCOMPARE(window.queue()->total(),8);QVERIFY(!QFileInfo::exists(destination+"/sdr_hdr.png"));
+    }
     void popupButtonMetrics() {
         appSettings().clear();MainWindow window;window.show();QTest::qWait(20);
         for(const auto& pair:{qMakePair("thumbnailAspect","thumbnailFit"),qMakePair("statusJob","runningJob")}){
