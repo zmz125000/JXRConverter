@@ -9,14 +9,16 @@
 
 namespace jxrc {
 enum class Mode { preserve, process };
-// AVIF linear is deliberately absent: LocalViewer exports SDR, PQ or ISO gain maps.
-enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb };
+// Append targets to retain saved GUI target identifiers.
+enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg };
 enum class Preset { lossless, high, medium, low, custom };
 struct Quality {
     Preset preset = Preset::high;
     float jxl_distance = 0.5f;
     int codec_quality = 90;
     int avif_depth = 10; // Custom maximum depth; sources of 8 bits or less stay 8-bit.
+    int png_depth = 16; // PNG controls are independent of preset.
+    bool auto_bit_depth = true; // PNG: 8-bit sources use 8, deeper sources use 16.
     bool downsize_gainmap = false;
 };
 enum class RawHdrMode { source, boost, custom };

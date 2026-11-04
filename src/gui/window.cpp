@@ -229,6 +229,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
 
     auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
     auto* scroll=new QScrollArea;scroll->setObjectName("conversionScroll");scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
+    // Leave room for the controls, scrollbar and tab frame at the narrowest
+    // sidebar size, keeping conversion and output groups aligned.
+    sidebar->setMinimumWidth(std::max(330,scroll->widget()->minimumSizeHint().width()+scroll->verticalScrollBar()->sizeHint().width()+8));
     sidebar->addTab(scroll,"Conversion");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
     auto* logPanel=new QWidget;auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(0,0,0,0);
@@ -236,7 +239,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* clearLog=new FloatingClearButton(outputLog_);clearLog->setObjectName("clearLog");connect(clearLog,&QPushButton::clicked,outputLog_,&QPlainTextEdit::clear);
     connect(OutputCapture::instance(),&OutputCapture::textReady,this,[this](const QString& text){auto* bar=outputLog_->verticalScrollBar();const bool follow=bar->value()==bar->maximum();QTextCursor cursor(outputLog_->document());cursor.movePosition(QTextCursor::End);cursor.insertText(text);if(follow){outputLog_->setTextCursor(cursor);outputLog_->ensureCursorVisible();}});
     logMessage("JXRConverter "+QString::fromStdString(jxrc::version()));
-    auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(330);sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
+    auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(sidebar->minimumWidth());sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
     auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);auto* outputHeader=new WidthMatchedWidget(scroll->parentWidget());auto* headerLayout=new QHBoxLayout(outputHeader);headerLayout->setContentsMargins(14,0,14+scroll->verticalScrollBar()->sizeHint().width(),0);headerLayout->addWidget(outputToggle);sideLayout->addWidget(outputHeader,0,Qt::AlignHCenter);
     auto* outputPanel=new WidthMatchedWidget(scroll->parentWidget());outputPanel->setObjectName("outputPanel");auto* outputLayout=new QVBoxLayout(outputPanel);outputLayout->setContentsMargins(0,0,0,0);
     auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(14,0,14+scroll->verticalScrollBar()->sizeHint().width(),0);startButtons->setSpacing(6);
@@ -391,7 +394,7 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
+    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
@@ -428,8 +431,9 @@ QWidget* MainWindow::buildControls() {
     auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");mode_->setCurrentIndex(1);general->addRow("Mode",mode_);layout->addLayout(general);
     auto* outputFormats=new QGroupBox("Output formats · select one or more");outputFormats->setObjectName("outputFormats");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new QListWidget;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setMinimumHeight(155);targets_->setMaximumHeight(210);
-    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR"};
+    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG"};
     for(int i=0;i<targetNames.size();++i){auto* item=new QListWidgetItem(targetNames[i],targets_);item->setData(Qt::UserRole,i);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(i==4?Qt::Checked:Qt::Unchecked);}
+    for(int i=11;i<targetNames.size();++i)targets_->item(i)->setToolTip("HLG uses a 1000-nit reference display. Values outside its representable range are clipped.");
     targets_->insertItem(4,targets_->takeItem(7));
     targets_->insertItem(4,targets_->takeItem(8));
     targets_->viewport()->installEventFilter(this);
@@ -446,8 +450,11 @@ QWidget* MainWindow::buildControls() {
     outputFormatsLayout->addLayout(targetActions);layout->addWidget(outputFormats);
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
-    custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
+    custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit","8 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
     customForm->addRow("JPEG / AVIF",quality_);customForm->addRow("JXL distance",distance_);avifDepth_->setToolTip("Maximum AVIF depth. 8-bit sources remain 8-bit; AVIF supports up to 12 bits per channel.");customForm->addRow("AVIF max depth",avifDepth_);customForm->addRow(downsize_);qualityLayout->addRow(custom_);layout->addWidget(qualityGroup);
+    auto* pngGroup=new QGroupBox("PNG options");auto* pngForm=new QFormLayout(pngGroup);autoBitDepth_=check("Auto bit depth","autoBitDepth",true);pngDepth_=combo({"8 bit","16 bit"},"pngDepth");pngDepth_->setCurrentIndex(1);pngForm->addRow(autoBitDepth_);pngForm->addRow("PNG bit depth",pngDepth_);layout->addWidget(pngGroup);
+    connect(autoBitDepth_,&QCheckBox::toggled,this,[this](bool automatic){pngDepth_->setEnabled(!automatic);});pngDepth_->setEnabled(!autoBitDepth_->isChecked());
+    autoBitDepth_->setToolTip("PNG uses 8 bits for 8-bit sources and 16 bits for deeper sources. Disable to choose PNG depth directly. Independent of quality presets.");
     exif_=check("Keep EXIF","keepExif",true);exif_->setToolTip("Retain photographic EXIF, including camera, capture date, exposure and GPS, when present. Processed exports update orientation and dimensions; source raster offsets, thumbnails and maker notes are excluded.");transcode_=check("JXL lossless JPEG transcoding","jpegTranscoding");
     transcode_->setToolTip("Store eligible SDR JPEG coefficients directly in JXL without RGB decoding or additional image loss. Ignores the quality preset for these JPEGs; other inputs use their normal conversion path. Exposure or resizing disables transcoding. Enable Keep EXIF to allow original JPEG byte reconstruction.");
     layout->addWidget(exif_);layout->addWidget(transcode_);
@@ -534,7 +541,7 @@ void MainWindow::updateMode() {
     for(int i=0;i<targets_->count();++i) {
         auto* item=targets_->item(i);
         const int target=item->data(Qt::UserRole).toInt();
-        if(target!=3&&target!=5&&target!=7&&target!=8)continue;
+        if(target!=3&&target!=5&&target!=7&&target!=8&&target<10)continue;
         if(!process&&item->checkState()==Qt::Checked){item->setCheckState(Qt::Unchecked);removed=true;}
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
@@ -543,6 +550,7 @@ void MainWindow::updateMode() {
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     rawProtectHighlights_->setEnabled(process&&rawAutoExposure_->isChecked());
     custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(!process||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
+    pngDepth_->setEnabled(!autoBitDepth_->isChecked());
     convertGamut_->setEnabled(!srgbClamp_->isChecked());bt2020_->setEnabled(!srgbClamp_->isChecked());
     updateOutputSettings();updateCounts();
 }
@@ -565,7 +573,7 @@ Options MainWindow::options() const {
 }
 Options MainWindow::optionsForTarget(Target target) const {
     Options o;o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=target;o.quality.preset=Preset(preset_->currentIndex());
-    o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()?12:10;o.quality.downsize_gainmap=downsize_->isChecked();
+    o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()==0?10:avifDepth_->currentIndex()==1?12:8;o.quality.downsize_gainmap=downsize_->isChecked();o.quality.auto_bit_depth=autoBitDepth_->isChecked();o.quality.png_depth=pngDepth_->currentIndex()?16:8;
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isChecked()&&target==Target::jxl&&(o.mode==Mode::preserve||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     if(o.mode==Mode::process) {
         o.srgb_clamp=srgbClamp_->isChecked();o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.convert_gamut=convertGamut_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.auto_exposure=rawAutoExposure_->isChecked();o.raw.auto_exposure_protect_highlights=rawProtectHighlights_->isChecked();o.raw.shoulder=static_cast<float>(shoulder_->value());
@@ -950,11 +958,12 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
             const auto extension=QFileInfo(path).suffix().toLower();
             const bool hdrGroup=extension!="jpg"&&extension!="jpeg"&&extension!="jpe"&&extension!="avif"&&extension!="heic"&&extension!="heif"&&extension!="hif"&&extension!="png"&&extension!="webp"&&extension!="tif"&&extension!="tiff"&&extension!="bmp"&&extension!="gif";
             for(auto target:targets) {
-                const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap;
+                const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap||target==Target::png_hdr||target==Target::png_hlg||target==Target::jxl_hlg||target==Target::avif_hlg;
                 if(hdrTarget&&!hdrGroup&&!exactTargets) {
                     if(!acceptSdr_->isChecked())continue;
                     if(target==Target::jpeg_gainmap)target=Target::jpeg;
-                    else if(target==Target::jxl_linear||target==Target::jxl_pq)target=Target::jxl;
+                    else if(target==Target::jxl_linear||target==Target::jxl_pq||target==Target::jxl_hlg)target=Target::jxl;
+                    else if(target==Target::png_hdr||target==Target::png_hlg)target=Target::png;
                     else if(target!=Target::jxl_scrgb)target=Target::avif;
                 }
                 auto& inputs=inputsByTarget[int(target)];if(!inputs.contains(path))inputs.append(path);

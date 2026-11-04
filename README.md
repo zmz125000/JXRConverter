@@ -87,7 +87,11 @@ build/jxrconvert camera.dng output.avif --mode process --target avif-gainmap \
   --raw-highlight-stops 1 --raw-shoulder 0.6 --raw-target-nits 1500
 ```
 
-Targets are `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `avif`, `avif-pq`, and `avif-gainmap`. Generic targets in preservation mode retain the source transfer, so `--target avif` can produce PQ AVIF from a PQ source.
+Targets are `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `jxl-hlg`, `avif`, `avif-pq`, `avif-hlg`, `avif-gainmap`, `png`, `png-hdr` (also `png-pq`), and `png-hlg`. Generic targets in preservation mode retain the source transfer, so `--target png` can retain a PQ or HLG source. Explicit PQ and HLG targets require `--mode process`.
+
+PNG uses direct integer samples for preservation and untouched SDR exports, retaining source profiles and straight alpha. Pixel edits use the float32 path. PNG cannot preserve gain maps or extended floating HDR directly; use process mode to render those inputs. `--png-depth 8|16` sets PNG precision independently of quality presets. Auto bit depth defaults on (8 bits for 8-bit sources, 16 for deeper sources); use `--no-auto-bit-depth` to apply the selected depth directly.
+
+HLG PNG, JXL and AVIF exports accept display-linear float32 RGB (1.0 = 203 nits). They apply the inverse BT.2100 OOTF followed by the HLG OETF, using the same 1000-nit reference display and gamma 1.2 as the decoders. Values outside the HLG encoding range are clipped. JXL records a 1000-nit intensity target; PNG and AVIF carry HLG CICP tags.
 
 Preservation mode retains compatible source metadata and avoids linearization, tone mapping, and HDR reconstruction. Codec quantization and color/bit-depth conversion can still change sample values. JPEG is lossy, including with the `lossless` preset. `--jpeg-transcoding` passes compressed SDR JPEG data directly to libjxl when exporting SDR JXL without exposure or resizing. Gain-map sources are rejected on this path.
 

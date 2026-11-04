@@ -213,13 +213,14 @@ int encode_avif_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t g
 // Quantize once, after transfer conversion, directly to the requested AV1 depth.
 int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t gamut,
                     int mode,const char* path,StillEncodeQuality quality,const float* sdr_base) {
-    if(!rgba||!path||!w||!h||uint64_t(w)*h>80000000||mode<0||mode>2)return -70;
+    if(!rgba||!path||!w||!h||uint64_t(w)*h>80000000||mode<0||mode>3)return -70;
     const size_t pixels=size_t(w)*h;
-    const bool pq=mode==1,gain_map=mode==2;
+    const bool pq=mode==1,gain_map=mode==2,hlg=mode==3;
     const unsigned depth=quality.avif_depth(),maximum=(1u<<depth)-1;
     auto image=make_image(w,h,depth,gamut,pq,quality);
     if(!image)return -71;
-    if(!pq&&!gain_map&&!set_sdr_profile(image.get(),gamut))return -77;
+    if(hlg)image->transferCharacteristics=AVIF_TRANSFER_CHARACTERISTICS_HLG;
+    if(!pq&&!gain_map&&!hlg&&!set_sdr_profile(image.get(),gamut))return -77;
     std::vector<uint16_t> encoded(depth>8?pixels*4:0),hdr_codes(gain_map?pixels*4:0);
     std::vector<uint8_t> encoded8(depth==8?pixels*4:0);
     std::array<float,8> peaks{};std::array<double,8> averages{};
@@ -228,12 +229,14 @@ int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t g
         float peak=0.f;double sum=0;
         for(size_t i=begin;i<end;++i) {
             float luminance=0;
+            float hlg_rgb[3]={rgba[i*4],rgba[i*4+1],rgba[i*4+2]};
+            if(hlg)linear_to_hlg_rgb(hlg_rgb[0],hlg_rgb[1],hlg_rgb[2],gamut);
             for(unsigned c=0;c<3;++c) {
                 float v=rgba[i*4+c];if(!std::isfinite(v))v=0;
                 v=std::clamp(v,0.f,kMaxLinear);
                 peak=std::max(peak,v);luminance+=v/3.f;
                 const float base=gain_map&&sdr_base?sdr_base[i*4+c]:v;
-                const float code=pq?linear_to_pq_code(v):srgb_oetf(base);
+                const float code=hlg?hlg_rgb[c]:pq?linear_to_pq_code(v):srgb_oetf(base);
                 const unsigned packed=static_cast<unsigned>(std::lround(code*maximum));
                 if(depth==8)encoded8[i*4+c]=static_cast<uint8_t>(packed);else encoded[i*4+c]=static_cast<uint16_t>(packed);
                 if(gain_map)hdr_codes[i*4+c]=static_cast<uint16_t>(std::lround(linear_to_pq_code(v)*65535.f));

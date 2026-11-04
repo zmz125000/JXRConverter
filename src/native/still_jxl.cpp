@@ -232,9 +232,24 @@ int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg
 }
 
 int encode_jxl_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg,
-                   bool hdr,const char* path,StillEncodeQuality quality,bool pq) {
+                   bool hdr,const char* path,StillEncodeQuality quality,bool pq,bool hlg) {
     const size_t pixels=static_cast<size_t>(w)*h;
-    if(!rgba||!path||!pixels)return -60;
+    if(!rgba||!path||!w||!h||pixels>80000000||(pq&&hlg))return -60;
+    if(hlg) {
+        std::vector<uint16_t> encoded(pixels*4);
+        hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned){
+            for(size_t i=begin;i<end;++i) {
+                float r=rgba[i*4],g=rgba[i*4+1],b=rgba[i*4+2];
+                linear_to_hlg_rgb(r,g,b,cg);
+                encoded[i*4]=uint16_t(std::lround(r*65535.f));
+                encoded[i*4+1]=uint16_t(std::lround(g*65535.f));
+                encoded[i*4+2]=uint16_t(std::lround(b*65535.f));
+                const float a=std::isfinite(rgba[i*4+3])?std::clamp(rgba[i*4+3],0.f,1.f):0.f;
+                encoded[i*4+3]=uint16_t(std::lround(a*65535.f));
+            }
+        });
+        return encode_jxl_pixels(w,h,encoded.data(),cg,path,quality,JXL_TYPE_UINT16,JXL_TRANSFER_FUNCTION_HLG,1000.f);
+    }
     if(!hdr&&!pq)return encode_jxl_sdr_f32(w,h,rgba,cg,path,quality);
     float peak=pq?kMaxLinear:1.f;
     float pq_intensity=1.f;

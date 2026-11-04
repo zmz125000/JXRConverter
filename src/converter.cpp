@@ -38,7 +38,8 @@ void range(double value,double low,double high,const char* name) {
     if(!std::isfinite(value)||value<low||value>high) throw std::invalid_argument(std::string(name)+" out of range");
 }
 bool linear_jxl(Target t) {return t==Target::jxl_linear||t==Target::jxl_scrgb;}
-bool hdr_target(Target t) {return t==Target::jpeg_gainmap||linear_jxl(t)||t==Target::avif_pq||t==Target::avif_gainmap||t==Target::jxl_pq;}
+bool hlg_target(Target t) {return t==Target::png_hlg||t==Target::jxl_hlg||t==Target::avif_hlg;}
+bool hdr_target(Target t) {return t==Target::jpeg_gainmap||linear_jxl(t)||t==Target::avif_pq||t==Target::avif_gainmap||t==Target::jxl_pq||t==Target::png_hdr||hlg_target(t);}
 std::vector<uint8_t> read(const std::filesystem::path& path,const std::function<bool()>& cancelled={}) {
     if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
     std::ifstream f(path,std::ios::binary|std::ios::ate);
@@ -158,10 +159,11 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
 }
 }
 void validate(const Options& o) {
-    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,8,"target");
+    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,13,"target");
     range(static_cast<int>(o.quality.preset),0,4,"preset");
     range(o.quality.jxl_distance,0,3,"JXL distance");range(o.quality.codec_quality,1,100,"codec quality");
-    if(o.quality.avif_depth!=10&&o.quality.avif_depth!=12)throw std::invalid_argument("AVIF depth must be 10 or 12");
+    if(o.quality.avif_depth!=8&&o.quality.avif_depth!=10&&o.quality.avif_depth!=12)throw std::invalid_argument("AVIF depth must be 8, 10 or 12");
+    if(o.quality.png_depth!=8&&o.quality.png_depth!=16)throw std::invalid_argument("PNG depth must be 8 or 16");
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
@@ -172,7 +174,7 @@ void validate(const Options& o) {
         const RawControls d;
         if(o.srgb_clamp||o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.auto_exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
             throw std::invalid_argument("Pixel and RAW controls require --mode process");
-        if(o.target==Target::jxl_pq||o.target==Target::avif_pq)
+        if(o.target==Target::jxl_pq||o.target==Target::avif_pq||o.target==Target::png_hdr||hlg_target(o.target))
             throw std::invalid_argument("An explicit transfer conversion requires --mode process; preserve uses the source transfer");
     }
 }
@@ -223,10 +225,11 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     const auto& bytes=cache.bytes;const int format=cache.format;Staging stage(output);
     const auto path=stage.file.u8string();
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
+    q.png_bits=o.quality.png_depth;q.png_auto_bits=o.quality.auto_bit_depth;
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg) && !o.exposure && !o.max_edge && !o.srgb_clamp) {
+    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp) {
         if(format==6) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
             direct_sdr=!regular->hdr();
@@ -244,7 +247,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     bool source_done=false;
     if(direct_sdr || direct_gainmap || direct_jxl || (o.mode==Mode::preserve && format!=4)) {
         require(format==0||format==1||format==3||format==6||format==7,"Source preservation supports JPEG, AVIF, HEIC, JXL and regular raster images; use --mode process for RAW/JXR");
-        int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:2;
+        int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:o.target==Target::png?3:2;
         int rc=0;
         if(o.jpeg_transcoding && format==0) {
             require(is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))!=1,"JPEG coefficient transcoding cannot retain a gain map");
@@ -386,11 +389,18 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             StillSourceColor color;color.bits=32;color.exponent_bits=8;
             color.transfer=8;color.primaries=1;color.intensity_target=80.f;
             rc=encode_jxl_source(w,h,scrgb.data(),true,color,path.c_str(),q);
+        } else if(o.target==Target::png||o.target==Target::png_hdr||o.target==Target::png_hlg) {
+            const int transfer=o.target==Target::png_hlg?18:o.target==Target::png_hdr?16:13;
+            rc=encode_png_f32(w,h,linear.data(),gamut,transfer,q.png_depth(cache.bits),path.c_str(),q);
+        } else if(o.target==Target::jxl_hlg) {
+            rc=encode_jxl_f32(w,h,linear.data(),gamut,true,path.c_str(),q,false,true);
+        } else if(o.target==Target::avif_hlg) {
+            rc=encode_avif_f32(w,h,linear.data(),gamut,3,path.c_str(),q);
         } else rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,raw_sdr.empty()?nullptr:raw_sdr.data());
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
         result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
-        result.transfer=o.target==Target::avif_pq||o.target==Target::jxl_pq?16:0;
-        result.encoding=result.gainmap?"gainmap":result.transfer==16?"pq":(linear_jxl(o.target)||cache.scrgb)?"linear":"sdr";
+        result.transfer=hlg_target(o.target)?18:o.target==Target::avif_pq||o.target==Target::jxl_pq||o.target==Target::png_hdr?16:0;
+        result.encoding=result.gainmap?"gainmap":result.transfer==18?"hlg":result.transfer==16?"pq":(linear_jxl(o.target)||cache.scrgb)?"linear":"sdr";
     }
     require(std::filesystem::file_size(stage.file)>0,"Encoder produced no output");stage.publish(output,o.overwrite);return result;
 }

@@ -567,6 +567,162 @@ static void hdr_png(const fs::path& dir) {
     fails([&]{decode_regular(bad.data(),bad.size());}); // CRC, not just chunk contents.
 }
 
+// Exercise the direct source path separately from the F32 processing boundary.
+static void png_outputs(const fs::path& dir) {
+    for(unsigned depth:{8u,16u})for(unsigned cp:{1u,9u,12u})for(unsigned tc:{13u,16u,18u}) {
+        const auto stem="png-out-"+std::to_string(depth)+"-"+std::to_string(cp)+"-"+std::to_string(tc);
+        const auto input=dir/(stem+".png");
+        write(input,png_chunk(depth==16?raster_png16:raster_png8,"cICP",{uint8_t(cp),uint8_t(tc),0,1}));
+        const auto inputData=bytes(input);const auto source=decode_regular(inputData.data(),inputData.size());
+        for(auto preset:{jxrc::Preset::lossless,jxrc::Preset::low,jxrc::Preset::custom}) {
+            jxrc::Options o;o.target=jxrc::Target::png;o.quality.preset=preset;
+            const auto output=dir/(stem+"-"+std::to_string(int(preset))+".png");
+            const auto result=jxrc::convert(input,output,o);const auto data=bytes(output);
+            const auto copied=decode_regular(data.data(),data.size());
+            check(copied.pixels==source.pixels&&copied.bits==depth,"Direct PNG codes or automatic depth changed with preset");
+            check(copied.primaries==cp&&copied.transfer==tc&&result.transfer==int(tc),"Direct PNG color tags changed");
+            if(tc==13) {
+                o.mode=jxrc::Mode::process;
+                const auto untouched=dir/(stem+"-process-"+std::to_string(int(preset))+".png");jxrc::convert(input,untouched,o);
+                const auto encoded=bytes(untouched);const auto png=decode_regular(encoded.data(),encoded.size());
+                check(png.pixels==source.pixels&&png.primaries==cp,"Untouched Process PNG did not retain source codes/primaries");
+            }
+        }
+        if(tc!=13)continue;
+        for(unsigned output_depth:{8u,16u})for(bool process:{false,true}) {
+            jxrc::Options o;o.target=jxrc::Target::png;o.quality.auto_bit_depth=false;o.quality.png_depth=output_depth;
+            o.mode=process?jxrc::Mode::process:jxrc::Mode::preserve;o.max_edge=process?65535:0;
+            const auto output=dir/(stem+"-depth-"+std::to_string(output_depth)+(process?"-f32.png":"-direct.png"));
+            jxrc::convert(input,output,o);const auto data=bytes(output);const auto converted=decode_regular(data.data(),data.size());
+            check(converted.bits==output_depth,"PNG manual depth ignored");
+            if(process) {
+                std::vector<float> expected,actual;uhdr_color_gamut_t ec,ac;
+                regular_to_linear(source,expected,ec);regular_to_linear(converted,actual,ac);
+                check(ec==ac,"SDR PNG working primaries changed");
+                for(size_t i=0;i<expected.size();++i)check(std::abs(actual[i]-expected[i])<(output_depth==8?.012f:.0001f),"F32 SDR PNG color or alpha changed");
+            } else {
+                const auto& values=depth==16?expected_png16:expected_png8;
+                for(size_t i=0;i<values.size();++i) {
+                    const unsigned full=values[i]*(depth==16?1:257);
+                    uint16_t value=converted.pixels[i];if(output_depth==16)std::memcpy(&value,converted.pixels.data()+i*2,2);
+                    check(value==(output_depth==16?full:(full+128)/257),"Direct PNG sample depth conversion");
+                }
+            }
+        }
+    }
+    // Fixed expected order covers every EXIF transform independently of the writer.
+    const unsigned orders[8][6]={{0,1,2,3,4,5},{2,1,0,5,4,3},{5,4,3,2,1,0},{3,4,5,0,1,2},
+        {0,3,1,4,2,5},{3,0,4,1,5,2},{5,2,4,1,3,0},{2,5,1,4,0,3}};
+    for(unsigned orientation=1;orientation<=8;++orientation)for(bool keep:{false,true}) {
+        std::vector<uint8_t> rotated={'I','I',42,0,8,0,0,0,1,0,0x12,1,3,0,1,0,0,0,uint8_t(orientation),0,0,0,0,0,0,0};
+        const auto oriented=dir/"png-rotated-input.png";write(oriented,png_chunk(raster_png16,"eXIf",rotated));
+        jxrc::Options o;o.target=jxrc::Target::png;o.keep_exif=keep;
+        const auto output=dir/("png-rotated-"+std::to_string(orientation)+(keep?"-exif.png":".png"));const auto result=jxrc::convert(oriented,output,o);
+        const auto data=bytes(output);const auto png=decode_regular(data.data(),data.size());
+        const unsigned w=orientation>=5?2:3,h=orientation>=5?3:2;
+        check(result.width==w&&result.height==h&&png.width==w&&png.height==h&&png.orientation==1,"Direct PNG orientation or dimensions incorrect");
+        if(!keep)check(png.exif.empty(),"PNG retained EXIF when disabled");
+        for(unsigned i=0;i<6;++i)for(unsigned c=0;c<4;++c) {
+            uint16_t value;std::memcpy(&value,png.pixels.data()+(i*4+c)*2,2);
+            check(value==expected_png16[orders[orientation-1][i]*4+c],"Direct PNG orientation changed sample codes");
+        }
+    }
+    // PQ anchors at black, 203, 1000 and 10000 nits, including invalid samples.
+    const float pqPixels[]={0.f,1.f,1000.f/203.f,.25f,10000.f/203.f,-1.f,INFINITY,NAN};
+    const double pqCodes[]={0.,.580688881,.751827096,.25,1.,0.,0.,0.};
+    for(unsigned depth:{8u,16u}) {
+        const auto output=dir/("png-f32-pq-"+std::to_string(depth)+".png");
+        check(encode_png_f32(2,1,pqPixels,UHDR_CG_BT_2100,16,depth,output.string().c_str(),StillEncodeQuality(0))==0,"F32 PQ PNG encode");
+        const auto data=bytes(output);const auto png=decode_regular(data.data(),data.size());
+        check(png.bits==depth&&png.transfer==16&&png.primaries==9,"F32 PQ PNG metadata");
+        for(size_t i=0;i<8;++i){uint16_t value=png.pixels[i];if(depth==16)std::memcpy(&value,png.pixels.data()+i*2,2);check(std::abs(int(value)-int(std::lround(pqCodes[i]*(depth==8?255:65535))))<=1,"F32 PQ PNG reference codes or alpha");}
+    }
+    // Direct exports retain profiles and work across the other source decoders.
+    const auto jpeg=dir/"png-source.jpg";encode(jpeg,0,false);const auto jpg=bytes(jpeg);
+    const auto icc=source_jpeg_icc(jpg.data(),jpg.size());check(!icc.empty(),"JPEG fixture ICC missing");
+    jxrc::Options o;o.target=jxrc::Target::png;
+    const auto direct=dir/"png-jpeg-direct.png";jxrc::convert(jpeg,direct,o);
+    const auto directData=bytes(direct);const auto directPng=decode_regular(directData.data(),directData.size());
+    check(directPng.icc==icc,"Direct JPEG to PNG lost ICC");
+    for(auto target:{jxrc::Target::jxl,jxrc::Target::avif}) {
+        o.target=target;o.quality.preset=jxrc::Preset::lossless;
+        const auto intermediate=dir/(target==jxrc::Target::jxl?"png-source.jxl":"png-source.avif");jxrc::convert(jpeg,intermediate,o);
+        o.target=jxrc::Target::png;const auto output=dir/(target==jxrc::Target::jxl?"png-from-jxl.png":"png-from-avif.png");jxrc::convert(intermediate,output,o);
+        const auto data=bytes(output);const auto png=decode_regular(data.data(),data.size());
+        check(png.icc==icc&&png.pixels==directPng.pixels,"Direct JXL/AVIF to PNG changed source ICC or codes");
+    }
+    const auto heic=dir/"png-source.heic";write(heic,heic_sdr_fixture);jxrc::convert(heic,dir/"png-from-heic.png",o);
+    const auto gain=dir/"png-source-gain.jpg";encode(gain,1);fails([&]{jxrc::convert(gain,dir/"png-lost-gain.png",o);});
+    const auto linear=dir/"png-source-linear.jxl";encode(linear,3);fails([&]{jxrc::convert(linear,dir/"png-clipped-linear.png",o);});
+    o.mode=jxrc::Mode::process;o.max_edge=32;jxrc::convert(linear,dir/"png-rendered-linear.png",o);
+}
+
+static void hlg_outputs(const fs::path& dir) {
+    // Independent BT.2100 forward reference: HLG codes -> scene light ->
+    // 1000-nit display light. Encoders must recover these codes from F32 RGB.
+    const std::vector<double> codes={0,0,0,0, .5,.5,.5,.25, .75,.75,.75,.5, 1,1,1,1, .2,.4,.7,.75, .9,.6,.3,0};
+    for(auto gamut:{UHDR_CG_BT_709,UHDR_CG_DISPLAY_P3,UHDR_CG_BT_2100}) {
+        const unsigned cp=gamut==UHDR_CG_BT_2100?9:gamut==UHDR_CG_DISPLAY_P3?12:1;
+        const double yr=cp==9?.2627:cp==12?.2289746:.2126,yb=cp==9?.0593:cp==12?.0792869:.0722;
+        std::vector<float> linear(codes.size());
+        for(size_t i=0;i<codes.size();i+=4) {
+            double scene[3];
+            for(unsigned c=0;c<3;++c){const double v=codes[i+c];scene[c]=v<=.5?v*v/3.:(std::exp((v-.55991073)/.17883277)+.28466892)/12.;}
+            const double scale=std::pow(yr*scene[0]+(1-yr-yb)*scene[1]+yb*scene[2],.2)*1000./203.;
+            for(unsigned c=0;c<3;++c)linear[i+c]=float(scene[c]*scale);
+            linear[i+3]=float(codes[i+3]);
+        }
+        const auto original=linear;StillEncodeQuality quality(0);
+        const auto stem="hlg-"+std::to_string(cp);
+        const auto pngPath=dir/(stem+".png");check(encode_png_f32(3,2,linear.data(),gamut,18,16,pngPath.string().c_str(),quality)==0,"F32 HLG PNG encode");
+        const auto pngData=bytes(pngPath);const auto png=decode_regular(pngData.data(),pngData.size());
+        check(png.transfer==18&&png.primaries==cp&&png.bits==16,"HLG PNG color tags");
+        for(size_t i=0;i<codes.size();++i){uint16_t v;std::memcpy(&v,png.pixels.data()+i*2,2);check(std::abs(int(v)-int(std::lround(codes[i]*65535)))<=1,"HLG PNG inverse OOTF/OETF or alpha");}
+        std::vector<float> decoded;uhdr_color_gamut_t decodedGamut;regular_to_linear(png,decoded,decodedGamut);
+        for(size_t i=0;i<linear.size();++i)check(std::abs(decoded[i]-linear[i])<.0004f,"HLG PNG F32 round trip brightness");
+        const auto jxlPath=dir/(stem+".jxl");check(encode_jxl_f32(3,2,linear.data(),gamut,true,jxlPath.string().c_str(),quality,false,true)==0,"F32 HLG JXL encode");
+        const auto jxlData=bytes(jxlPath);auto dec=JxlDecoderMake(nullptr);
+        JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING|JXL_DEC_FULL_IMAGE);JxlDecoderSetInput(dec.get(),jxlData.data(),jxlData.size());JxlDecoderCloseInput(dec.get());
+        std::vector<uint16_t> samples(codes.size());const JxlPixelFormat format{4,JXL_TYPE_UINT16,JXL_NATIVE_ENDIAN,0};bool complete=false;
+        for(;;) {
+            const auto status=JxlDecoderProcessInput(dec.get());
+            if(status==JXL_DEC_BASIC_INFO){JxlBasicInfo info{};check(JxlDecoderGetBasicInfo(dec.get(),&info)==JXL_DEC_SUCCESS&&info.intensity_target==1000.f&&info.bits_per_sample==16,"HLG JXL reference intensity/depth");}
+            else if(status==JXL_DEC_COLOR_ENCODING){JxlColorEncoding color{};check(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS&&color.transfer_function==JXL_TRANSFER_FUNCTION_HLG,"HLG JXL transfer");}
+            else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER)check(JxlDecoderSetImageOutBuffer(dec.get(),&format,samples.data(),samples.size()*2)==JXL_DEC_SUCCESS,"HLG JXL decode buffer");
+            else if(status==JXL_DEC_FULL_IMAGE){complete=true;break;}
+            else if(status==JXL_DEC_SUCCESS)break;
+            else check(status!=JXL_DEC_ERROR&&status!=JXL_DEC_NEED_MORE_INPUT,"HLG JXL decode");
+        }
+        check(complete,"HLG JXL incomplete");for(size_t i=0;i<codes.size();++i)check(std::abs(int(samples[i])-int(std::lround(codes[i]*65535)))<=1,"HLG JXL encoded codes changed");
+        if(cp==9) {
+            unsigned w=0,h=0;uhdr_color_gamut_t cg;bool hdr=false;int transfer=0;std::vector<float> decodedJxl;
+            check(decode_jxl_to_linear_f32(jxlData.data(),jxlData.size(),decodedJxl,w,h,&cg,&hdr,&transfer,false,nullptr)==0&&transfer==18,"HLG JXL F32 decode");
+            for(size_t i=0;i<linear.size();++i)check(std::abs(decodedJxl[i]-linear[i])<.001f,"HLG JXL round trip brightness");
+        }
+        for(unsigned depth:{8u,10u,12u}) {
+            StillEncodeQuality avifQuality(4,0,100,depth);
+            const auto path=dir/(stem+"-"+std::to_string(depth)+".avif");
+            check(encode_avif_f32(3,2,linear.data(),gamut,3,path.string().c_str(),avifQuality)==0,"F32 HLG AVIF encode");
+            auto decoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);const auto data=bytes(path);
+            check(avifDecoderSetIOMemory(decoder.get(),data.data(),data.size())==AVIF_RESULT_OK&&avifDecoderParse(decoder.get())==AVIF_RESULT_OK&&avifDecoderNextImage(decoder.get())==AVIF_RESULT_OK,"HLG AVIF decode");
+            const auto* image=decoder->image;check(image->depth==depth&&image->transferCharacteristics==18&&image->colorPrimaries==cp&&!image->icc.size,"HLG AVIF metadata or selected depth");
+            std::vector<uint8_t> packed(codes.size()*(depth==8?1:2));avifRGBImage rgb;avifRGBImageSetDefaults(&rgb,image);rgb.format=AVIF_RGB_FORMAT_RGBA;rgb.depth=depth;rgb.pixels=packed.data();rgb.rowBytes=3*4*(depth==8?1:2);
+            check(avifImageYUVToRGB(image,&rgb)==AVIF_RESULT_OK,"HLG AVIF RGB decode");
+            for(size_t i=0;i<codes.size();++i){uint16_t value=packed[i];if(depth>8)std::memcpy(&value,packed.data()+i*2,2);check(std::abs(int(value)-int(std::lround(codes[i]*((1u<<depth)-1))))<=1,"HLG AVIF inverse OOTF/OETF or alpha");}
+        }
+        check(linear==original,"HLG encoder mutated shared F32 input");
+        // Public conversion targets must reach the F32 path and share its render.
+        const auto source=dir/(stem+"-linear.jxl");check(encode_jxl_f32(3,2,linear.data(),gamut,true,source.string().c_str(),quality,false)==0,"HLG linear source fixture");
+        jxrc::ConversionSession session(source);
+        for(auto target:{jxrc::Target::png_hlg,jxrc::Target::jxl_hlg,jxrc::Target::avif_hlg}) {
+            jxrc::Options options;options.mode=jxrc::Mode::process;options.target=target;options.quality.preset=jxrc::Preset::lossless;options.exposure=-.25f;
+            const auto output=dir/(stem+"-target-"+std::to_string(int(target)));const auto result=session.convert(output,options);const auto info=jxrc::inspect(output);
+            check(result.transfer==18&&result.encoding=="hlg"&&info.hdr&&info.transfer=="HLG","HLG target dispatch or inspection");
+            options.mode=jxrc::Mode::preserve;options.exposure=0;fails([&]{jxrc::validate(options);});
+        }
+    }
+}
+
 static Exiv2::ExifData photographic_fixture() {
     Exiv2::ExifData exif;
     exif["Exif.Image.Make"]="JXRC";exif["Exif.Image.Model"]="Test Camera";
@@ -675,6 +831,7 @@ int main(int argc,char** argv) try {
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--raw-auto-exposure") {raw_auto_exposure(dir);std::cout<<"RAW auto exposure tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}

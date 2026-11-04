@@ -17,6 +17,9 @@ struct StillEncodeQuality {
     size_t exif_size = 0;
     unsigned source_bits = 32; // Maximum output depth follows the source, not the float working buffer.
     bool jxl_half = false;
+    int png_bits = 16;
+    bool png_auto_bits = true;
+    unsigned png_depth(unsigned bits) const { return png_auto_bits ? (bits > 8 ? 16u : 8u) : unsigned(png_bits); }
     int preset;
     float custom_distance;
     int custom_quality;
@@ -28,7 +31,7 @@ struct StillEncodeQuality {
         : preset(p < 0 ? 0 : p > 4 ? 4 : p),
           custom_distance(std::isfinite(distance) ? std::fmin(3.f, std::fmax(0.f, distance)) : .5f),
           custom_quality(quality < 1 ? 1 : quality > 100 ? 100 : quality),
-          custom_avif_depth(avif_depth == 12 ? 12 : 10),
+          custom_avif_depth(avif_depth == 8 || avif_depth == 12 ? avif_depth : 10),
           custom_downsize_gain_map(downsize_gain_map) {}
 
     int jpeg() const {
@@ -182,6 +185,23 @@ inline float linear_to_pq_code(float linear) {
     const double p = std::pow(luminance, 2610.0 / 16384.0);
     return static_cast<float>(std::pow((3424.0 / 4096.0 + (2413.0 / 128.0) * p) /
                                       (1.0 + (2392.0 / 128.0) * p), 2523.0 / 32.0));
+}
+
+// BT.2100 HLG inverse EOTF, with the decoder's 1000-nit reference display
+// and system gamma 1.2. The inverse OOTF depends on RGB luminance, so it must
+// precede the channel OETF. Working RGB is display light at 203 nits per unit.
+inline void linear_to_hlg_rgb(float& r, float& g, float& b, uhdr_color_gamut_t cg) {
+    const auto normalized=[](float v) { return std::isfinite(v) ? std::clamp(double(v)*kSdrWhiteNits/1000.,0.,1.) : 0.; };
+    const double rd=normalized(r),gd=normalized(g),bd=normalized(b);
+    const double yr=cg==UHDR_CG_DISPLAY_P3?.2289746:cg==UHDR_CG_BT_2100?.2627:.2126;
+    const double yb=cg==UHDR_CG_DISPLAY_P3?.0792869:cg==UHDR_CG_BT_2100?.0593:.0722;
+    const double yd=yr*rd+(1.-yr-yb)*gd+yb*bd;
+    const double scale=yd>0.?std::pow(yd,-1./6.):0.;
+    const auto encode=[&](double v) {
+        const double scene=std::clamp(v*scale,0.,1.);
+        return float(scene<=1./12.?std::sqrt(3.*scene):.17883277*std::log(12.*scene-.28466892)+.55991073);
+    };
+    r=encode(rd);g=encode(gd);b=encode(bd);
 }
 
 /** Fixed MaxCLL for known-HDR thumbs (no peak scan). */
@@ -338,9 +358,9 @@ int pack_linear_f16_for_direct(std::vector<uint16_t>& rgba, unsigned w, unsigned
 /** Straight-alpha linear F16 → JXL. PQ uses uint16 codes, linear uses F16. Mutates RGBA. */
 int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality = 1, bool pq = false);
-/** Straight-alpha linear F32 → JXL: SDR stores uint8/uint16; PQ uint16; HDR linear float32 or requested half. */
+/** Straight-alpha linear F32 → JXL: SDR uint8/uint16; PQ/HLG uint16; linear HDR float32 or requested half. */
 int encode_jxl_f32(unsigned w, unsigned h, const float* rgba, uhdr_color_gamut_t cg,
-                   bool hdr, const char* path, StillEncodeQuality quality, bool pq);
+                   bool hdr, const char* path, StillEncodeQuality quality, bool pq, bool hlg = false);
 
 /** Straight-alpha sRGB-curve RGBA8 → 8-bit SDR JXL. */
 int encode_jxl_u8(unsigned w, unsigned h, const uint8_t* rgba, uhdr_color_gamut_t cg,
@@ -369,5 +389,7 @@ struct StillSourceColor {
 };
 int encode_jxl_source(unsigned w, unsigned h, const void* rgba, bool sixteen,
                       const StillSourceColor& color, const char* path, StillEncodeQuality quality);
+int encode_png_source(unsigned,unsigned,const void*,bool,const StillSourceColor&,const char*,StillEncodeQuality);
 
+// F32 AVIF modes: 0 SDR, 1 PQ, 2 gain map, 3 HLG (1000-nit reference display).
 int encode_avif_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,int,const char*,StillEncodeQuality,const float* sdr_base = nullptr);

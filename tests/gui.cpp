@@ -1080,6 +1080,35 @@ private slots:
         }
         appSettings().clear();
     }
+    void pngAndHlgOptions() {
+        appSettings().clear();
+        {
+            MainWindow window;
+            auto* automatic=window.findChild<QCheckBox*>("autoBitDepth");
+            auto* depth=window.findChild<QComboBox*>("pngDepth");
+            auto* preset=window.findChild<QComboBox*>("qualityPreset");
+            QVERIFY(automatic&&depth&&preset);QVERIFY(automatic->isChecked());QVERIFY(!depth->isEnabled());
+            automatic->setChecked(false);depth->setCurrentIndex(0);
+            for(int i=0;i<5;++i){preset->setCurrentIndex(i);QVERIFY(!automatic->isChecked());QVERIFY(depth->isEnabled());QCOMPARE(window.options().quality.png_depth,8);}
+            auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);
+            auto* targets=window.findChild<QListWidget*>("conversionTargets");QVERIFY(targets);
+            for(auto target:{jxrc::Target::png,jxrc::Target::png_hdr,jxrc::Target::png_hlg,jxrc::Target::jxl_hlg,jxrc::Target::avif_hlg}) {
+                for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==int(target)?Qt::Checked:Qt::Unchecked);
+                QCOMPARE(window.options().target,target);QVERIFY(!window.options().quality.auto_bit_depth);QCOMPARE(window.options().quality.png_depth,8);
+                const auto jobs=makeJobs({root("hlg-source.jxl")},root("hlg-output"),window.options());QCOMPARE(jobs.size(),1);
+                if(target==jxrc::Target::png_hlg)QVERIFY(jobs.first().output.endsWith("hlg.png"));
+                if(target==jxrc::Target::jxl_hlg)QVERIFY(jobs.first().output.endsWith("hlg.jxl"));
+                if(target==jxrc::Target::avif_hlg)QVERIFY(jobs.first().output.endsWith("hlg.avif"));
+            }
+        }
+        {
+            MainWindow restored;
+            QVERIFY(!restored.findChild<QCheckBox*>("autoBitDepth")->isChecked());
+            QVERIFY(restored.findChild<QComboBox*>("pngDepth")->isEnabled());
+            QCOMPARE(restored.options().quality.png_depth,8);
+        }
+        appSettings().clear();
+    }
     void controlsSnapshot() {
         MainWindow window;
         auto* keep=window.findChild<QCheckBox*>("convertGamut");QVERIFY(keep);QVERIFY(keep->isChecked());

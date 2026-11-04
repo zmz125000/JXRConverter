@@ -90,7 +90,7 @@ RegularImage decode_png(const uint8_t* data,size_t size) {
             // advertised HDR encoding as ordinary SDR when recovering warnings.
             check(!saw_cicp&&!saw_idat&&n==4,"Invalid PNG CICP chunk");
             const auto cp=p[8],tc=p[9];
-            check((cp==1||cp==9||cp==12)&&(tc==16||tc==18||(cp==1&&tc==13))&&p[10]==0&&p[11]==1,
+            check((cp==1||cp==9||cp==12)&&(tc==16||tc==18||tc==13)&&p[10]==0&&p[11]==1,
                   "Unsupported PNG CICP encoding (requires supported primaries and full-range RGB)");
             saw_cicp=true;
         }
@@ -114,7 +114,7 @@ RegularImage decode_png(const uint8_t* data,size_t size) {
 #ifdef PNG_cICP_SUPPORTED
     png_byte cp=0,tc=0,mc=0,full=0;
     if(png_get_cICP(png,info,&cp,&tc,&mc,&full)) {
-        check((cp==1 || cp==9 || cp==12) && (tc==16 || tc==18 || (cp==1 && tc==13)) && mc==0 && full==1,
+        check((cp==1 || cp==9 || cp==12) && (tc==16 || tc==18 || tc==13) && mc==0 && full==1,
               "Unsupported PNG CICP encoding (requires supported primaries and full-range RGB)");
         image.primaries=cp;image.transfer=tc;cicp=true;
     }
@@ -315,12 +315,12 @@ RegularImage decode_regular(const uint8_t* data,size_t size) {
 jxrc::ImageInfo inspect_regular(const RegularImage& image) {
     jxrc::ImageInfo out;out.width=image.width;out.height=image.height;out.bits=image.bits;out.format=image.format;out.hdr=image.hdr();
     out.transfer=image.hdr()?(image.transfer==16?"PQ":"HLG"):image.icc.empty()?"sRGB":"ICC";
-    out.primaries=image.hdr()?(image.primaries==9?"BT.2020":image.primaries==12?"Display P3":"BT.709"):image.icc.empty()?"BT.709":"ICC";
+    out.primaries=image.icc.empty()?(image.primaries==9?"BT.2020":image.primaries==12?"Display P3":"BT.709"):"ICC";
     if(image.orientation>=5)std::swap(out.width,out.height);
     return out;
 }
 void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,uhdr_color_gamut_t& gamut) {
-    if(image.hdr()) {
+    if(image.hdr() || (image.icc.empty() && image.primaries!=1)) {
         cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
                            image.primaries,image.transfer,pixels,gamut);return;
     }
@@ -333,7 +333,7 @@ void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,u
     gamut=UHDR_CG_BT_2100;
 }
 void regular_to_linear(const RegularImage& image,std::vector<float>& pixels,uhdr_color_gamut_t& gamut) {
-    if(image.hdr()) {
+    if(image.hdr() || (image.icc.empty() && image.primaries!=1)) {
         cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
                            image.primaries,image.transfer,pixels,gamut);return;
     }

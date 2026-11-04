@@ -161,8 +161,11 @@ int jpeg_to_integer(const void* data,size_t size,int target,const char* path,Sti
     }
     color.orientation=orientation(exif.data(),exif.size());
     if(keep_exif){quality.exif=exif.data();quality.exif_size=exif.size();}
-    const int rc=target==0?write_rgb_jpeg(rgb.w,rgb.h,rgb.planes[0],color,path,quality):encode_jxl_source(rgb.w,rgb.h,rgb.planes[0],false,color,path,quality);
+    const int rc=target==0?write_rgb_jpeg(rgb.w,rgb.h,rgb.planes[0],color,path,quality):
+        target==3?encode_png_source(rgb.w,rgb.h,rgb.planes[0],false,color,path,quality):
+        encode_jxl_source(rgb.w,rgb.h,rgb.planes[0],false,color,path,quality);
     info[0]=rgb.w;info[1]=rgb.h;info[2]=0;info[3]=13;info[4]=0;
+    if(target==3&&color.orientation>=5)std::swap(info[0],info[1]);
     return target==0?rc:rc==0?1:rc;
 }
 
@@ -193,7 +196,7 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
             structured=JxlDecoderGetColorAsEncodedProfile(decoder.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS;
             const bool scrgb=structured && info.intensity_target==80.f && color.white_point==JXL_WHITE_POINT_D65 &&
                 color.primaries==JXL_PRIMARIES_SRGB && color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR;
-            if(target!=1 && info.exponent_bits_per_sample && (info.intensity_target>255.f || scrgb) &&
+            if(target!=1 && (info.exponent_bits_per_sample || target==3) && (info.intensity_target>255.f || scrgb) &&
                (!structured || (color.transfer_function!=JXL_TRANSFER_FUNCTION_PQ && color.transfer_function!=JXL_TRANSFER_FUNCTION_HLG))) {
                 unsupported=true;return Image(nullptr,avifImageDestroy);
             }
@@ -257,6 +260,15 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
     // Explicit HDR rendering remains available through the existing HDR targets.
     if(info.exponent_bits_per_sample && t!=16 && t!=18 && info.intensity_target>255.f) {
         unsupported=true;return Image(nullptr,avifImageDestroy);
+    }
+    if(target==3) {
+        StillSourceColor source;source.bits=info.bits_per_sample>8?16:8;
+        source.primaries=p;source.transfer=t;source.icc=icc.data();source.icc_size=icc.size();
+        quality.exif=exif.data();quality.exif_size=exif.size();
+        const int rc=encode_png_source(info.xsize,info.ysize,pixels.data(),info.bits_per_sample>8,source,output,quality);
+        encoded_result=rc==0?1:rc;
+        output_info[0]=info.xsize;output_info[1]=info.ysize;output_info[2]=0;output_info[3]=t;
+        return Image(nullptr,avifImageDestroy);
     }
     if(target==0) {
         StillSourceColor source;source.bits=info.bits_per_sample>8?16:8;
@@ -553,9 +565,10 @@ int write_gainmap_jpeg(avifImage* image,const char* path,StillEncodeQuality qual
     const bool closed=fclose(f)==0;return wrote&&closed?1:-83;
 }
 int write_source(avifImage* image,int target,const char* path,StillEncodeQuality quality,int* info,
-                 const uint8_t* original_map=nullptr,size_t original_map_size=0) {
+                 const uint8_t* original_map=nullptr,size_t original_map_size=0,bool keep_exif=true) {
     if(!image)return -80;
     const bool gain=image->gainMap && image->gainMap->image;
+    if(gain && target==3)return -96;
     info[0]=image->width;info[1]=image->height;info[2]=gain && target!=1;info[3]=image->transferCharacteristics;
     if(gain && target!=1) {
         const auto oldW=image->gainMap->image->width,oldH=image->gainMap->image->height;
@@ -588,7 +601,14 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
     const bool sixteen=image->depth>8;
     std::vector<uint8_t> rgb;
     if(!rgb_pixels(image,sixteen?16:8,rgb))return -91;
-    const int rc=encode_jxl_source(image->width,image->height,rgb.data(),sixteen,color,path,quality);
+    if(target==3) {
+        if(color.orientation>=5)std::swap(info[0],info[1]);
+        if(!keep_exif)quality.exif_size=0;
+        if(color.primaries==0||color.primaries==2)color.primaries=1;
+        if(color.transfer==0||color.transfer==2)color.transfer=13;
+    }
+    const int rc=target==3?encode_png_source(image->width,image->height,rgb.data(),sixteen,color,path,quality):
+        encode_jxl_source(image->width,image->height,rgb.data(),sixteen,color,path,quality);
     return rc==0?1:rc;
 }
 } // namespace
@@ -634,7 +654,7 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         auto parsed=avifDecoderParse(decoder.get());
         if(parsed!=AVIF_RESULT_OK) {decoder->ignoreExif=AVIF_TRUE;parsed=avifDecoderParse(decoder.get());}
         if(parsed!=AVIF_RESULT_OK)return -92;
-        if(target==1 && decoder->image->gainMap)return -96;
+        if((target==1||target==3) && decoder->image->gainMap)return -96;
         if(target==0 && !decoder->image->gainMap &&
            (decoder->image->transferCharacteristics==16 || decoder->image->transferCharacteristics==18))return 0;
         if(avifDecoderNextImage(decoder.get())!=AVIF_RESULT_OK)return -93;
@@ -644,9 +664,9 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         jpeg.reset(uhdr_create_decoder());if(!jpeg)return -80;
         uhdr_compressed_image_t source{const_cast<uint8_t*>(data),size_t(size),size_t(size),UHDR_CG_UNSPECIFIED,UHDR_CT_UNSPECIFIED,UHDR_CR_FULL_RANGE};
         const bool gain=ok(uhdr_dec_set_image(jpeg.get(),&source)) && ok(uhdr_dec_probe(jpeg.get()));
-        if(gain && target==1)return -96;
+        if(gain && (target==1||target==3))return -96;
         const auto* base=gain?uhdr_dec_get_base_image(jpeg.get()):nullptr;
-        if(target==1 || (target==0&&!gain)) {
+        if(target==1 || target==3 || (target==0&&!gain)) {
             int info[5]{};
             const int rc=jpeg_to_integer(base?base->data:data,base?base->data_sz:size,target,path.get(),quality,keep_exif,info);
             std::copy(info,info+5,out_info);return rc;
@@ -673,7 +693,7 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         }
     } else if(kind==7) {
         image=decode_heif_avif(data,size,0,&original_map,&original_map_size);
-        if(target==1&&image->gainMap)return -96;
+        if((target==1||target==3)&&image->gainMap)return -96;
         if(image->exif.size)exif.assign(image->exif.data,image->exif.data+image->exif.size);
     } else if(kind==3) {
         bool unsupported=false;
@@ -696,7 +716,7 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         if(!keep_exif)avifRWDataFree(&source_image->exif);
         quality.exif=nullptr;quality.exif_size=0;
     }
-    int info[5]{};const int result=write_source(source_image,target,path.get(),quality,info,original_map,original_map_size);
+    int info[5]{};const int result=write_source(source_image,target,path.get(),quality,info,original_map,original_map_size,keep_exif);
     std::copy(info,info+5,out_info);return result;
 } catch(const std::exception& error) {std::fprintf(stderr,"Source conversion failed: %s\n",error.what());return -99;}
 catch(...) {return -99;}
@@ -734,6 +754,15 @@ int convert_regular_source(const RegularImage& raster, int target, const char* p
     if(exif.empty())exif=orientation_exif(raster.orientation);
     quality.exif=exif.data();quality.exif_size=exif.size();
     info[0]=raster.width;info[1]=raster.height;info[2]=0;info[3]=raster.transfer;
+    if(target==3) {
+        StillSourceColor color;color.bits=raster.bits;color.orientation=raster.orientation;
+        color.primaries=raster.primaries;color.transfer=raster.transfer;
+        color.icc=raster.icc.data();color.icc_size=raster.icc.size();
+        if(!keep_exif)quality.exif_size=0;
+        if(color.orientation>=5)std::swap(info[0],info[1]);
+        const int rc=encode_png_source(raster.width,raster.height,raster.pixels.data(),raster.bits>8,color,path,quality);
+        return rc==0?1:rc;
+    }
     if(target==1) {
         StillSourceColor color;color.bits=raster.bits;color.orientation=raster.orientation;
         color.primaries=raster.primaries;color.transfer=raster.transfer;

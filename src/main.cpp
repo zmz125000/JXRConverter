@@ -9,18 +9,21 @@ void help() {
     std::cout << "jxrconvert " << jxrc::version() << R"( - LocalViewer image conversion library/CLI
 Usage: jxrconvert INPUT OUTPUT --target TARGET [OPTIONS]
 Inputs: JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and LibRaw formats
-Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, avif-gainmap
+Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, avif-gainmap, png, png-hdr, png-hlg, jxl-hlg, avif-hlg
   --mode preserve|process       Default: preserve; no automatic processing fallback
   --preset lossless|high|medium|low|custom    Default: high
   --quality 1..100              Custom JPEG/AVIF quality (selects custom preset)
   --jxl-distance 0..3           Custom JXL distance (selects custom preset)
-  --avif-depth 10|12            Custom AVIF maximum depth (selects custom preset)
+  --avif-depth 8|10|12          Custom AVIF maximum depth (selects custom preset)
+  --png-depth 8|16              PNG depth (independent of codec quality presets)
+  --no-auto-bit-depth           Use the selected PNG depth rather than source depth
   --downsize-gainmap            Halve gain-map size (selects custom preset)
   --jpeg-transcoding           Lossless JPEG coefficients to SDR JXL (no pixel edits)
   --threads 0..65535            Per-conversion CPU budget; 0 = automatic
   --keep-exif                   Keep source EXIF where supported
   --overwrite                   Replace existing output after successful encoding
-Processing controls:
+Processing controls (PQ/HLG targets require process mode):
+  HLG uses the BT.2100 1000-nit reference display (gamma 1.2).
   --exposure -3..3              Non-RAW linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing
   --srgb-clamp                 Limit output gamut to sRGB/BT.709 (keeps HDR transfer/range)
@@ -64,12 +67,14 @@ int run(int argc,char** argv) {
         if(arg.rfind("--raw-",0)==0&&arg!="--raw-mode")raw_custom=true;
         auto value=[&]()->std::string{if(++i>=argc)throw std::invalid_argument("Missing value for "+arg);return argv[i];};
         using T=jxrc::Target;using P=jxrc::Preset;
-        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-scrgb",T::jxl_scrgb},{"jxl-pq",T::jxl_pq},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap}});target=true;}
+        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-scrgb",T::jxl_scrgb},{"jxl-pq",T::jxl_pq},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap},{"png",T::png},{"png-hdr",T::png_hdr},{"png-pq",T::png_hdr},{"png-hlg",T::png_hlg},{"jxl-hlg",T::jxl_hlg},{"avif-hlg",T::avif_hlg}});target=true;}
         else if(arg=="--mode")o.mode=choice<jxrc::Mode>(value(),{{"preserve",jxrc::Mode::preserve},{"process",jxrc::Mode::process}});
         else if(arg=="--preset"){o.quality.preset=choice<P>(value(),{{"lossless",P::lossless},{"high",P::high},{"medium",P::medium},{"low",P::low},{"custom",P::custom}});preset=true;}
         else if(arg=="--quality"){o.quality.codec_quality=integer(value());custom=true;}
         else if(arg=="--jxl-distance"){o.quality.jxl_distance=number(value());custom=true;}
         else if(arg=="--avif-depth"){o.quality.avif_depth=integer(value());custom=true;}
+        else if(arg=="--png-depth")o.quality.png_depth=integer(value());
+        else if(arg=="--no-auto-bit-depth")o.quality.auto_bit_depth=false;
         else if(arg=="--downsize-gainmap"){o.quality.downsize_gainmap=true;custom=true;}
         else if(arg=="--jpeg-transcoding")o.jpeg_transcoding=true;
         else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}

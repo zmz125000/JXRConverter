@@ -28,6 +28,10 @@ Native inputs include JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPE
 
 Processing uses float32. Source-preserving JXL/AVIF exports retain the transfer and primaries (AVIF quantizes to its selected bit depth). PNG/TIFF retain 16-bit integer samples for preservation; lossless JXL can preserve those codes exactly. AVIF is limited to 12 bits and JPEG remains lossy. See [supported raster layouts](port-status.md) for restrictions.
 
+PNG SDR/source, PQ, and HLG outputs are available. PNG preservation and untouched SDR exports use source integer samples, profiles, and straight alpha; edited exports use float32 until final encoding. PNG depth is configured separately from quality presets; Auto bit depth defaults on and follows source precision. AVIF output depth choices include 8, 10, and 12 bits.
+
+HLG output is available for PNG, JXL, and AVIF in Process pixels mode. The encoders use the inverse BT.2100 display transform at a 1000-nit reference peak (gamma 1.2) before encoding HLG. Out-of-range values are clipped; HLG output does not add highlight detail to SDR inputs.
+
 PQ JXL pixel-processing exports record the measured maximum RGB channel level in nits as `intensity_target` (MaxCLL), bounded to 1–10,000 nits. PQ codes still use the absolute 10,000-nit reference; the metadata does not rescale pixel brightness. Linear JXL retains its own luminance normalization, and direct scRGB JXL retains its 80-nit reference.
 
 GUI input formats follow the converter's current codec support; the GUI does not add the Android-only formats listed in [port status](port-status.md).
