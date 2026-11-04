@@ -1273,6 +1273,41 @@ private slots:
         QCOMPARE(finalStates.value("active"),QString("Cancelled"));QCOMPARE(finalStates.value("pending"),QString("Cancelled"));QCOMPARE(finalStates.value("other"),QString("Done"));
         queue.cancelPendingFor({"active","pending"});QCOMPARE(done.count(),1);
     }
+    void preserveOriginalDate() {
+        appSettings().clear();
+        {
+            MainWindow window;auto* toggle=window.findChild<QCheckBox*>("preserveOriginalDate");
+            QVERIFY(toggle);QVERIFY(!toggle->isChecked());QCOMPARE(toggle->parentWidget()->objectName(),QString("outputDestination"));toggle->setChecked(true);
+        }
+        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("preserveOriginalDate")->isChecked());}
+        const auto directory=root("original-date");QDir().mkpath(directory);
+        const auto photo=makeImage(directory,"photo.jpg",32,24,100);
+        const auto invalid=makeImage(directory,"invalid.jpg",32,24,100,"bad date");
+        const auto plain=directory+"/plain.png";QImage image(16,12,QImage::Format_RGB32);image.fill(Qt::red);QVERIFY(image.save(plain,"PNG"));
+        const auto mtime=QDateTime::fromString("2011:02:03 04:05:06","yyyy:MM:dd HH:mm:ss");
+        const auto capture=QDateTime::fromString("2025:06:12 14:30:00","yyyy:MM:dd HH:mm:ss");
+        for(const auto& path:{photo,invalid,plain}){QFile file(path);QVERIFY(file.open(QIODevice::ReadWrite));QVERIFY(file.setFileTime(mtime,QFileDevice::FileModificationTime));}
+        ConversionQueue queue(nullptr,[](const std::filesystem::path&,const std::filesystem::path& output,const jxrc::Options&){
+            QFile file(QString::fromStdString(output.string()));if(!file.open(QIODevice::WriteOnly)||file.write("output")!=6)throw std::runtime_error("Test output write failed");return jxrc::Result{};
+        });
+        jxrc::Options options;OutputLayout layout;
+        auto off=makeJobs({photo},directory,options,layout);QVERIFY(!off[0].preserve_original_date);
+        QSignalSpy done(&queue,&ConversionQueue::batchFinished);queue.start(off,1,1);QTRY_COMPARE(done.count(),1);
+        QVERIFY(QFileInfo(off[0].output).lastModified().secsTo(QDateTime::currentDateTime())<10);
+        QVERIFY(QFile::remove(off[0].output));
+        layout.preserve_original_date=true;
+        auto jobs=makeJobs({photo,invalid,plain},directory,options,layout);
+        options.target=jxrc::Target::jxl;jobs+=makeJobs({photo},directory,options,layout);
+        layout.preserve_original_date=false; // Jobs retain the captured toggle.
+        queue.start(jobs,2,2);QTRY_COMPARE(done.count(),2);QCOMPARE(done[1][1].toInt(),0);
+        for(const auto& job:jobs)QCOMPARE(QFileInfo(job.output).lastModified().toSecsSinceEpoch(),(job.input==photo?capture:mtime).toSecsSinceEpoch());
+        QCOMPARE(QFileInfo(photo).lastModified().toSecsSinceEpoch(),mtime.toSecsSinceEpoch());
+        const auto untouched=QDateTime::fromString("2018:07:06 05:04:03","yyyy:MM:dd HH:mm:ss");
+        {QFile file(jobs[0].output);QVERIFY(file.open(QIODevice::ReadWrite));QVERIFY(file.setFileTime(untouched,QFileDevice::FileModificationTime));}
+        queue.start({jobs[0]},1,1);QTRY_COMPARE(done.count(),3);QCOMPARE(queue.skipped(),1);
+        QCOMPARE(QFileInfo(jobs[0].output).lastModified().toSecsSinceEpoch(),untouched.toSecsSinceEpoch());
+        appSettings().clear();
+    }
     void outputLayoutAndRawNames() {
         const QString a=makeImage(root("layout/a"),"same.jpg",16,12,100),b=makeImage(root("layout/b"),"same.jpg",16,12,100);
         jxrc::Options options;options.target=jxrc::Target::avif;options.overwrite=true;

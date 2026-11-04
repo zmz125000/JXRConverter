@@ -3,6 +3,8 @@
 #include <QDate>
 #include <QLocale>
 #include <QFileInfo>
+#include <QFile>
+#include <exiv2/exiv2.hpp>
 #include <QSet>
 #include <QThread>
 #include <algorithm>
@@ -17,6 +19,29 @@ std::filesystem::path nativePath(const QString& value) {
 #endif
 }
 QString jobKey(const Job& job) {return QString::number(job.batch)+QChar(0)+job.input+QChar(0)+job.output;}
+QDateTime originalDate(const QString& path) {
+    const auto fallback=QFileInfo(path).lastModified();
+    try {
+        auto image=Exiv2::ImageFactory::open(path.toStdString());
+        if(image) {
+            image->readMetadata();const auto& exif=image->exifData();
+            for(const auto* key:{"Exif.Photo.DateTimeOriginal","Exif.Photo.DateTimeDigitized","Exif.Image.DateTime"}) {
+                const auto found=exif.findKey(Exiv2::ExifKey(key));if(found==exif.end())continue;
+                auto date=QDateTime::fromString(QString::fromStdString(found->toString()).trimmed(),"yyyy:MM:dd HH:mm:ss");
+                if(date.isValid())return date;
+            }
+        }
+    }catch(const std::exception&) {} // Missing/unreadable EXIF uses the source mtime.
+    if(!fallback.isValid())throw std::runtime_error("Cannot read original file date");
+    return fallback;
+}
+void preserveDate(const QString& path,const QDateTime& date) {
+    QFile file(path);
+    if(!file.open(QIODevice::ReadWrite)||!file.setFileTime(date,QFileDevice::FileModificationTime))
+        throw std::runtime_error("Cannot preserve output file date");
+    // Creation time is writable on supporting filesystems (e.g. Windows).
+    file.setFileTime(date,QFileDevice::FileBirthTime);
+}
 void orderJobs(QVector<Job>& jobs) {
     // Keep each source's targets together to bound prepared-pixel memory by
     // worker count. RAW has SDR, HDR, and paired HDR/SDR render families.
@@ -111,7 +136,7 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         const QString output=outputPath();outputs.insert(pathKey(output));
         if(sources.contains(pathKey(output)))throw std::invalid_argument("Output would replace an input file");
         Options snapshot=options;if(layout.rename_conflicts)snapshot.overwrite=false;
-        result.append({input,output,snapshot});
+        result.append({input,output,snapshot,0,layout.preserve_original_date});
     }
     return result;
 }
@@ -121,7 +146,7 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     if(busy())throw std::logic_error("A conversion batch is already running");
     if(jobs.isEmpty())return;
     orderJobs(jobs);
-    sessions_.clear();activeInputs_.clear();activeOutputs_.clear();activeBatches_.clear();batchAliases_.clear();
+    sessions_.clear();originalDates_.clear();activeInputs_.clear();activeOutputs_.clear();activeBatches_.clear();batchAliases_.clear();
     jobs_=std::move(jobs);next_=active_=finished_=succeeded_=failed_=cancelled_=skipped_=0;
     limit_=std::clamp(parallelism,1,std::max(1,cores));pool_.setMaxThreadCount(limit_);
     threadBudget_=std::max(1,cores/limit_);
@@ -214,9 +239,15 @@ void ConversionQueue::pump() {
         }
         emit outputStarted(job.batch,job.input,job.output);
         emit statusChanged(job.input,"Converting",job.output);
-        pool_.start([this,job,session] {
+        std::shared_ptr<QDateTime> original;
+        if(job.preserve_original_date){auto& stored=originalDates_[job.input];if(!stored)stored=std::make_shared<QDateTime>();original=stored;}
+        pool_.start([this,job,session,original] {
             QString error;bool skipped=false;
-            try {const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);skipped=result.skipped;}catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
+            try {
+                if(original&&!original->isValid())*original=originalDate(job.input);
+                const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);skipped=result.skipped;
+                if(original&&!skipped)preserveDate(job.output,*original);
+            }catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
             QMetaObject::invokeMethod(this,[this,job,error,skipped] {
                 --active_;activeInputs_.remove(job.input);activeOutputs_.remove(job.input);activeBatches_.remove(job.input);++finished_;
@@ -242,6 +273,7 @@ void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancel
     // With multiple outputs, a later success must not hide an earlier failure.
     if(left>0){emit statusChanged(job.input,QString("In progress · %1 outputs remaining").arg(left),fileErrors_.value(job.input));return;}
     sessions_.remove(job.input);
+    originalDates_.remove(job.input);
     const auto errors=fileErrors_.value(job.input);
     if(!errors.isEmpty())emit statusChanged(job.input,"Failed",errors);
     else if(fileCancelled_.value(job.input))emit statusChanged(job.input,"Cancelled",QString("%1 output(s) not started").arg(fileCancelled_.value(job.input)));

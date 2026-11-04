@@ -1,6 +1,7 @@
 #pragma once
 #include "jxrc/converter.hpp"
 #include <QObject>
+#include <QDateTime>
 #include <QHash>
 #include <QSet>
 #include <QThreadPool>
@@ -9,7 +10,7 @@
 #include <functional>
 
 namespace jxrc::gui {
-struct Job { QString input, output; Options options; qint64 batch = 0; };
+struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; };
 int coreCount();
 int recommendedWorkers(int cores);
 bool hdrInput(const QString& path);
@@ -23,6 +24,7 @@ struct OutputLayout {
     QString job_subfolder;
     bool source_folder = false;
     bool rename_conflicts = false;
+    bool preserve_original_date = false;
     QSet<QString> raw_inputs; // Catalog-identified RAW, including TIFF sensor containers.
 };
 QString outputFolder(const QString& input, const QString& directory, Target target, const OutputLayout& layout);
@@ -66,6 +68,7 @@ private:
     QHash<QString,qint64> activeBatches_;
     QHash<QString,QSet<qint64>> batchAliases_;
     QHash<QString,std::shared_ptr<ConversionSession>> sessions_;
+    QHash<QString,std::shared_ptr<QDateTime>> originalDates_;
     QHash<QString, int> remaining_, fileCancelled_, fileSkipped_, fileSucceeded_;
     QHash<QString, QString> fileErrors_;
 };

@@ -415,7 +415,7 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
-        convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
 QList<QWidget*> MainWindow::filterControls() const {
@@ -545,6 +545,8 @@ QWidget* MainWindow::buildControls() {
     sourceFolder_->setToolTip("Save beside each source image. Enabled subfolder rules are applied there.");
     renameConflicts_=check("Rename if conflict","renameConflicts");destinationLayout->addWidget(renameConflicts_);
     renameConflicts_->setToolTip("Choose an unused numbered filename instead of replacing existing output files.");
+    preserveOriginalDate_=check("Preserve original date","preserveOriginalDate");destinationLayout->addWidget(preserveOriginalDate_);
+    preserveOriginalDate_->setToolTip("Set output file dates from the source EXIF capture date, falling back to its file modification time.");
     overwrite_=check("Replace existing output files","overwrite");destinationLayout->addWidget(overwrite_);
     connect(sourceFolder_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
     connect(renameConflicts_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
@@ -795,7 +797,7 @@ OutputLayout MainWindow::outputLayout(qint64 batch,bool quick) const {
     layout.parent_subfolders=parentFolders_->isChecked()&&!sourceFolder_->isChecked();layout.date_subfolders=dateFolders_->isChecked();
     layout.format_subfolders=formatFolders_->isChecked();layout.flatten_subfolders=flattenFolders_->isChecked();
     layout.converted_subfolder=convertedFolder_->isChecked();
-    layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();
+    layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();layout.preserve_original_date=preserveOriginalDate_->isChecked();
     return layout;
 }
 void MainWindow::openOutputFolder() {
