@@ -21,7 +21,7 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
   --keep-exif                   Keep source EXIF where supported
   --overwrite                   Replace existing output after successful encoding
 Processing controls:
-  --exposure -3..3              Linear-light exposure in stops
+  --exposure -3..3              Non-RAW linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing
   --srgb-clamp                 Limit output gamut to sRGB/BT.709 (keeps HDR transfer/range)
   --no-convert-gamut           Keep scRGB / BT.709 primaries (conversion defaults on)

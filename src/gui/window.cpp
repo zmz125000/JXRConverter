@@ -461,7 +461,7 @@ QWidget* MainWindow::buildControls() {
     srgbClamp_->setToolTip("Constrain output colors to sRGB/BT.709 primaries. HDR targets keep their transfer and brightness range. Overrides scRGB to BT.2020; untouched scRGB keeps its direct linear JXL path.");
     processingForm->addRow(srgbClamp_);
     connect(srgbClamp_,&QCheckBox::toggled,this,&MainWindow::updateMode);
-    processingForm->addRow("Exposure (EV)",exposure_);processingForm->addRow("Max edge (px)",maxEdge_);processingForm->addRow(bt2020_);layout->addWidget(processing_);
+    exposure_->setToolTip("Adjust non-RAW images after decoding. RAW images bypass this setting; use RAW Exposure before the camera look instead.");processingForm->addRow("Exposure (EV)",exposure_);processingForm->addRow("Max edge (px)",maxEdge_);processingForm->addRow(bt2020_);layout->addWidget(processing_);
     const QList<QWidget*> pixelControls={exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_};
     for(auto* widget:pixelControls)widget->setProperty("pixelDefault",widget->property(settingProperty(widget)));
     auto* resetPixels=new QPushButton("Reset pixel processing");resetPixels->setObjectName("resetPixelProcessing");processingForm->addRow(resetPixels);
@@ -469,7 +469,6 @@ QWidget* MainWindow::buildControls() {
     raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawMode_->setCurrentIndex(1);rawLayout->addRow("HDR mode",rawMode_);
     rawAutoExposure_=check("Auto exposure","rawAutoExposure");
     rawAutoExposure_->setToolTip("Meter the linear RAW image to 18% gray before the camera look and HDR boost. In Custom mode, Exposure (EV) adds compensation. Automatic correction is limited to ±6 EV.");
-    rawLayout->addRow(rawAutoExposure_);
     rawCustom_=new QWidget;auto* rawForm=new QFormLayout(rawCustom_);rawForm->setContentsMargins(0,0,0,0);
     rawExposure_=real(-3,3,0,0.1,"rawExposure");rawExposure_->setToolTip("Exposure before the camera look. With Auto exposure on, this is compensation added to the metered exposure.");wb_=combo({"Camera","Auto","Daylight","Cloudy","Shade","Tungsten","Fluorescent","Flash","Kelvin"},"rawWhiteBalance");kelvin_=spin(2000,12000,5200,"rawKelvin");kelvin_->setSingleStep(100);
     highlight_=real(0,3,0,0.1,"rawHighlightStops");shoulder_=real(0,1,0.5,0.05,"rawShoulder");nits_=spin(1000,10000,1500,"rawTargetNits");nits_->setSingleStep(100);
@@ -477,7 +476,7 @@ QWidget* MainWindow::buildControls() {
     disableRawBoost_=check("Disable HDR boost","rawDisableBoost");
     disableRawBoost_->setToolTip("Custom mode: use HDR shoulder 0 to disable highlight lift and highlight color restoration. Keeps the saved shoulder value, target cap, exposure and tone adjustments.");
     connect(disableRawBoost_,&QCheckBox::toggled,this,&MainWindow::updateMode);
-    rawForm->addRow(disableRawBoost_);rawForm->addRow(cameraLook_);rawForm->addRow(linearHdr_);rawForm->addRow("Exposure (EV)",rawExposure_);rawForm->addRow("White balance",wb_);rawForm->addRow("Temperature (K)",kelvin_);rawForm->addRow("Highlight stops",highlight_);rawForm->addRow("Shadows",shadows_);rawForm->addRow("Midtones",midtones_);rawForm->addRow("Highlights",highlights_);auto* shoulderRow=new QWidget;auto* shoulderLayout=new QHBoxLayout(shoulderRow);shoulderLayout->setContentsMargins(0,0,0,0);
+    rawForm->addRow(disableRawBoost_);rawForm->addRow(linearHdr_);rawForm->addRow("Exposure (EV)",rawExposure_);rawForm->addRow("White balance",wb_);rawForm->addRow("Temperature (K)",kelvin_);rawForm->addRow("Highlight stops",highlight_);rawForm->addRow("Shadows",shadows_);rawForm->addRow("Midtones",midtones_);rawForm->addRow("Highlights",highlights_);auto* shoulderRow=new QWidget;auto* shoulderLayout=new QHBoxLayout(shoulderRow);shoulderLayout->setContentsMargins(0,0,0,0);
     auto* shoulderSlider=new QSlider(Qt::Horizontal);shoulderSlider->setObjectName("rawShoulderSlider");shoulderSlider->setRange(0,100);shoulderSlider->setValue(50);shoulderLayout->addWidget(shoulderSlider,1);shoulderLayout->addWidget(shoulder_);
     connect(shoulderSlider,&QSlider::valueChanged,this,[this](int value){shoulder_->setValue(value/100.0);});connect(shoulder_,&QDoubleSpinBox::valueChanged,this,[shoulderSlider](double value){shoulderSlider->setValue(qRound(value*100));});
     shoulderRow->setToolTip("HDR highlight lift: 0 retains the base render; 1 opens highlights toward source headroom or the boost target. No effect on SDR output.");boostTarget_=new QWidget;boostTarget_->setObjectName("rawBoostTarget");auto* targetLayout=new QHBoxLayout(boostTarget_);targetLayout->setContentsMargins(0,0,0,0);
@@ -485,7 +484,7 @@ QWidget* MainWindow::buildControls() {
     nits_->setSuffix(" nits");targetLayout->addWidget(targetSlider,1);targetLayout->addWidget(nits_);
     connect(targetSlider,&QSlider::valueChanged,nits_,&QSpinBox::setValue);connect(nits_,&QSpinBox::valueChanged,targetSlider,&QSlider::setValue);
     boostTarget_->setToolTip("HDR highlight target for Boost highlights and Custom modes. Shoulder controls how strongly highlights approach this target. Source headroom mode uses the source's headroom instead.");
-    rawLayout->addRow("HDR boost target",boostTarget_);rawLayout->addRow("HDR shoulder",shoulderRow);rawLayout->addRow(rawCustom_);layout->addWidget(raw_);
+    rawLayout->addRow("HDR boost target",boostTarget_);rawLayout->addRow("HDR shoulder",shoulderRow);rawLayout->addRow(rawAutoExposure_);rawLayout->addRow(cameraLook_);rawLayout->addRow(rawCustom_);layout->addWidget(raw_);
     for(auto* widget:raw_->findChildren<QWidget*>())if(qobject_cast<QComboBox*>(widget)||qobject_cast<QAbstractSpinBox*>(widget)||qobject_cast<QCheckBox*>(widget)||qobject_cast<QSlider*>(widget))widget->setProperty("rawDefault",widget->property(settingProperty(widget)));
     auto* resetRaw=new QPushButton("Reset RAW rendering");resetRaw->setObjectName("resetRaw");rawLayout->addRow(resetRaw);
     connect(resetRaw,&QPushButton::clicked,this,[this]{for(auto* widget:raw_->findChildren<QWidget*>())if(widget->property("rawDefault").isValid())widget->setProperty(settingProperty(widget),widget->property("rawDefault"));updateMode();});
@@ -536,7 +535,7 @@ void MainWindow::updateMode() {
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
-    processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
+    processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);cameraLook_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     custom_->setEnabled(preset_->currentIndex()==4);transcode_->setEnabled(!process||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     convertGamut_->setEnabled(!srgbClamp_->isChecked());bt2020_->setEnabled(!srgbClamp_->isChecked());
@@ -898,7 +897,7 @@ void MainWindow::updateAutoThumbnailAspect() {
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
 void MainWindow::updateCounts() {
     QStringList processingNotes;
-    if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("Max Edge %1").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB Clamp");}
+    if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("Max Edge %1").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB Clamp");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));}
     progress_->setFormat(QString("%p% (%v/%m)")+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());

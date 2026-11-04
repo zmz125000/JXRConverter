@@ -47,7 +47,7 @@ it cannot recover clipped sensor data. CLI/library: `--raw-auto-exposure` /
 
 In Custom RAW settings, **Disable HDR boost** forces the effective HDR shoulder to 0 while retaining its saved value. This disables highlight lift and its accompanying color restoration; exposure, tone controls, Highlight stops compression and the target cap still apply. Unchecking restores the saved shoulder, and Reset RAW rendering clears the toggle.
 
-For RAW gain-map exports, adjust the separate Custom RAW exposure instead. **Extended BT.2020 · JXL decoding** converts floating-point linear-sRGB JXL's extended colors into BT.2020 before clipping negative channels, preserving more wide-gamut color. This switch affects JXL decoding, not the output transfer function or other input formats.
+RAW outputs bypass Pixel-processing Exposure (EV); use Custom RAW Exposure instead, before the camera look and HDR boost. This applies to every RAW output target, including gain maps. **Extended BT.2020 · JXL decoding** converts floating-point linear-sRGB JXL's extended colors into BT.2020 before clipping negative channels, preserving more wide-gamut color. This switch affects JXL decoding, not the output transfer function or other input formats.
 
 **sRGB clamp** (Process pixels only, off by default) converts output colors to
 sRGB/BT.709 primaries and clamps negative RGB channels. SDR targets use their
@@ -63,3 +63,5 @@ sRGB clamp to their defaults. It leaves quality and RAW rendering settings alone
 startup. It defaults off; display preferences and conversion settings still load.
 
 **Wheel changes controls** applies to dropdowns, numeric inputs and sliders, including HDR boost target and shoulder. Scrolling over **Jobs** always switches jobs in menu order, independently of this toggle, and opens the Job view without opening the popup. Navigation stops at the first and last job.
+
+The progress bar shows nonzero Pixel-processing exposure after sRGB clamp, for example `(Max Edge 2048, sRGB Clamp, EV +1)`. This EV applies to non-RAW inputs.

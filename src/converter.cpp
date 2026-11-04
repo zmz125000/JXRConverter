@@ -193,7 +193,7 @@ bool convert_gamut(const Options& o) {return o.convert_gamut && !o.srgb_clamp &&
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
-    return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
+    return std::make_tuple(o.mode,format==5?0.f:o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
         format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr,r.auto_exposure);
@@ -337,8 +337,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 linear.swap(oriented);w=dw;h=dh;
             }
             normalize_exif(exif);
-            if(o.exposure) {
-                require(raw_sdr.empty(),"Use --raw-exposure when exporting RAW gain maps");
+            // RAW exposure belongs before its camera look, tone controls and
+            // HDR boost; applying the global EV here would edit the render again.
+            if(format!=5&&o.exposure) {
                 const float multiplier=std::exp2(o.exposure);
                 for(size_t i=0;i<linear.size();++i)if(i%4!=3)linear[i]*=multiplier;
             }

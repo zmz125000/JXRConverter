@@ -29,6 +29,7 @@
 #include <QScrollArea>
 #include <QGroupBox>
 #include <QLayout>
+#include <QFormLayout>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QDateEdit>
@@ -1016,10 +1017,26 @@ private slots:
         QCOMPARE(finished[0][2].toInt(),1);
         QVERIFY(!stop->isVisible());QVERIFY(!cancel->isEnabled());
     }
+    void pixelExposureProgress() {
+        appSettings().clear();
+        {
+            MainWindow window;auto* exposure=window.findChild<QDoubleSpinBox*>("exposure");auto* progress=window.findChild<QProgressBar*>("conversionProgress");QVERIFY(progress);
+            auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);
+            window.findChild<QSpinBox*>("maxEdge")->setValue(2048);window.findChild<QCheckBox*>("srgbClamp")->setChecked(true);
+            exposure->setValue(0);QVERIFY(!progress->format().contains("EV"));
+            exposure->setValue(1);QVERIFY(progress->format().endsWith("(Max Edge 2048, sRGB Clamp, EV +1)"));
+            exposure->setValue(-.3);QVERIFY(progress->format().endsWith("(Max Edge 2048, sRGB Clamp, EV -0.3)"));
+            mode->setCurrentIndex(0);QVERIFY(!progress->format().contains("EV"));
+        }
+        appSettings().clear();
+    }
     void rawAutoExposureControls() {
         appSettings().clear();
         {
             MainWindow window;auto* automatic=window.findChild<QCheckBox*>("rawAutoExposure");QVERIFY(automatic);QVERIFY(!automatic->isChecked());
+            auto* form=qobject_cast<QFormLayout*>(automatic->parentWidget()->layout());QVERIFY(form);
+            int autoRow=-1,lookRow=-1;QFormLayout::ItemRole role;
+            form->getWidgetPosition(automatic,&autoRow,&role);form->getWidgetPosition(window.findChild<QCheckBox*>("rawCameraLook"),&lookRow,&role);QCOMPARE(lookRow,autoRow+1);
             auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);automatic->setChecked(true);
             for(int rawMode:{0,1,2}){window.findChild<QComboBox*>("rawMode")->setCurrentIndex(rawMode);QVERIFY(automatic->isEnabled());QVERIFY(window.options().raw.auto_exposure);}
             window.findChild<QDoubleSpinBox*>("rawExposure")->setValue(.7);QCOMPARE(window.options().raw.exposure,.7f);

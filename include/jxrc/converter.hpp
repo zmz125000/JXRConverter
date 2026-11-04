@@ -38,7 +38,7 @@ struct Options {
     Target target = Target::avif;
     Quality quality;
     RawControls raw;
-    float exposure = 0; // Process-mode linear-light exposure, in stops.
+    float exposure = 0; // Non-RAW process-mode linear-light exposure, in stops. RAW uses raw.exposure.
     unsigned max_edge = 0;
     unsigned threads = 0; // Per-conversion codec budget; 0 uses automatic defaults.
     bool jpeg_transcoding = false; // Eligible SDR JPEG coefficients to JXL, without exposure/resizing.

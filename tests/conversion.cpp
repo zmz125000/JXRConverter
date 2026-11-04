@@ -102,6 +102,14 @@ static void raw_auto_exposure(const fs::path& dir) {
     const auto before=dir/"auto-off.jxl",reused=dir/"auto-reused.jxl",fresh=dir/"auto-fresh.jxl";
     session.convert(before,options);options.raw.auto_exposure=true;session.convert(reused,options);jxrc::convert(source,fresh,options);
     check(bytes(reused)==bytes(fresh)&&bytes(before)!=bytes(fresh),"RAW auto exposure did not invalidate cached pixels");
+    // Global pixel EV must not re-expose any RAW render, including paired gain maps.
+    for(auto target:{jxrc::Target::jpeg,jxrc::Target::jpeg_gainmap,jxrc::Target::jxl,jxrc::Target::jxl_linear,jxrc::Target::jxl_scrgb,jxrc::Target::jxl_pq,jxrc::Target::avif,jxrc::Target::avif_pq,jxrc::Target::avif_gainmap}) {
+        options.target=target;options.exposure=0;
+        const auto baseline=dir/("raw-ev-zero-"+std::to_string(int(target))),ignored=dir/("raw-ev-ignored-"+std::to_string(int(target))),freshEV=dir/("raw-ev-fresh-"+std::to_string(int(target)));
+        session.convert(baseline,options);options.exposure=1;session.convert(ignored,options);jxrc::convert(source,freshEV,options);
+        check(bytes(baseline)==bytes(ignored)&&bytes(baseline)==bytes(freshEV),"RAW output applied global pixel-processing EV");
+    }
+    options.target=jxrc::Target::jxl_linear;options.exposure=0;
     options.mode=jxrc::Mode::preserve;options.raw.linear_hdr=false;options.raw.shoulder=.5f;fails([&]{jxrc::validate(options);});
     const auto black=dir/"auto-black.dng";dng(black,0);controls={};controls.linear_hdr=true;controls.shoulder=0;
     const auto blackOff=decode(bytes(black));controls.auto_exposure=true;const auto blackAuto=decode(bytes(black));
