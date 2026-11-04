@@ -200,9 +200,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     list_->setModel(proxy_);table_->setModel(proxy_);list_->setSelectionModel(selection_);table_->setSelectionModel(selection_);
     table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);for(int column:{Catalog::Captured,Catalog::Created,Catalog::Modified,Catalog::ExifDate})table_->setColumnWidth(column,170);for(int column:{Catalog::Path,Catalog::Error,Catalog::MetadataWarning})table_->setColumnWidth(column,300);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
     views_->addWidget(list_);views_->addWidget(table_);layout->addWidget(views_,1);
-    counts_=new QLabel("Drop files or folders here, or choose Open folder.");counts_->setObjectName("catalogCounts");counts_->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Preferred);
+    counts_=new QLabel("0 visible / 0 files\n0 selected");counts_->setObjectName("catalogCounts");counts_->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Preferred);
     libraryMessageTimer_=new QTimer(this);libraryMessageTimer_->setSingleShot(true);connect(libraryMessageTimer_,&QTimer::timeout,this,[this]{libraryMessage_.clear();updateCounts();});
-    auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addWidget(counts_);actionsLayout->addStretch();
+    auto* libraryActions=new QWidget;libraryActions->setObjectName("libraryActions");auto* actionsLayout=new QHBoxLayout(libraryActions);actionsLayout->setContentsMargins(0,0,0,0);actionsLayout->addWidget(counts_,1);
     statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
     auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
@@ -914,7 +914,7 @@ void MainWindow::updateCounts() {
     progress_->setFormat(QString("%p% (%v/%m)")+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
-    counts_->setText(QString("%1 visible / %2 files · %3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
+    counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
     progressStop_->setVisible(queue_->busy());
