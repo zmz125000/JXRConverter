@@ -107,14 +107,13 @@ protected:
 };
 class HeightMatchedButton : public QPushButton {
     QWidget* reference_;
-    bool square_;
     void matchHeight() {
         const int height=reference_->isVisible()?reference_->height():reference_->sizeHint().height();
-        if(square_)setFixedSize(height,height);else setFixedHeight(height);
+        setFixedHeight(height);
     }
 public:
-    HeightMatchedButton(const QString& text,QWidget* reference,bool square=false)
-        :QPushButton(text),reference_(reference),square_(square) {
+    HeightMatchedButton(const QString& text,QWidget* reference)
+        :QPushButton(text),reference_(reference) {
         reference_->ensurePolished();reference_->installEventFilter(this);matchHeight();
     }
 protected:
@@ -267,7 +266,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,10);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1,Qt::AlignBottom);
-    progressStop_=new HeightMatchedButton("■",progress_,true);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->hide();
+    progressStop_=new QPushButton("×");progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
@@ -452,10 +451,15 @@ QWidget* MainWindow::buildControls() {
     auto* outputFormats=new QGroupBox("Output formats · select one or more");outputFormats->setObjectName("outputFormats");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new QListWidget;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setMinimumHeight(155);targets_->setMaximumHeight(210);
     const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG"};
-    for(int i=0;i<targetNames.size();++i){auto* item=new QListWidgetItem(targetNames[i],targets_);item->setData(Qt::UserRole,i);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(i==4?Qt::Checked:Qt::Unchecked);}
-    for(int i=11;i<targetNames.size();++i)targets_->item(i)->setToolTip("HLG uses a 1000-nit reference display. Values outside its representable range are clipped.");
-    targets_->insertItem(4,targets_->takeItem(7));
-    targets_->insertItem(4,targets_->takeItem(8));
+    const QList<Target> targetOrder={Target::jpeg,Target::jpeg_gainmap,
+        Target::png,Target::png_hdr,Target::png_hlg,
+        Target::jxl,Target::jxl_linear,Target::jxl_scrgb,Target::jxl_pq,Target::jxl_hlg,
+        Target::avif,Target::avif_pq,Target::avif_hlg,Target::avif_gainmap};
+    for(const auto target:targetOrder) {
+        const int id=int(target);auto* item=new QListWidgetItem(targetNames[id],targets_);
+        item->setData(Qt::UserRole,id);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(target==Target::avif?Qt::Checked:Qt::Unchecked);
+        if(target==Target::png_hlg||target==Target::jxl_hlg||target==Target::avif_hlg)item->setToolTip("HLG uses a 1000-nit reference display. Values outside its representable range are clipped.");
+    }
     targets_->viewport()->installEventFilter(this);
     outputFormatsLayout->addWidget(targets_);
     auto* targetActions=new QHBoxLayout;

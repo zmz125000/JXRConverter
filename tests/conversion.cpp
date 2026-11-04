@@ -637,6 +637,32 @@ static void png_outputs(const fs::path& dir) {
         check(png.bits==depth&&png.transfer==16&&png.primaries==9,"F32 PQ PNG metadata");
         for(size_t i=0;i<8;++i){uint16_t value=png.pixels[i];if(depth==16)std::memcpy(&value,png.pixels.data()+i*2,2);check(std::abs(int(value)-int(std::lround(pqCodes[i]*(depth==8?255:65535))))<=1,"F32 PQ PNG reference codes or alpha");}
     }
+    // The cICP-aware path and ICC-only readers must see the same SDR primaries.
+    // Compare the fallback profile with AVIF's actual SDR output profile.
+    const float sdrPixels[]={.1f,.4f,.9f,.25f,.8f,.3f,.2f,1.f};
+    const auto profiledPng=dir/"png-bt2020-icc.png",profiledAvif=dir/"png-reference-profile.avif";
+    check(encode_png_f32(2,1,sdrPixels,UHDR_CG_BT_2100,13,16,profiledPng.string().c_str(),StillEncodeQuality(0))==0,"SDR PNG ICC export");
+    check(encode_avif_f32(2,1,sdrPixels,UHDR_CG_BT_2100,0,profiledAvif.string().c_str(),StillEncodeQuality(0))==0,"SDR AVIF ICC reference");
+    auto fallback=bytes(profiledPng);const auto tagged=decode_regular(fallback.data(),fallback.size());bool cicpFound=false,iccFound=false;
+    for(size_t at=8;at+12<=fallback.size();) {
+        const uint32_t n=uint32_t(fallback[at])<<24|uint32_t(fallback[at+1])<<16|uint32_t(fallback[at+2])<<8|fallback[at+3];
+        check(n<=fallback.size()-at-12,"PNG output chunk bounds");
+        if(!std::memcmp(fallback.data()+at+4,"iCCP",4))iccFound=true;
+        if(!std::memcmp(fallback.data()+at+4,"cICP",4)){fallback.erase(fallback.begin()+at,fallback.begin()+at+n+12);cicpFound=true;}else at+=n+12;
+    }
+    const auto iccOnly=decode_regular(fallback.data(),fallback.size());
+    auto referenceDecoder=std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)>(avifDecoderCreate(),avifDecoderDestroy);
+    const auto avifData=bytes(profiledAvif);
+    check(avifDecoderSetIOMemory(referenceDecoder.get(),avifData.data(),avifData.size())==AVIF_RESULT_OK&&avifDecoderParse(referenceDecoder.get())==AVIF_RESULT_OK,"PNG ICC AVIF reference parse");
+    const auto& referenceIcc=referenceDecoder->image->icc;
+    check(cicpFound&&iccFound&&tagged.primaries==9&&tagged.transfer==13,"SDR PNG lost BT.2020 cICP or ICC");
+    check(!iccOnly.icc.empty()&&iccOnly.icc.size()==referenceIcc.size&&!std::memcmp(iccOnly.icc.data(),referenceIcc.data,referenceIcc.size),"SDR PNG ICC differs from AVIF output");
+    check(iccOnly.pixels==tagged.pixels,"PNG ICC fallback changed sample codes");
+    std::vector<float> taggedLinear,iccLinear;uhdr_color_gamut_t taggedCg,iccCg;
+    regular_to_linear(tagged,taggedLinear,taggedCg);regular_to_linear(iccOnly,iccLinear,iccCg);
+    check(taggedCg==iccCg,"PNG ICC fallback primaries differ from cICP");
+    // Allow the ICC's fixed-point matrix/TRC and CMS approximation error.
+    for(size_t i=0;i<taggedLinear.size();++i)check(std::abs(taggedLinear[i]-iccLinear[i])<.0003f,"PNG ICC fallback color or alpha differs from cICP");
     // Direct exports retain profiles and work across the other source decoders.
     const auto jpeg=dir/"png-source.jpg";encode(jpeg,0,false);const auto jpg=bytes(jpeg);
     const auto icc=source_jpeg_icc(jpg.data(),jpg.size());check(!icc.empty(),"JPEG fixture ICC missing");

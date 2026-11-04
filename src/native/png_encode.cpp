@@ -1,5 +1,6 @@
 #include "codec_api.h"
 #include "exif_metadata.h"
+#include "ultrahdr/icc.h"
 #include <png.h>
 #include <algorithm>
 #include <cmath>
@@ -22,7 +23,7 @@ struct PngWriter {
 // Metadata precedes IDAT and 16-bit rows use PNG byte order.
 template<class Row>
 int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
-              const StillSourceColor& color,const char* path,StillEncodeQuality quality,Row fill) {
+              const StillSourceColor& color,const char* path,StillEncodeQuality quality,Row fill,bool matching_cicp=false) {
     if(!w||!h||uint64_t(w)*h>80000000||(depth!=8&&depth!=16)||!path)return -100;
     std::vector<uint8_t> row(size_t(w)*channels*(depth/8));
     PngWriter writer;
@@ -38,12 +39,14 @@ int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
     png_set_IHDR(png,info,w,h,depth,type,PNG_INTERLACE_NONE,PNG_COMPRESSION_TYPE_DEFAULT,PNG_FILTER_TYPE_DEFAULT);
     const bool hdr=color.transfer==16||color.transfer==18;
     if(!hdr&&color.icc_size) {
-        png_set_iCCP(png,info,"Source",PNG_COMPRESSION_TYPE_BASE,color.icc,static_cast<png_uint_32>(color.icc_size));
-    } else {
+        const char* name=matching_cicp?(color.primaries==9?"BT.2020":color.primaries==12?"Display P3":"sRGB"):"Source";
+        png_set_iCCP(png,info,name,PNG_COMPRESSION_TYPE_BASE,color.icc,static_cast<png_uint_32>(color.icc_size));
+    }
+    if(hdr||!color.icc_size||matching_cicp) {
         const bool supported=(color.primaries==1||color.primaries==9||color.primaries==12)&&(hdr||color.transfer==13);
         if(!supported)return -105;
         png_set_cICP(png,info,static_cast<png_byte>(color.primaries),static_cast<png_byte>(color.transfer),0,1);
-        if(color.primaries==1&&color.transfer==13)png_set_sRGB(png,info,PNG_sRGB_INTENT_RELATIVE);
+        if(color.primaries==1&&color.transfer==13&&!color.icc_size)png_set_sRGB(png,info,PNG_sRGB_INTENT_RELATIVE);
     }
     if(quality.exif_size)png_set_eXIf_1(png,info,static_cast<png_uint_32>(quality.exif_size),const_cast<png_bytep>(quality.exif));
     png_write_info(png,info);
@@ -102,6 +105,14 @@ int encode_png_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t ga
     if(!rgba||(transfer!=13&&transfer!=16&&transfer!=18))return -100;
     StillSourceColor color;color.primaries=gamut==UHDR_CG_BT_2100?9:gamut==UHDR_CG_DISPLAY_P3?12:1;
     color.transfer=transfer;
+    // Match AVIF's SDR profile so readers without PNG cICP support still see
+    // the actual output primaries and sRGB curve. HDR keeps its explicit CICP.
+    auto profile=transfer==13?ultrahdr::IccHelper::writeIccProfile(UHDR_CT_SRGB,gamut):nullptr;
+    if(transfer==13) {
+        if(!profile||profile->getLength()<=ultrahdr::kICCIdentifierSize)return -106;
+        color.icc=static_cast<const uint8_t*>(profile->getData())+ultrahdr::kICCIdentifierSize;
+        color.icc_size=profile->getLength()-ultrahdr::kICCIdentifierSize;
+    }
     return write_png(w,h,depth,4,false,color,path,quality,[&](unsigned y,uint8_t* row){
         for(unsigned x=0;x<w;++x) {
             const auto* p=rgba+(size_t(y)*w+x)*4;
@@ -114,5 +125,5 @@ int encode_png_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t ga
                 put_sample(row,size_t(x)*4+c,unsigned(std::lround(v*(depth==8?255.f:65535.f))),depth);
             }
         }
-    });
+    },true);
 }
