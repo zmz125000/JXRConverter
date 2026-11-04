@@ -46,7 +46,7 @@ static void encode(const fs::path& path,int mode,bool hdr=true) {
 }
 template<class F>static void fails(F f) {bool failed=false;try{f();}catch(const std::exception&){failed=true;}check(failed,"Expected rejection");}
 // Uncompressed, single-strip Bayer DNG with explicit sensor calibration.
-static void dng(const fs::path& path) {
+static void dng(const fs::path& path,float scale=1.f) {
     struct Tag {uint16_t id,type;uint32_t count;std::vector<uint8_t> payload;};std::vector<Tag> tags;
     auto u16=[](uint16_t v){return std::vector<uint8_t>{uint8_t(v),uint8_t(v>>8)};};
     auto u32=[](uint32_t v){return std::vector<uint8_t>{uint8_t(v),uint8_t(v>>8),uint8_t(v>>16),uint8_t(v>>24)};};
@@ -73,9 +73,41 @@ static void dng(const fs::path& path) {
     const auto offset=u32(end+extra.size());
     for(size_t i=0;i<tags.size();++i)if(tags[i].id==273)std::copy(offset.begin(),offset.end(),out.begin()+10+i*12+8);
     out.insert(out.end(),extra.begin(),extra.end());
-    for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){auto v=u16(128+(x+y)*100);out.insert(out.end(),v.begin(),v.end());}
+    for(unsigned y=0;y<64;++y)for(unsigned x=0;x<64;++x){auto v=u16(static_cast<uint16_t>(std::lround(std::clamp(64.f+(64.f+(x+y)*100)*scale,0.f,65535.f))));out.insert(out.end(),v.begin(),v.end());}
     write(path,out);
 }
+// Meter linear RAW before rendering, preserving manual compensation and cache isolation.
+static void raw_auto_exposure(const fs::path& dir) {
+    const auto source=dir/"auto-exposure.dng";dng(source);const auto data=bytes(source);
+    jxrc::RawControls controls;controls.hdr_mode=jxrc::RawHdrMode::custom;controls.linear_hdr=true;controls.shoulder=0;
+    unsigned w=0,h=0;int gamut=0;std::vector<float> unused;
+    auto decode=[&](const std::vector<uint8_t>& input){std::vector<float> out;check(decode_raw_f32(input.data(),input.size(),controls,true,0,out,unused,w,h,gamut)==0,"Auto exposure RAW decode");return out;};
+    auto meanLog=[](const std::vector<float>& pixels){std::vector<float> logs;for(size_t i=0;i<pixels.size();i+=4){const float y=.2627f*pixels[i]+.6780f*pixels[i+1]+.0593f*pixels[i+2];if(y>0.f)logs.push_back(std::log2(y));}std::sort(logs.begin(),logs.end());const size_t trim=logs.size()/100;double sum=0;for(size_t i=trim;i<logs.size()-trim;++i)sum+=logs[i];return static_cast<float>(sum/(logs.size()-2*trim));};
+    check(!controls.auto_exposure,"RAW auto exposure must default off");
+    const auto original=decode(data);controls.auto_exposure=true;const auto automatic=decode(data);
+    check(std::abs(std::exp2(meanLog(automatic))-.18f)<.0001f,"RAW auto exposure did not meter scene-linear 18% gray");
+    controls.exposure=1;const auto compensation=decode(data);
+    for(size_t i=0;i<automatic.size();++i)check(std::abs(compensation[i]-automatic[i]*(i%4==3?1.f:2.f))<.0001f,"RAW auto exposure cancelled or doubled manual compensation");
+    controls.exposure=0;const auto dim=dir/"auto-dim.dng";dng(dim,.25f);const auto dimAuto=decode(bytes(dim));
+    check(std::abs(std::exp2(meanLog(dimAuto))-.18f)<.0001f,"RAW auto exposure failed for dim input");
+    // Equivalent manual EV must match when both run before the nonlinear look.
+    const float meteredEV=std::clamp(std::log2(.18f)-meanLog(original),-6.f,6.f);
+    controls.linear_hdr=false;const auto cameraAuto=decode(data);controls.auto_exposure=false;controls.exposure=meteredEV;
+    const auto cameraManual=decode(data);
+    for(size_t i=0;i<cameraAuto.size();++i)check(std::abs(cameraAuto[i]-cameraManual[i])<.0001f,"Auto exposure ran after the camera look");
+    controls={};controls.auto_exposure=true;
+    std::vector<uint8_t> half;check(decode_raw(data.data(),data.size(),controls,true,0,half,w,h,gamut)==0,"RAW auto exposure half path");
+    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.quality.preset=jxrc::Preset::lossless;
+    options.raw.linear_hdr=true;options.raw.shoulder=0;jxrc::ConversionSession session(source);
+    const auto before=dir/"auto-off.jxl",reused=dir/"auto-reused.jxl",fresh=dir/"auto-fresh.jxl";
+    session.convert(before,options);options.raw.auto_exposure=true;session.convert(reused,options);jxrc::convert(source,fresh,options);
+    check(bytes(reused)==bytes(fresh)&&bytes(before)!=bytes(fresh),"RAW auto exposure did not invalidate cached pixels");
+    options.mode=jxrc::Mode::preserve;options.raw.linear_hdr=false;options.raw.shoulder=.5f;fails([&]{jxrc::validate(options);});
+    const auto black=dir/"auto-black.dng";dng(black,0);controls={};controls.linear_hdr=true;controls.shoulder=0;
+    const auto blackOff=decode(bytes(black));controls.auto_exposure=true;const auto blackAuto=decode(bytes(black));
+    check(blackOff==blackAuto,"RAW auto exposure changed an unmeterable black image");
+}
+
 // Preserve raster samples through the public API, including low 16-bit bits and
 // RGB hidden behind zero alpha. A half-float or 8-bit intermediate fails this.
 static void regular_images(const fs::path& dir) {
@@ -616,6 +648,7 @@ int main(int argc,char** argv) try {
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--raw-auto-exposure") {raw_auto_exposure(dir);std::cout<<"RAW auto exposure tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--srgb-clamp") {srgb_clamping(dir);signed_float_jxl(dir);std::cout<<"sRGB clamp tests passed\n";return 0;}
     // BMFF is a container, not an AVIF signature. Canon CR3 must reach LibRaw.
@@ -630,6 +663,7 @@ int main(int argc,char** argv) try {
     shared_render(dir);
     signed_float_jxl(dir);
     pq_jxl_peak(dir);
+    raw_auto_exposure(dir);
     regular_images(dir);jpeg_avif_paths(dir);
     jxrc::validate({});
     { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }

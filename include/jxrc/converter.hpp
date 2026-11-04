@@ -31,6 +31,7 @@ struct RawControls {
     float shadows = 0, midtones = 0, highlights = 0;
     bool camera_look = true;
     bool linear_hdr = false;
+    bool auto_exposure = false; // Meter scene-linear pixels before the camera look; exposure adds compensation.
 };
 struct Options {
     Mode mode = Mode::preserve;

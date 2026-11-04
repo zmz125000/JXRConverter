@@ -170,7 +170,7 @@ void validate(const Options& o) {
     if(o.jpeg_transcoding&&(o.target!=Target::jxl||o.exposure||o.max_edge||o.srgb_clamp))throw std::invalid_argument("JPEG transcoding requires SDR JXL without exposure, resizing or sRGB clamping");
     if(o.mode==Mode::preserve) {
         const RawControls d;
-        if(o.srgb_clamp||o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
+        if(o.srgb_clamp||o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.auto_exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
             throw std::invalid_argument("Pixel and RAW controls require --mode process");
         if(o.target==Target::jxl_pq||o.target==Target::avif_pq)
             throw std::invalid_argument("An explicit transfer conversion requires --mode process; preserve uses the source transfer");
@@ -196,7 +196,7 @@ auto processing_key(const Options& o,int format) {
     return std::make_tuple(o.mode,o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
         format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
-        r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr);
+        r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr,r.auto_exposure);
 }
 }
 ConversionSession::ConversionSession(const std::filesystem::path& input):impl_(new Impl) {impl_->input=input;}

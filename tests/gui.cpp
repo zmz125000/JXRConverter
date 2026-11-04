@@ -1016,6 +1016,21 @@ private slots:
         QCOMPARE(finished[0][2].toInt(),1);
         QVERIFY(!stop->isVisible());QVERIFY(!cancel->isEnabled());
     }
+    void rawAutoExposureControls() {
+        appSettings().clear();
+        {
+            MainWindow window;auto* automatic=window.findChild<QCheckBox*>("rawAutoExposure");QVERIFY(automatic);QVERIFY(!automatic->isChecked());
+            auto* mode=window.findChild<QComboBox*>("conversionMode");mode->setCurrentIndex(1);automatic->setChecked(true);
+            for(int rawMode:{0,1,2}){window.findChild<QComboBox*>("rawMode")->setCurrentIndex(rawMode);QVERIFY(automatic->isEnabled());QVERIFY(window.options().raw.auto_exposure);}
+            window.findChild<QDoubleSpinBox*>("rawExposure")->setValue(.7);QCOMPARE(window.options().raw.exposure,.7f);
+            mode->setCurrentIndex(0);QVERIFY(!automatic->isEnabled());QVERIFY(!window.options().raw.auto_exposure);mode->setCurrentIndex(1);
+        }
+        {
+            MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("rawAutoExposure")->isChecked());
+            restored.findChild<QPushButton*>("resetRaw")->click();QVERIFY(!restored.findChild<QCheckBox*>("rawAutoExposure")->isChecked());QVERIFY(!restored.options().raw.auto_exposure);
+        }
+        appSettings().clear();
+    }
     void controlsSnapshot() {
         MainWindow window;
         auto* keep=window.findChild<QCheckBox*>("convertGamut");QVERIFY(keep);QVERIFY(keep->isChecked());
