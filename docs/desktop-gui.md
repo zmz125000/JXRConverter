@@ -34,6 +34,8 @@ GUI input formats follow the converter's current codec support; the GUI does not
 
 Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV** multiplies linear RGB by 1/8; **+3 EV** multiplies it by 8. Processing still decodes and re-encodes the image at 0 EV, with source-preserving fast paths where eligible. JPEG/AVIF gain-map photos and Apple/ProXDR HEIC photos exported to ordinary JPEG or AVIF keep the SDR base plus gain map when exposure is 0, resizing is disabled and sRGB clamp is off, including in Process pixels mode. Exposure, resizing or sRGB clamping requests use the float32 HDR render path instead. JPEG recompression remains lossy; this is base/map retention, not a promise of identical compressed bytes.
 
+In Custom RAW settings, **Disable HDR boost** forces the effective HDR shoulder to 0 while retaining its saved value. This disables highlight lift and its accompanying color restoration; exposure, tone controls, Highlight stops compression and the target cap still apply. Unchecking restores the saved shoulder, and Reset RAW rendering clears the toggle.
+
 For RAW gain-map exports, adjust the separate Custom RAW exposure instead. **Extended BT.2020 · JXL decoding** converts floating-point linear-sRGB JXL's extended colors into BT.2020 before clipping negative channels, preserving more wide-gamut color. This switch affects JXL decoding, not the output transfer function or other input formats.
 
 **sRGB clamp** (Process pixels only, off by default) converts output colors to
