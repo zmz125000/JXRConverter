@@ -151,7 +151,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
     recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
-    wheelChanges_->setToolTip("Allow the mouse wheel to change dropdowns and numeric inputs. Off lets you scroll past controls without changing conversion settings.");toolbar->addWidget(wheelChanges_);
+    wheelChanges_->setToolTip("Allow the mouse wheel to change dropdowns, numeric inputs and sliders. Off lets you scroll past controls without changing settings. The Jobs button always allows wheel navigation.");toolbar->addWidget(wheelChanges_);
     checkUpdates_=check("Check for updates","checkForUpdates",true);checkUpdates_->setToolTip("Check at startup and on every hour. Updates are installed only when you click Update.");toolbar->addWidget(checkUpdates_);
     auto* splitter=new QSplitter;setCentralWidget(splitter);
     auto* browser=new QWidget;auto* layout=new QVBoxLayout(browser);layout->setContentsMargins(16,16,16,10);layout->setSpacing(10);
@@ -208,7 +208,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
     cancelJob_=new QPushButton("Cancel job");cancelJob_->setObjectName("cancelJob");cancelJob_->setToolTip("Cancel this job’s pending outputs; active conversions finish");actionsLayout->addWidget(cancelJob_);cancelJob_->hide();connect(cancelJob_,&QPushButton::clicked,this,[this]{queue_->cancelBatch(viewedJob_);updateCounts();});
     jobButton_=new PopupButton;jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
-    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Show the selected job and choose a job. Counts: finished / all / skipped / failed (images).");
+    jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Show the selected job and choose a job. Scroll over this button to switch jobs. Counts: finished / all / skipped / failed (images).");
     connect(jobMenu_,&QMenu::aboutToShow,this,[this]{showJob(viewedJob_);});
     running_=new QPushButton("Running");running_->setObjectName("runningJob");actionsLayout->addWidget(running_);connect(running_,&QPushButton::clicked,this,[this]{const auto batch=queue_->runningBatch();if(batch>=0)showJob(batch);});
     tab("Remember",5,"statusRemember")->setToolTip("Images you clicked or individually selected; Select all does not add images");
@@ -364,6 +364,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     }
     for(auto* control:findChildren<QComboBox*>())control->installEventFilter(this);
     for(auto* control:findChildren<QAbstractSpinBox*>())control->installEventFilter(this);
+    for(auto* control:findChildren<QSlider*>())control->installEventFilter(this);
+    jobButton_->installEventFilter(this);
     auto settings=appSettings();restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",200).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
@@ -984,8 +986,22 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
             return true;
         }
     }
+    if(event->type()==QEvent::Wheel&&watched==jobButton_) {
+        auto* wheel=static_cast<QWheelEvent*>(event);
+        if(wheel->phase()==Qt::ScrollBegin)jobWheelSteps_=0;
+        jobWheelSteps_+=wheel->angleDelta().y()?wheel->angleDelta().y()/120.0:wheel->pixelDelta().y()/40.0;
+        const int steps=static_cast<int>(jobWheelSteps_);jobWheelSteps_-=steps;
+        const auto actions=jobMenu_->actions();
+        if(steps&&!actions.isEmpty()) {
+            int current=0;for(int i=0;i<actions.size();++i)if(actions[i]->data().toLongLong()==viewedJob_){current=i;break;}
+            const int next=std::clamp(current-steps,0,int(actions.size())-1);
+            if(next!=current||statusFilter_->checkedId()!=2)showJob(actions[next]->data().toLongLong());
+        }
+        if(wheel->phase()==Qt::ScrollEnd)jobWheelSteps_=0;
+        wheel->accept();return true;
+    }
     if(event->type()==QEvent::Wheel&&!wheelChanges_->isChecked()&&
-       (qobject_cast<QComboBox*>(watched)||qobject_cast<QAbstractSpinBox*>(watched))) {
+       (qobject_cast<QComboBox*>(watched)||qobject_cast<QAbstractSpinBox*>(watched)||qobject_cast<QSlider*>(watched))) {
         event->ignore();return true;
     }
     return QMainWindow::eventFilter(watched,event);

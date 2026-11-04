@@ -50,3 +50,5 @@ when enabled, for example `photo_sdr_srgb.avif`.
 sRGB clamp to their defaults. It leaves quality and RAW rendering settings alone.
 **Load filters** on the top toolbar restores saved searches and image filters at
 startup. It defaults off; display preferences and conversion settings still load.
+
+**Wheel changes controls** applies to dropdowns, numeric inputs and sliders, including HDR boost target and shoulder. Scrolling over **Jobs** always switches jobs in menu order, independently of this toggle, and opens the Job view without opening the popup. Navigation stops at the first and last job.

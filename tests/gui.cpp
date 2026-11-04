@@ -702,6 +702,39 @@ private slots:
         }
         MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("jumpToJobTab")->isChecked());
     }
+    void wheelControlsAndJobNavigation() {
+        appSettings().clear();
+        QJsonArray jobs;for(int i=1;i<=3;++i)jobs.append(QJsonObject{{"number",QString::number(i)},{"files",QJsonArray{}}});
+        QFile history(configDirectory()+"/jobs.json");QVERIFY(history.open(QIODevice::WriteOnly));
+        history.write(QJsonDocument(QJsonObject{{"jobs",jobs},{"viewedJob","2"}}).toJson());history.close();
+        appSettings().setValue("controls/loadPreviousJobs",true);
+        {
+            MainWindow window;window.show();window.findChild<QComboBox*>("rawMode")->setCurrentIndex(2);
+            auto wheel=[](QWidget* control,int delta,int pixels=0){const QPointF local=control->rect().center();QWheelEvent event(local,control->mapToGlobal(local.toPoint()),QPoint(0,pixels),QPoint(0,delta),Qt::NoButton,Qt::NoModifier,Qt::NoScrollPhase,false);QApplication::sendEvent(control,&event);};
+            auto* enabled=window.findChild<QCheckBox*>("wheelChanges");
+            auto* target=window.findChild<QSlider*>("rawTargetNitsSlider");auto* shoulder=window.findChild<QSlider*>("rawShoulderSlider");
+            enabled->setChecked(false);wheel(target,120);wheel(shoulder,120);
+            QCOMPARE(target->value(),1500);QCOMPARE(shoulder->value(),50);
+            enabled->setChecked(true);wheel(target,120);wheel(shoulder,120);
+            QVERIFY(target->value()>1500);QVERIFY(shoulder->value()>50);
+            auto* button=window.findChild<QToolButton*>("statusJob");
+            for(bool allow:{false,true}) {
+                enabled->setChecked(allow);savedJob(window,2)->trigger();window.findChild<QPushButton*>("statusAll")->click();
+                wheel(button,-120);QVERIFY(button->isChecked());QVERIFY(savedJob(window,1)->isChecked());
+                wheel(button,120);QVERIFY(savedJob(window,2)->isChecked());
+                wheel(button,120);QVERIFY(savedJob(window,3)->isChecked());
+                wheel(button,120);QVERIFY(savedJob(window,0)->isChecked());
+                wheel(button,120);QVERIFY(savedJob(window,0)->isChecked());
+                wheel(button,-240);QVERIFY(savedJob(window,2)->isChecked());
+                wheel(button,-60);QVERIFY(savedJob(window,2)->isChecked());
+                wheel(button,-60);QVERIFY(savedJob(window,1)->isChecked());
+                wheel(button,0,20);QVERIFY(savedJob(window,1)->isChecked());
+                wheel(button,0,20);QVERIFY(savedJob(window,2)->isChecked());
+            }
+            QVERIFY(!window.findChild<QMenu*>("jobMenu")->isVisible());
+        }
+        appSettings().clear();QFile::remove(configDirectory()+"/jobs.json");
+    }
     void jobFileListsAndRestore() {
         appSettings().clear();const auto a=makeImage(root("job-history"),"a.jpg",64,48,100),b=makeImage(root("job-history"),"b.jpg",64,48,100),c=makeImage(root("job-history"),"c.jpg",64,48,100);
         {

@@ -129,6 +129,7 @@ private:
     QTimer* jobSaveTimer_;
     QAction* clearJobs_;
     QActionGroup* jobActions_;
+    double jobWheelSteps_=0;
     QMenu* jobMenu_;
     QToolButton *jobButton_, *thumbnailAspect_;
     QTimer* aspectTimer_;
