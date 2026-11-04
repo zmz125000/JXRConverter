@@ -241,6 +241,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* outputPanel=new WidthMatchedWidget(scroll->parentWidget());outputPanel->setObjectName("outputPanel");auto* outputLayout=new QVBoxLayout(outputPanel);outputLayout->setContentsMargins(0,0,0,0);
     auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(14,0,14+scroll->verticalScrollBar()->sizeHint().width(),0);startButtons->setSpacing(6);
     auto* openQueueOutput=new QPushButton;openQueueOutput->setObjectName("openQueueOutputFolder");openQueueOutput->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));openQueueOutput->setToolTip("Open output folder");openQueueOutput->ensurePolished();openQueueOutput->setFixedWidth(openQueueOutput->sizeHint().height());startButtons->addWidget(openQueueOutput);startButtons->addWidget(visible_,1);connect(openQueueOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
+    for(auto* button:{visible_,selected_})button->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,12);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1);
@@ -468,6 +469,7 @@ QWidget* MainWindow::buildControls() {
     connect(resetPixels,&QPushButton::clicked,this,[this,pixelControls]{for(auto* widget:pixelControls){const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),widget->property("pixelDefault"));}updateMode();});
     raw_=new QGroupBox("RAW rendering");auto* rawLayout=new QFormLayout(raw_);rawMode_=combo({"Source headroom","Boost highlights","Custom"},"rawMode");rawMode_->setCurrentIndex(1);rawLayout->addRow("HDR mode",rawMode_);
     rawAutoExposure_=check("Auto exposure","rawAutoExposure");
+    connect(rawAutoExposure_,&QCheckBox::toggled,this,&MainWindow::updateCounts);
     rawAutoExposure_->setToolTip("Meter the linear RAW image to 18% gray before the camera look and HDR boost. In Custom mode, Exposure (EV) adds compensation. Automatic correction is limited to ±6 EV.");
     rawCustom_=new QWidget;auto* rawForm=new QFormLayout(rawCustom_);rawForm->setContentsMargins(0,0,0,0);
     rawExposure_=real(-3,3,0,0.1,"rawExposure");rawExposure_->setToolTip("Exposure before the camera look. With Auto exposure on, this is compensation added to the metered exposure.");wb_=combo({"Camera","Auto","Daylight","Cloudy","Shade","Tungsten","Fluorescent","Flash","Kelvin"},"rawWhiteBalance");kelvin_=spin(2000,12000,5200,"rawKelvin");kelvin_->setSingleStep(100);
@@ -897,7 +899,7 @@ void MainWindow::updateAutoThumbnailAspect() {
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
 void MainWindow::updateCounts() {
     QStringList processingNotes;
-    if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("Max Edge %1").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB Clamp");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));}
+    if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));if(rawAutoExposure_->isChecked())processingNotes.append("AE");}
     progress_->setFormat(QString("%p% (%v/%m)")+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());

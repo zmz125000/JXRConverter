@@ -32,7 +32,11 @@ Settings are stored in `config/settings.ini` and recent-file/folder history in
 Keep the app folder writable; updates preserve this folder.
 These settings are persistent. Rename disables replacement of existing files.
 RAW outputs rendered with Boost highlights or Custom include `_hdr_boost` or
-`_hdr_custom` before the target suffix. RAW thumbnails prefer the camera's
+`_hdr_custom` before the target suffix, plus `_ae` when RAW auto exposure is enabled.
+Output filenames include the quality preset (`lossless`, `high`, `medium`, `low`);
+Custom uses `q70` for JPEG/AVIF or `d1.5` for JXL, reflecting the selected value.
+For example: `photo_hdr_boost_ae_high_linear.jxl`.
+RAW thumbnails prefer the camera's
 embedded JPEG, falling back to a reduced-size demosaic when it is unavailable.
 
 Pixel processing uses float32 through exposure, orientation, resizing and JXL

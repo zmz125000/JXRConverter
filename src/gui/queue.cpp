@@ -68,7 +68,15 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
     validate(options);QVector<Job> result;QSet<QString> outputs;
     const int target=int(options.target);
     const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl"};
-    QString suffix=suffixes[target];
+    QString quality;
+    if(options.quality.preset==Preset::custom) {
+        const bool jxl=options.target==Target::jxl||options.target==Target::jxl_linear||options.target==Target::jxl_pq||options.target==Target::jxl_scrgb;
+        quality=jxl?"d"+QString::number(options.quality.jxl_distance,'g',6):"q"+QString::number(options.quality.codec_quality);
+    } else {
+        const QStringList presets={"lossless","high","medium","low"};
+        quality=presets[int(options.quality.preset)];
+    }
+    QString suffix=quality+"_"+suffixes[target];
     if(options.mode==Mode::process&&options.srgb_clamp)suffix.insert(suffix.lastIndexOf('.'),"_srgb");
     static const QSet<QString> rawExtensions={"dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     auto pathKey=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
@@ -79,6 +87,7 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         if(raw && options.mode==Mode::process) {
             if(options.raw.hdr_mode==RawHdrMode::boost)stem+="_hdr_boost";
             else if(options.raw.hdr_mode==RawHdrMode::custom)stem+="_hdr_custom";
+            if(options.raw.auto_exposure)stem+="_ae";
         }
         const QString folder=outputFolder(input,directory,options.target,layout);
         QString filename=stem+"_"+suffix;int n=2;
