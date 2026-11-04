@@ -111,6 +111,11 @@ For supported formats and conversion paths, see the [conversion matrix](docs/con
 - [Exiv2](https://github.com/Exiv2/exiv2)
 - [Qt](https://www.qt.io/)
 
+## links
+Those links are unrelated to the project.
+- [Pictureflect Photo Viewer](https://pictureflect.com/)
+- [Special K Image Viewer](https://github.com/SpecialKO/SKIV)
+
 ## License
 
 The port retains LocalViewer's GPLv3 license.
