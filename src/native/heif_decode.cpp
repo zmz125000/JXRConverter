@@ -60,6 +60,11 @@ Proxdr proxdr(const uint8_t* data,size_t size){
 RegularImage decode(heif_image_handle* handle,bool map,unsigned edge){
     heif_decoding_options* rawOptions=heif_decoding_options_alloc();check(rawOptions,"Cannot allocate HEIC options");
     std::unique_ptr<heif_decoding_options,decltype(&heif_decoding_options_free)> options(rawOptions,heif_decoding_options_free);options->convert_hdr_to_8bit=0;
+    // Keeping integer precision alone does not retain the source color space:
+    // libheif otherwise targets sRGB and can leave PQ/HLG codes tagged as SDR.
+    // Perform only the source YCbCr-to-RGB conversion here; our shared color
+    // pipeline applies the source transfer and gamut afterward.
+    options->output_image_nclx_profile_passthrough=1;
     heif_image* decoded=nullptr;
     // Decode original integer precision. Apple gain maps use the luma codes,
     // rather than RGB conversion which could apply an unrelated color profile.
@@ -85,10 +90,17 @@ RegularImage decode(heif_image_handle* handle,bool map,unsigned edge){
             const size_t at=(size_t(y)*raster.width+x)*4+c;if(sixteen){const uint16_t code=uint16_t(std::lround(value*65535));std::memcpy(raster.pixels.data()+at*2,&code,2);}else raster.pixels[at]=uint8_t(std::lround(value*255));}
     }
     heif_color_profile_nclx* raw=nullptr;
-    const bool nclx=heif_image_get_nclx_color_profile(decoded,&raw).code==heif_error_Ok&&raw;
+    // Some conversion shortcuts (notably identity/GBR to interleaved RGB),
+    // and scaling, omit profiles on the decoded image. With passthrough enabled
+    // the source handle still describes these unchanged transfer-encoded codes.
+    if(heif_image_get_nclx_color_profile(decoded,&raw).code!=heif_error_Ok||!raw)
+        heif_image_handle_get_nclx_color_profile(handle,&raw);
+    const bool nclx=raw!=nullptr;
     if(nclx){raster.primaries=raw->color_primaries;raster.transfer=raw->transfer_characteristics;heif_nclx_color_profile_free(raw);}
-    const auto iccSize=heif_image_get_raw_color_profile_size(decoded);check(iccSize<=16u*1024*1024,"HEIC ICC exceeds limit");
-    if(iccSize){raster.icc.resize(iccSize);checked(heif_image_get_raw_color_profile(decoded,raster.icc.data()));if(!nclx){raster.primaries=2;raster.transfer=2;}}
+    const bool decodedIcc=heif_image_get_raw_color_profile_size(decoded)!=0;
+    const auto iccSize=decodedIcc?heif_image_get_raw_color_profile_size(decoded):heif_image_handle_get_raw_color_profile_size(handle);
+    check(iccSize<=16u*1024*1024,"HEIC ICC exceeds limit");
+    if(iccSize){raster.icc.resize(iccSize);checked(decodedIcc?heif_image_get_raw_color_profile(decoded,raster.icc.data()):heif_image_handle_get_raw_color_profile(handle,raster.icc.data()));if(!nclx){raster.primaries=2;raster.transfer=2;}}
     return raster;
 }
 }

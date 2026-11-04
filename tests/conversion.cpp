@@ -1092,7 +1092,45 @@ static void exif_retention(const fs::path& dir) {
         check(image->exifData()["Exif.Image.Make"].toString()=="JXRC","Preserved TIFF EXIF lost");
     }
 }
+static void heif_source_color(const fs::path& dir) {
+    // Keep the tiny coded picture, varying only the container's color tags.
+    // Matrix 0 exercises libheif's GBR packing shortcut, which can omit NCLX
+    // on the returned RGB image; matrix 6 exercises ordinary YCbCr conversion.
+    const uint8_t signature[]={'n','c','l','x'};
+    const auto found=std::search(heic_sdr_fixture.begin(),heic_sdr_fixture.end(),signature,signature+4);
+    check(found!=heic_sdr_fixture.end(),"HEIC fixture NCLX missing");
+    const size_t at=size_t(found-heic_sdr_fixture.begin())+4;
+    for(unsigned matrix:{0u,6u}) {
+        auto fixture=heic_sdr_fixture;fixture[at+5]=uint8_t(matrix);
+        const auto original=decode_heif(fixture.data(),fixture.size()).base;
+        for(unsigned cp:{1u,9u,12u})for(unsigned tc:{8u,13u,16u,18u}) {
+            fixture[at+1]=uint8_t(cp);fixture[at+3]=uint8_t(tc);
+            const auto source=decode_heif(fixture.data(),fixture.size()).base;
+            check(source.primaries==cp&&source.transfer==tc,"HEIC decode lost source color tags");
+            check(source.pixels==original.pixels,"HEIC decode changed transfer-encoded source codes");
+            const auto small=decode_heif(fixture.data(),fixture.size(),1).base;
+            check(small.primaries==cp&&small.transfer==tc,"HEIC thumbnail lost source color tags");
+            std::vector<float> actual,expected;unsigned w=0,h=0;uhdr_color_gamut_t gamut,expectedGamut;
+            check(decode_heif_to_linear_f32(fixture.data(),fixture.size(),actual,w,h,&gamut,nullptr)==0,"HEIC linear decode");
+            cicp_rgb_to_linear(original.pixels.data(),size_t(original.width)*original.height,original.bits,cp,tc,expected,expectedGamut);
+            // Ordinary SDR BT.709 can use the ICC pipeline's BT.2020 working
+            // gamut. HDR and wide-gamut source tags must reach the CICP path.
+            if(tc==16||tc==18||cp!=1) {
+                check(gamut==expectedGamut&&actual.size()==expected.size(),"HEIC linear source gamut");
+                for(size_t i=0;i<actual.size();++i)check(std::abs(actual[i]-expected[i])<.0001f,"HEIC source brightness changed");
+            }
+            if(tc==16||tc==18) {
+                const auto input=dir/"color.heic",output=dir/"color.png";write(input,fixture);
+                jxrc::Options options;options.mode=jxrc::Mode::preserve;options.target=jxrc::Target::png;options.overwrite=true;
+                jxrc::convert(input,output,options);
+                const auto encoded=bytes(output);const auto png=decode_regular(encoded.data(),encoded.size());
+                check(png.primaries==cp&&png.transfer==tc&&png.pixels==original.pixels,"HEIC preservation lost HDR color or codes");
+            }
+        }
+    }
+}
 static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
+    heif_source_color(dir);
     const auto sdr=dir/"sdr.heic",apple=dir/"apple.heic",oppo=dir/"oppo.heic";write(sdr,heic_sdr_fixture);write(apple,heic_apple_fixture);
     check(is_heif_input(heic_sdr_fixture.data(),heic_sdr_fixture.size()),"HEIC brand detection");
     auto info=jxrc::inspect(sdr);check(info.width==2&&info.height==2&&!info.hdr&&info.bits==8,"HEIC source inspection");
