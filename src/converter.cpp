@@ -6,6 +6,7 @@
 #include "working_pixels.h"
 #include "input_format.h"
 #include "heif_decode.h"
+#include "gain_map.h"
 #include "regular_decode.h"
 #include "exif_metadata.h"
 #include "hdr_parallel.h"
@@ -111,7 +112,7 @@ std::vector<Code> reduce_preview(const Code* source,unsigned& w,unsigned& h,size
     w=nw;h=nh;return result;
 }
 template<class Sample>
-void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,unsigned& w,unsigned& h,uhdr_color_gamut_t& gamut,bool& hdr,unsigned thumbnail_edge=0) {
+void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,unsigned& w,unsigned& h,uhdr_color_gamut_t& gamut,bool& hdr,unsigned thumbnail_edge=0,std::vector<float>* sdr=nullptr) {
     using Decoder=std::unique_ptr<uhdr_codec_private_t,void(*)(uhdr_codec_private_t*)>;
     Decoder dec(uhdr_create_decoder(),uhdr_release_decoder);
     require(bool(dec),"Cannot allocate JPEG decoder");
@@ -122,6 +123,13 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
         require(status.error_code==UHDR_CODEC_OK,"Ultra HDR output transfer failed");
     if(uhdr_dec_set_image(dec.get(),&compressed).error_code==UHDR_CODEC_OK&&uhdr_dec_probe(dec.get()).error_code==UHDR_CODEC_OK) {
         require(uhdr_dec_get_image_width(dec.get())>0&&uhdr_dec_get_image_height(dec.get())>0&&uint64_t(uhdr_dec_get_image_width(dec.get()))*uhdr_dec_get_image_height(dec.get())<=80000000,"JPEG dimensions exceed limit");
+        if constexpr(std::is_same_v<Sample,float>) {
+            auto source=decode_jpeg_gain_map(bytes.data(),bytes.size());
+            require(bool(source)&&reconstruct_gain_map_f32(source.get(),pixels,gamut,sdr),"JPEG gain-map F32 reconstruction failed");
+            w=source->width;h=source->height;hdr=true;
+            if(thumbnail_edge)scale_rgba_f32_max_edge(pixels,w,h,thumbnail_edge);
+            return;
+        }
         status=uhdr_decode(dec.get());
         require(status.error_code==UHDR_CODEC_OK,std::string("Ultra HDR decode failed: ")+(status.has_detail?status.detail:"no codec detail"));
         const auto* decoded=uhdr_get_decoded_image(dec.get());require(decoded,"Missing Ultra HDR pixels");
@@ -182,7 +190,7 @@ void validate(const Options& o) {
 struct ConversionSession::Impl {
     std::filesystem::path input;
     std::vector<uint8_t> bytes,exif;
-    std::vector<float> linear,raw_sdr;
+    std::vector<float> linear,sdr_base;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
     bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false;
@@ -284,14 +292,14 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         }
     }
     if(!source_done) {
-        auto& linear=cache.linear;auto& raw_sdr=cache.raw_sdr;auto& exif=cache.exif;
+        auto& linear=cache.linear;auto& sdr_base=cache.sdr_base;auto& exif=cache.exif;
         auto& w=cache.w;auto& h=cache.h;auto& gamut=cache.gamut;
         if(!cache.ready || processing_key(cache.previous,format)!=processing_key(o,format)) {
-            cache.ready=false;cache.scrgb=false;linear.clear();raw_sdr.clear();exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
+            cache.ready=false;cache.scrgb=false;linear.clear();sdr_base.clear();exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
-            if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr);
-            else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr);
-            else if(format==7)rc=decode_heif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.keep_exif?&exif:nullptr);
+            if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,0,&sdr_base);
+            else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr,&sdr_base);
+            else if(format==7)rc=decode_heif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.keep_exif?&exif:nullptr,&sdr_base);
             else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):(o.extended_bt2020&&!o.srgb_clamp)),o.keep_exif?&exif:nullptr);
             else if(format==4) {
                 if((linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve))
@@ -308,7 +316,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             else {
                 int cg=0;const bool previous=paired_sdr;paired_sdr=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
                 struct Reset{bool value;~Reset(){paired_sdr=value;}} reset{previous};
-                rc=decode_raw_f32(bytes.data(),bytes.size(),o.raw,hdr_target(o.target),o.max_edge,linear,raw_sdr,w,h,cg);
+                rc=decode_raw_f32(bytes.data(),bytes.size(),o.raw,hdr_target(o.target),o.max_edge,linear,sdr_base,w,h,cg);
                 gamut=cg==2?UHDR_CG_BT_2100:cg==1?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
             }
             require(rc==0&&w&&h&&uint64_t(w)*h<=80000000&&
@@ -325,7 +333,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             require(orient>=1&&orient<=8,"Unsupported image orientation/crop");
             if(orient!=1) {
                 const unsigned dw=orient>=5?h:w,dh=orient>=5?w:h;
-                std::vector<float> oriented(linear.size());
+                auto orientPixels=[&](std::vector<float>& values) {if(values.empty())return;
+                std::vector<float> oriented(values.size());
                 for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
                     unsigned dx=x,dy=y;
                     switch(orient) {
@@ -337,20 +346,23 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                         case 7:dx=h-1-y;dy=w-1-x;break;
                         case 8:dx=y;dy=w-1-x;break;
                     }
-                    std::copy_n(linear.data()+(size_t(y)*w+x)*4,4,oriented.data()+(size_t(dy)*dw+dx)*4);
+                    std::copy_n(values.data()+(size_t(y)*w+x)*4,4,oriented.data()+(size_t(dy)*dw+dx)*4);
                 }
-                linear.swap(oriented);w=dw;h=dh;
+                values.swap(oriented);};orientPixels(linear);orientPixels(sdr_base);w=dw;h=dh;
             }
             normalize_exif(exif);
             // RAW exposure belongs before its camera look, tone controls and
             // HDR boost; applying the global EV here would edit the render again.
             if(format!=5&&o.exposure) {
                 const float multiplier=std::exp2(o.exposure);
-                for(size_t i=0;i<linear.size();++i)if(i%4!=3)linear[i]*=multiplier;
+                for(auto* values:{&linear,&sdr_base})for(size_t i=0;i<values->size();++i)if(i%4!=3)(*values)[i]*=multiplier;
             }
-            if(format!=5&&o.max_edge)scale_rgba_f32_max_edge(linear,w,h,o.max_edge);
+            if(format!=5&&o.max_edge) {
+                unsigned sw=w,sh=h;if(!sdr_base.empty())scale_rgba_f32_max_edge(sdr_base,sw,sh,o.max_edge);
+                scale_rgba_f32_max_edge(linear,w,h,o.max_edge);
+            }
             if(o.srgb_clamp&&!cache.scrgb) {
-                // Rematrix both HDR and paired RAW SDR pixels before encoding.
+                // Rematrix both HDR and paired SDR pixels before encoding.
                 // Keep HDR headroom above 1; SDR encoders apply their normal
                 // [0,1] range. Untouched scRGB retains its direct signed path.
                 auto clampGamut=[&](std::vector<float>& pixels) {
@@ -361,7 +373,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                         for(unsigned c=0;c<3;++c)if(!std::isfinite(pixels[i+c])||pixels[i+c]<0.f)pixels[i+c]=0.f;
                     }
                 };
-                clampGamut(linear);clampGamut(raw_sdr);gamut=UHDR_CG_BT_709;
+                clampGamut(linear);clampGamut(sdr_base);gamut=UHDR_CG_BT_709;
             }
             cache.analysis.bind(linear.data(),size_t(w)*h,gamut);
             cache.previous=o;cache.ready=true;
@@ -400,7 +412,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             rc=encode_jxl_f32(w,h,linear.data(),gamut,true,path.c_str(),q,false,true);
         } else if(o.target==Target::avif_hlg) {
             rc=encode_avif_f32(w,h,linear.data(),gamut,3,path.c_str(),q);
-        } else rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,raw_sdr.empty()?nullptr:raw_sdr.data());
+        } else rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,sdr_base.empty()?nullptr:sdr_base.data());
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
         result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         result.transfer=hlg_target(o.target)?18:o.target==Target::avif_pq||o.target==Target::jxl_pq||o.target==Target::png_hdr?16:0;

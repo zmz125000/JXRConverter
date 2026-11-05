@@ -1,13 +1,13 @@
 #include "working_pixels.h"
 #include "render_analysis.h"
 #include "heif_decode.h"
+#include "gain_map.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
  * AVIF still decode via libavif → Ultra HDR JPEG (libultrahdr).
  *
- * - ISO 21496-1 gain-map AVIF (`tmap`): common BT.709/sRGB → Display P3 maps use
- *   parallel lookup-based linear output. Other maps use libavif's PQ output
- *   converted back to linear (1.0 = 203 nits); its linear output clamps at 1.
+ * - ISO 21496-1 gain-map AVIF (`tmap`): shared F32 gain reconstruction,
+ *   including ICC profiles, arbitrary source depths and signed gain ranges.
  * - Absolute PQ/HLG AVIF: decode with libavif, linearize in **source primaries**,
  *   encode content-matched Ultra HDR JPEG tagged with matching libultrahdr gamut
  *   (BT.2100 / Display P3 / BT.709). Do not force BT.709 clip when the format can
@@ -155,11 +155,6 @@ uhdr_color_gamut_t map_avif_primaries_to_uhdr_cg(avifColorPrimaries primaries,
     }
 }
 
-static float unsigned_frac(avifUnsignedFraction f) {
-    if (f.d == 0) return 0.f;
-    return static_cast<float>(f.n) / static_cast<float>(f.d);
-}
-
 /** Two reader pages decode at once, so each decode takes half the cores. */
 int avif_decode_threads() {
     unsigned hw = std::thread::hardware_concurrency();
@@ -203,200 +198,21 @@ bool scale_avif_to_max_edge(avifImage* image, unsigned max_edge) {
     return true;
 }
 
-// Own RGB buffers even when conversion fails. The fast path leaves the decoder's
-// YUV planes untouched so unsupported inputs can still use libavif's tone mapper.
-struct ScopedAvifRgb {
-    avifRGBImage rgb{};
-    explicit ScopedAvifRgb(const avifImage* image, int threads) {
-        avifRGBImageSetDefaults(&rgb, image);
-        rgb.format = AVIF_RGB_FORMAT_RGBA;
-        rgb.maxThreads = threads;
-    }
-    ~ScopedAvifRgb() { avifRGBImageFreePixels(&rgb); }
-    bool convert(const avifImage* image) {
-        return avifRGBImageAllocatePixels(&rgb) == AVIF_RESULT_OK &&
-               avifImageYUVToRGB(image, &rgb) == AVIF_RESULT_OK;
-    }
-};
-
-template <typename Work>
-void avif_parallel_rows(unsigned width, unsigned height, int max_threads, Work work) {
-    // Avoid thread startup for thumbnails. Include the calling thread in the budget.
-    const unsigned jobs = static_cast<unsigned>(std::min<size_t>(std::max(1, max_threads),
-        std::min<size_t>(height, std::max<size_t>(1, static_cast<size_t>(width) * height / 65536))));
-    std::vector<std::thread> workers;
-    workers.reserve(jobs - 1);
-    for (unsigned job = 1; job < jobs; ++job) {
-        workers.emplace_back(work, height * job / jobs, height * (job + 1) / jobs);
-    }
-    work(0, height / jobs);
-    for (auto& worker : workers) worker.join();
-}
-
-/**
- * Fast ISO gain-map case used by the iphone18 samples: 10/12-bit sRGB BT.709
- * base, gain math and output in Display P3, full alternate headroom. Keep the
- * same YUV→RGB quantization as libavif, then use exact tables for every possible
- * integer base/gain code. This removes per-pixel pow/exp and the PQ round trip.
- * Other color spaces and ICC profiles use the general path.
- */
+// Reconstruct in F32 for every source gamut/depth, including ICC-tagged bases.
+// Half is a presentation conversion at the boundary, never a working raster.
 template<class Sample>
-bool apply_iso_gain_map_fast(const avifImage* image, std::vector<Sample>& out_rgba,
-                             int threads) {
-    const avifGainMap* gm = image->gainMap;
-    if (!gm || !gm->image || image->icc.size || gm->altICC.size ||
-        image->transferCharacteristics != AVIF_TRANSFER_CHARACTERISTICS_SRGB ||
-        image->colorPrimaries != AVIF_COLOR_PRIMARIES_BT709 ||
-        gm->altColorPrimaries != AVIF_COLOR_PRIMARIES_SMPTE432 || gm->useBaseColorSpace != AVIF_FALSE ||
-        image->depth <= 8 || image->depth > 12 || gm->image->depth <= 8 || gm->image->depth > 12 ||
-        !gm->baseHdrHeadroom.d || !gm->alternateHdrHeadroom.d ||
-        unsigned_frac(gm->alternateHdrHeadroom) <= unsigned_frac(gm->baseHdrHeadroom)) return false;
-
-    for (int c = 0; c < 3; ++c) {
-        if (!gm->gainMapMin[c].d || !gm->gainMapMax[c].d || !gm->gainMapGamma[c].d ||
-            !gm->gainMapGamma[c].n || !gm->baseOffset[c].d || !gm->alternateOffset[c].d ||
-            static_cast<int64_t>(gm->gainMapMax[c].n) * gm->gainMapMin[c].d <
-                static_cast<int64_t>(gm->gainMapMin[c].n) * gm->gainMapMax[c].d) return false;
+bool apply_iso_gain_map(const avifImage* image,std::vector<Sample>& out,int* has_gain,
+                        int* transfer,uhdr_color_gamut_t* gamut,std::vector<float>* sdr=nullptr,const std::vector<float>* gainCodes=nullptr) {
+    std::vector<float> scratch;
+    auto& pixels=[&]() -> std::vector<float>& {if constexpr(std::is_same_v<Sample,float>)return out;else return scratch;}();
+    uhdr_color_gamut_t cg;
+    if(!reconstruct_gain_map_f32(image,pixels,cg,sdr,gainCodes))return false;
+    if constexpr(!std::is_same_v<Sample,float>) {
+        out.resize(pixels.size());std::transform(pixels.begin(),pixels.end(),out.begin(),[](float v){return store_working<Sample>(sanitize_working<Sample>(v));});
     }
-
-    // Match libavif's order: resize the YUV gain map before RGB conversion.
-    std::unique_ptr<avifImage, decltype(&avifImageDestroy)> scaled(nullptr, avifImageDestroy);
-    const avifImage* gain_image = gm->image;
-    if (gain_image->width != image->width || gain_image->height != image->height) {
-        scaled.reset(avifImageCreateEmpty());
-        if (!scaled) return false;
-        const avifCropRect rect{0, 0, gain_image->width, gain_image->height};
-        avifDiagnostics diag{};
-        if (avifImageSetViewRect(scaled.get(), gain_image, &rect) != AVIF_RESULT_OK ||
-            avifImageScale(scaled.get(), image->width, image->height, &diag) != AVIF_RESULT_OK) return false;
-        gain_image = scaled.get();
-    }
-    ScopedAvifRgb base(image, threads), gain(gain_image, threads);
-    if (!base.convert(image) || !gain.convert(gain_image)) return false;
-
-    const unsigned base_max = (1u << base.rgb.depth) - 1;
-    const unsigned gain_max = (1u << gain.rgb.depth) - 1;
-    std::vector<float> linear(base_max + 1);
-    for (unsigned i = 0; i <= base_max; ++i) {
-        const float v = i / float(base_max);
-        // libavif's continuous sRGB curve (slightly different from rounded IEC constants).
-        linear[i] = v < 12.92f * 0.0030412825601275209f ? v / 12.92f :
-            std::pow((v + 0.0550107189475866f) / 1.0550107189475866f, 2.4f);
-    }
-    std::vector<float> boost[3];
-    float base_offset[3], alt_offset[3];
-    for (int c = 0; c < 3; ++c) {
-        const float lo = float(gm->gainMapMin[c].n) / gm->gainMapMin[c].d;
-        const float hi = float(gm->gainMapMax[c].n) / gm->gainMapMax[c].d;
-        const float gamma_inv = 1.f / unsigned_frac(gm->gainMapGamma[c]);
-        base_offset[c] = float(gm->baseOffset[c].n) / gm->baseOffset[c].d;
-        alt_offset[c] = float(gm->alternateOffset[c].n) / gm->alternateOffset[c].d;
-        boost[c].resize(gain_max + 1);
-        for (unsigned i = 0; i <= gain_max; ++i) {
-            const float v = std::pow(i / float(gain_max), gamma_inv);
-            boost[c][i] = std::exp2((1.f - v) * lo + v * hi);
-        }
-    }
-
-    out_rgba.resize(static_cast<size_t>(image->width) * image->height * 4);
-    avif_parallel_rows(image->width, image->height, threads, [&](unsigned begin, unsigned end) {
-        for (size_t y = begin; y < end; ++y) {
-            const auto* b = reinterpret_cast<const uint16_t*>(base.rgb.pixels + size_t(y) * base.rgb.rowBytes);
-            const auto* g = reinterpret_cast<const uint16_t*>(gain.rgb.pixels + size_t(y) * gain.rgb.rowBytes);
-            auto* dst = out_rgba.data() + size_t(y) * image->width * 4;
-            for (unsigned x = 0; x < image->width; ++x, b += 4, g += 4, dst += 4) {
-                const float r = linear[b[0]], green = linear[b[1]], blue = linear[b[2]];
-                // BT.709 D65 → Display P3 D65, matching libavif's CICP matrix.
-                const float p3[3] = {
-                    0.822461936750f * r + 0.177538063250f * green,
-                    0.033194235636f * r + 0.966805764364f * green,
-                    0.017082632689f * r + 0.072397383873f * green + 0.910519983438f * blue,
-                };
-                for (int c = 0; c < 3; ++c) {
-                    const float v = (p3[c] + base_offset[c]) * boost[c][g[c]] - alt_offset[c];
-                    dst[c] = store_working<Sample>(sanitize_working<Sample>(v));
-                }
-                dst[3] = store_working<Sample>(b[3] / float(base_max));
-            }
-        }
-    });
-    return true;
-}
-
-/**
- * ISO 21496-1 gain map → linear RGBA half.
- * [avifImageApplyGainMap] clamps a linear destination to 0..1, which drops the
- * headroom. PQ output keeps it; [pq_eotf] brings those codes back to 203-nit linear.
- * @return true when [out_rgba] holds the tone-mapped HDR image.
- */
-template<class Sample>
-bool apply_iso_gain_map(const avifImage* image, std::vector<Sample>& out_rgba, int* out_has_gainmap,
-                        int* out_transfer, uhdr_color_gamut_t* out_cg) {
-    if (image->gainMap == nullptr || image->gainMap->image == nullptr) return false;
-    const float headroom = unsigned_frac(image->gainMap->alternateHdrHeadroom);
-    if (!(headroom > 0.05f)) return false;
-
-    avifColorPrimaries primaries = image->gainMap->altColorPrimaries;
-    if (primaries == AVIF_COLOR_PRIMARIES_UNKNOWN || primaries == AVIF_COLOR_PRIMARIES_UNSPECIFIED) {
-        primaries = image->colorPrimaries;
-    }
-    if (primaries == AVIF_COLOR_PRIMARIES_UNKNOWN || primaries == AVIF_COLOR_PRIMARIES_UNSPECIFIED) {
-        primaries = AVIF_COLOR_PRIMARIES_BT2020;
-    }
-
-    if (apply_iso_gain_map_fast(image, out_rgba, avif_decode_threads())) {
-        if (out_cg) *out_cg = UHDR_CG_DISPLAY_P3;
-        if (out_transfer) *out_transfer = 16;
-        if (out_has_gainmap) *out_has_gainmap = 1;
-        ALOGI("ISO gain map fast %ux%u headroom=%.3f", image->width, image->height, headroom);
-        return true;
-    }
-
-    avifRGBImage tone;
-    memset(&tone, 0, sizeof(tone));
-    tone.format = AVIF_RGB_FORMAT_RGBA;
-    tone.depth = 16;
-    tone.isFloat = AVIF_FALSE;
-    avifDiagnostics diag;
-    avifDiagnosticsClearError(&diag);
-    const avifResult applied = avifImageApplyGainMap(
-        image, image->gainMap, headroom, primaries, AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084, &tone,
-        nullptr, &diag);
-    if (applied != AVIF_RESULT_OK || tone.pixels == nullptr || tone.width == 0 || tone.height == 0) {
-        ALOGE("ISO gain map apply failed: %s", diag.error[0] ? diag.error : avifResultToString(applied));
-        avifRGBImageFreePixels(&tone);
-        return false;
-    }
-
-    const unsigned tw = tone.width;
-    const unsigned th = tone.height;
-    const size_t pixels = static_cast<size_t>(tw) * static_cast<size_t>(th);
-    out_rgba.resize(pixels * 4);
-    const uint8_t* row_base = tone.pixels;
-    for (unsigned y = 0; y < th; y++) {
-        const uint16_t* row =
-            reinterpret_cast<const uint16_t*>(row_base + static_cast<size_t>(y) * tone.rowBytes);
-        for (unsigned x = 0; x < tw; x++) {
-            const uint16_t* p = row + x * 4;
-            const float rl = pq_eotf(p[0] / 65535.f) / kSdrWhiteNits;
-            const float gl = pq_eotf(p[1] / 65535.f) / kSdrWhiteNits;
-            const float bl = pq_eotf(p[2] / 65535.f) / kSdrWhiteNits;
-            float an = p[3] / 65535.f;
-            auto clamp_hf = [](float v) { return sanitize_working<Sample>(v); };
-            if (an < 0.f) an = 0.f;
-            if (an > 1.f) an = 1.f;
-            const size_t i = (static_cast<size_t>(y) * tw + x) * 4;
-            out_rgba[i + 0] = store_working<Sample>(clamp_hf(rl));
-            out_rgba[i + 1] = store_working<Sample>(clamp_hf(gl));
-            out_rgba[i + 2] = store_working<Sample>(clamp_hf(bl));
-            out_rgba[i + 3] = store_working<Sample>(an);
-        }
-    }
-    avifRGBImageFreePixels(&tone);
-    if (out_cg) *out_cg = map_avif_primaries_to_uhdr_cg(primaries, true);
-    if (out_transfer) *out_transfer = 16;
-    if (out_has_gainmap) *out_has_gainmap = 1;
-    ALOGI("ISO gain map %ux%u headroom=%.3f primaries=%d", tw, th, headroom, (int)primaries);
+    if(gamut)*gamut=cg;
+    if(transfer)*transfer=16;
+    if(has_gain)*has_gain=1;
     return true;
 }
 
@@ -409,7 +225,7 @@ bool apply_iso_gain_map(const avifImage* image, std::vector<Sample>& out_rgba, i
  */
 template<class Sample>
 int linearize_avif_image(avifImage* image,std::vector<Sample>& out_rgba,unsigned& w,unsigned& h,
-                        int* out_has_gainmap,int* out_transfer,uhdr_color_gamut_t* out_cg,unsigned max_edge) {
+                        int* out_has_gainmap,int* out_transfer,uhdr_color_gamut_t* out_cg,unsigned max_edge,std::vector<float>* sdr=nullptr,const std::vector<float>* gainCodes=nullptr) {
     avifResult r=AVIF_RESULT_OK;
     if (!image || image->width == 0 || image->height == 0) {
         return -6;
@@ -423,13 +239,12 @@ int linearize_avif_image(avifImage* image,std::vector<Sample>& out_rgba,unsigned
     w = image->width;
     h = image->height;
 
-    if (apply_iso_gain_map(image, out_rgba, out_has_gainmap, out_transfer, out_cg)) {
+    if (apply_iso_gain_map(image, out_rgba, out_has_gainmap, out_transfer, out_cg,sdr,gainCodes)) {
         return 0;
     }
     // An advertised HDR rendition must not silently become an SDR base when
-    // reconstruction fails (libavif currently cannot apply ICC-based maps).
-    if (image->gainMap && image->gainMap->image &&
-        unsigned_frac(image->gainMap->alternateHdrHeadroom) > 0.05f) {
+    // reconstruction fails.
+    if (image->gainMap && image->gainMap->image) {
         ALOGE("Cannot reconstruct the AVIF HDR gain map");
         return -12;
     }
@@ -569,7 +384,7 @@ template<class Sample>
 int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
                               unsigned& w, unsigned& h, int* out_has_gainmap,
                               int* out_transfer /* 16=PQ, 18=HLG, else other */,
-                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr) {
+                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr,std::vector<float>* sdr=nullptr) {
     if (out_exif) out_exif->clear();
     if (out_has_gainmap) *out_has_gainmap = 0;
     if (out_transfer) *out_transfer = 0;
@@ -617,7 +432,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
         return -5;
     }
 
-    const int result=linearize_avif_image(dec->image,out_rgba,w,h,out_has_gainmap,out_transfer,out_cg,max_edge);
+    const int result=linearize_avif_image(dec->image,out_rgba,w,h,out_has_gainmap,out_transfer,out_cg,max_edge,sdr);
     avifDecoderDestroy(dec);return result;
 }
 
@@ -630,20 +445,20 @@ int decode_avif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16
 }
 
 int decode_avif_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,
-    int* gain,int* transfer,uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif) {
-    return decode_avif_impl(data,size,rgba,w,h,gain,transfer,gamut,0,exif);
+    int* gain,int* transfer,uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif,std::vector<float>* sdr) {
+    return decode_avif_impl(data,size,rgba,w,h,gain,transfer,gamut,0,exif,sdr);
 }
 
 template<class Sample>
 int decode_heif_linear(const uint8_t* data,size_t size,std::vector<Sample>& rgba,unsigned& w,unsigned& h,
-    uhdr_color_gamut_t* gamut,unsigned edge,std::vector<uint8_t>* exif) {
-    auto image=decode_heif_avif(data,size,edge);
+    uhdr_color_gamut_t* gamut,unsigned edge,std::vector<uint8_t>* exif,std::vector<float>* sdr=nullptr) {
+    std::vector<float> gainCodes;auto image=decode_heif_avif(data,size,edge,nullptr,nullptr,&gainCodes);
     if(exif){exif->clear();if(image->exif.size)exif->assign(image->exif.data,image->exif.data+image->exif.size);}
     int gain=0,transfer=0;
-    return linearize_avif_image(image.get(),rgba,w,h,&gain,&transfer,gamut,edge);
+    return linearize_avif_image(image.get(),rgba,w,h,&gain,&transfer,gamut,edge,sdr,gainCodes.empty()?nullptr:&gainCodes);
 }
-int decode_heif_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif) {
-    return decode_heif_linear(data,size,rgba,w,h,gamut,0,exif);
+int decode_heif_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif,std::vector<float>* sdr) {
+    return decode_heif_linear(data,size,rgba,w,h,gamut,0,exif,sdr);
 }
 int decode_heif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,uhdr_color_gamut_t* gamut,unsigned edge) {
     return decode_heif_linear(data,size,rgba,w,h,gamut,edge,nullptr);

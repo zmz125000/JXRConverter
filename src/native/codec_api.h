@@ -27,7 +27,7 @@ bool complete_avif_color_metadata(avifImage*,const avifRGBImage* = nullptr,bool 
 jxrc::ImageInfo inspect_jxr(const uint8_t*,size_t);
 
 int decode_jxl_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*,bool*,int*,bool,std::vector<uint8_t>*);
-int decode_avif_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,int*,int*,uhdr_color_gamut_t*,std::vector<uint8_t>*);
+int decode_avif_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,int*,int*,uhdr_color_gamut_t*,std::vector<uint8_t>*,std::vector<float>* sdr = nullptr);
 int decode_jxr_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*,bool to_bt2020 = false);
 int decode_raw_f32(const uint8_t*,size_t,const jxrc::RawControls&,bool,unsigned,std::vector<float>&,std::vector<float>&,unsigned&,unsigned&,int&);
 
@@ -40,5 +40,5 @@ bool is_scrgb_jxl(const uint8_t*,size_t);
 
 bool is_integer_jxl(const uint8_t*,size_t);
 
-int decode_heif_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*,std::vector<uint8_t>*);
+int decode_heif_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*,std::vector<uint8_t>*,std::vector<float>* sdr = nullptr);
 int decode_heif_to_linear_f16(const uint8_t*,size_t,std::vector<uint16_t>&,unsigned&,unsigned&,uhdr_color_gamut_t*,unsigned);

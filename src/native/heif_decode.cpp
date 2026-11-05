@@ -147,8 +147,8 @@ HeifSource decode_heif(const uint8_t* data,size_t size,unsigned edge){
         source.max_boost=oppo.boost;source.display_ratio=oppo.display;source.encoded_gain=oppo.jpeg;source.encoded_gain_size=oppo.size;
     }else if(input.gain){
         source.max_boost=source.display_ratio=apple_gainmap_headroom(input.exif);check(source.max_boost>1,"Missing Apple gain-map headroom; refusing to discard the map");
-        auto map=decode(input.gain.get(),true,edge);source.gain.width=map.width;source.gain.height=map.height;source.gain.bits=8;source.gain.pixels.resize(size_t(map.width)*map.height*4);
-        for(size_t i=0;i<size_t(map.width)*map.height;++i){double v;if(map.bits>8){uint16_t code;std::memcpy(&code,map.pixels.data()+i*8,2);v=code/65535.;}else v=map.pixels[i*4]/255.;const double linear=v<.081?v/4.5:std::pow((v+.099)/1.099,1/.45);const auto value=uint8_t(std::lround(255*std::log1p((source.max_boost-1)*linear)/std::log(source.max_boost)));for(unsigned c=0;c<3;++c)source.gain.pixels[i*4+c]=value;source.gain.pixels[i*4+3]=255;}
+        auto map=decode(input.gain.get(),true,edge);source.gain.width=map.width;source.gain.height=map.height;source.gain.bits=8;source.gain.pixels.resize(size_t(map.width)*map.height*4);source.gain_codes.resize(size_t(map.width)*map.height*3);
+        for(size_t i=0;i<size_t(map.width)*map.height;++i){double v;if(map.bits>8){uint16_t code;std::memcpy(&code,map.pixels.data()+i*8,2);v=code/65535.;}else v=map.pixels[i*4]/255.;const double linear=v<.081?v/4.5:std::pow((v+.099)/1.099,1/.45);const float code=float(std::log1p((source.max_boost-1)*linear)/std::log(source.max_boost));const auto value=uint8_t(std::lround(255*code));for(unsigned c=0;c<3;++c){source.gain.pixels[i*4+c]=value;source.gain_codes[i*3+c]=code;}source.gain.pixels[i*4+3]=255;}
     }
     return source;
 }
