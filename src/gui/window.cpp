@@ -275,6 +275,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
     auto* appearance=addToolBar("Appearance");appearance->setObjectName("appearanceToolbar");appearance->setMovable(false);appearance->setFloatable(false);appearance->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
+    auto* appearanceSpacer=new QWidget;appearanceSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);appearance->addWidget(appearanceSpacer);
     auto* theme=combo({"Auto","Light","Dark"},"theme");
     updater_=new Updater(this);auto* updateButton=new HeightMatchedButton("Update",theme);updateButton->setObjectName("updateApplication");appearance->addWidget(updateButton);
     connect(updateButton,&QPushButton::clicked,this,[this]{if(!queue_->busy())updater_->start();});

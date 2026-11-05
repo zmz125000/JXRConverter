@@ -139,13 +139,15 @@ private slots:
         for(int style=0;style<3;++style){theme->setCurrentIndex(style);
             for(const auto& size:{QSize(980,640),QSize(1440,920),QSize(1100,760),QSize(980,640)}){
                 window.resize(size);
-                for(const auto& text:{QString("Update"),QString("Downloading update…"),QString("Update available")}){
+                for(const auto& text:{QString("Update"),QString("Downloading update…"),QString("Update available"),QString("Update")}){
                     updater->statusChanged(text);QTest::qWait(10);
                     QCOMPARE(window.width(),size.width());
                     for(auto* control:{static_cast<QWidget*>(update),static_cast<QWidget*>(theme)}){
                         QVERIFY(control->isVisible());QVERIFY(window.rect().contains(QRect(control->mapTo(&window,QPoint{}),control->size())));
                     }
                     QCOMPARE(update->height(),theme->height());
+                    const int rightGap=window.width()-(theme->mapTo(&window,QPoint{}).x()+theme->width());
+                    QVERIFY2(rightGap<=16,qPrintable(QString("Theme left %1 px of unused space at the right edge").arg(rightGap)));
                 }
             }
         }
