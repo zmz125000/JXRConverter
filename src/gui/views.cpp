@@ -11,9 +11,35 @@
 #include <QPropertyAnimation>
 #include <QAbstractProxyModel>
 #include <QUrl>
+#include <QDesktopServices>
+#include <QDir>
+#include <QFileInfo>
+#include <QProcess>
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+#include <QDBusConnection>
+#include <QDBusMessage>
+#include <QDBusPendingCallWatcher>
+#endif
 #include <algorithm>
 
 namespace jxrc::gui {
+void revealFile(const QString& path) {
+    const auto absolute=QFileInfo(path).absoluteFilePath();
+    auto fallback=[absolute]{QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(absolute).absolutePath()));};
+#if defined(Q_OS_WIN)
+    if(!QProcess::startDetached("explorer.exe",{"/select,",QDir::toNativeSeparators(absolute)}))fallback();
+#elif defined(Q_OS_MACOS)
+    if(!QProcess::startDetached("/usr/bin/open",{"-R",absolute}))fallback();
+#else
+    auto message=QDBusMessage::createMethodCall("org.freedesktop.FileManager1","/org/freedesktop/FileManager1","org.freedesktop.FileManager1","ShowItems");
+    message<<QStringList{QUrl::fromLocalFile(absolute).toString(QUrl::FullyEncoded)}<<QString{};
+    auto* watcher=new QDBusPendingCallWatcher(QDBusConnection::sessionBus().asyncCall(message),qApp);
+    QObject::connect(watcher,&QDBusPendingCallWatcher::finished,qApp,[fallback](QDBusPendingCallWatcher* call){
+        if(call->reply().type()==QDBusMessage::ErrorMessage)fallback();
+        call->deleteLater();
+    });
+#endif
+}
 void FileListView::selectAll(){emit bulkSelectionChanged(true);QListView::selectAll();emit bulkSelectionChanged(false);}
 void FileTableView::selectAll(){emit bulkSelectionChanged(true);QTableView::selectAll();emit bulkSelectionChanged(false);}
 

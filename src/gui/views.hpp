@@ -5,6 +5,7 @@
 class QPropertyAnimation;
 
 namespace jxrc::gui {
+void revealFile(const QString& path);
 class FileListView : public QListView {
     Q_OBJECT
 public:

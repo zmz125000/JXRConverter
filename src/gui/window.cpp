@@ -274,17 +274,18 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
+    auto* appearance=addToolBar("Appearance");appearance->setObjectName("appearanceToolbar");appearance->setMovable(false);appearance->setFloatable(false);appearance->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
     auto* theme=combo({"Auto","Light","Dark"},"theme");
-    updater_=new Updater(this);auto* updateButton=new HeightMatchedButton("Update",theme);updateButton->setObjectName("updateApplication");toolbar->addWidget(updateButton);
+    updater_=new Updater(this);auto* updateButton=new HeightMatchedButton("Update",theme);updateButton->setObjectName("updateApplication");appearance->addWidget(updateButton);
     connect(updateButton,&QPushButton::clicked,this,[this]{if(!queue_->busy())updater_->start();});
-    connect(updater_,&Updater::statusChanged,updateButton,&QPushButton::setText);
+    connect(updater_,&Updater::statusChanged,updateButton,[appearance,updateButton](const QString& text){updateButton->setText(text);appearance->setMinimumWidth(appearance->sizeHint().width());});
     connect(updater_,&Updater::message,this,&MainWindow::logMessage);
     connect(updater_,&Updater::updateAvailableChanged,this,[updateButton](bool available){updateButton->setProperty("primary",available);updateButton->style()->unpolish(updateButton);updateButton->style()->polish(updateButton);updateButton->update();});
     updateTimer_=new QTimer(this);updateTimer_->setObjectName("hourlyUpdateCheck");updateTimer_->setSingleShot(true);updateTimer_->setTimerType(Qt::PreciseTimer);
     connect(updateTimer_,&QTimer::timeout,this,&MainWindow::checkForUpdates);
     connect(checkUpdates_,&QCheckBox::toggled,this,[this](bool on){if(on)checkForUpdates();else updateTimer_->stop();});
     connect(updater_,&Updater::busyChanged,this,[this,updateButton](bool busy){updateButton->setEnabled(!busy);updateCounts();});
-    toolbar->addWidget(theme);
+    appearance->addWidget(theme);appearance->ensurePolished();appearance->setMinimumWidth(appearance->sizeHint().width());
     theme->setCurrentIndex(appSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
     connect(theme,&QComboBox::currentIndexChanged,this,[theme]{appSettings().setValue("appearance/theme",theme->currentIndex());applyDesktopStyle(theme->currentIndex());});
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
@@ -303,7 +304,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             QMenu menu;QAction* addField=nullptr;
             if(view==table_){addField=menu.addAction("Add this to filters");addField->setObjectName("addFieldToFilters");addField->setEnabled(!fieldValue.isEmpty());addField->setToolTip(catalog_->headerData(fieldColumn,Qt::Horizontal,Qt::DisplayRole).toString()+": "+fieldValue);}
             auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
-            auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
+            auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");folder->setObjectName("revealImageFile");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
             const QString currentImage=index.data(Catalog::PathRole).toString();rememberedImages_.insert(currentImage);
             auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!updater_->installing()&&!selectedTargets().isEmpty());
             auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!updater_->installing());
@@ -331,7 +332,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
                 else if(action==start){dateFrom_->setDate(captured);if(dateTo_->date()<captured)dateTo_->setDate(captured);}
                 else{dateTo_->setDate(captured);if(dateFrom_->date()>captured)dateFrom_->setDate(captured);}
                 today_->setChecked(false);metadataFilters_->setChecked(true);dateEnabled_->setChecked(true);updateFilter();
-            }else if(action==open)openImage(index);else if(action==folder)QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(index.data(Catalog::PathRole).toString()).absolutePath()));else if(action==remove)removeImageSelection();
+            }else if(action==open)openImage(index);else if(action==folder)revealFile(index.data(Catalog::PathRole).toString());else if(action==remove)removeImageSelection();
         });
     }
     connect(list_,&FileListView::pathsDropped,this,&MainWindow::addDroppedPaths);connect(table_,&FileTableView::pathsDropped,this,&MainWindow::addDroppedPaths);

@@ -65,6 +65,17 @@
 #include "settings.hpp"
 #include "style.hpp"
 #include "views.hpp"
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+#include <QDBusConnection>
+class FileManagerReceiver : public QObject {
+    Q_OBJECT
+    Q_CLASSINFO("D-Bus Interface", "org.freedesktop.FileManager1")
+public:
+    QStringList items;
+public slots:
+    void ShowItems(const QStringList& uris,const QString&) {items=uris;}
+};
+#endif
 using namespace jxrc::gui;
 
 class ReleaseReply : public QNetworkReply {
@@ -120,6 +131,42 @@ private slots:
         QVERIFY(temp_.isValid());QStandardPaths::setTestModeEnabled(true);QCoreApplication::setOrganizationName("JxrcTests");QCoreApplication::setApplicationName("DesktopTests");appSettings().clear();
     }
     void init() {QFile::remove(configDirectory()+"/jobs.json");}
+    void fixedAppearanceControls() {
+        appSettings().clear();MainWindow window;window.show();
+        auto* update=window.findChild<QPushButton*>("updateApplication");auto* theme=window.findChild<QComboBox*>("theme");
+        auto* appearance=window.findChild<QToolBar*>("appearanceToolbar");QVERIFY(appearance);QVERIFY(appearance->isAncestorOf(update));QVERIFY(appearance->isAncestorOf(theme));
+        auto* updater=window.findChild<Updater*>();
+        for(int style=0;style<3;++style){theme->setCurrentIndex(style);
+            for(const auto& size:{QSize(980,640),QSize(1440,920),QSize(1100,760),QSize(980,640)}){
+                window.resize(size);
+                for(const auto& text:{QString("Update"),QString("Downloading update…"),QString("Update available")}){
+                    updater->statusChanged(text);QTest::qWait(10);
+                    QCOMPARE(window.width(),size.width());
+                    for(auto* control:{static_cast<QWidget*>(update),static_cast<QWidget*>(theme)}){
+                        QVERIFY(control->isVisible());QVERIFY(window.rect().contains(QRect(control->mapTo(&window,QPoint{}),control->size())));
+                    }
+                    QCOMPARE(update->height(),theme->height());
+                }
+            }
+        }
+        theme->setCurrentIndex(0);appSettings().clear();
+    }
+#if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
+    void revealSelectedImage() {
+        auto bus=QDBusConnection::sessionBus();if(!bus.isConnected())QSKIP("No session bus; run under dbus-run-session");
+        if(!bus.registerService("org.freedesktop.FileManager1"))QSKIP("A real file manager owns this session; run under dbus-run-session");
+        auto cleanup=qScopeGuard([&]{bus.unregisterObject("/org/freedesktop/FileManager1");bus.unregisterService("org.freedesktop.FileManager1");});
+        FileManagerReceiver receiver;QVERIFY(bus.registerObject("/org/freedesktop/FileManager1",&receiver,QDBusConnection::ExportAllSlots));
+        const auto a=makeImage(root("image folder"),"a.jpg",32,24,100);
+        const auto path=makeImage(root("image folder"),"照片 #1.jpg",32,24,100);
+        MainWindow window;window.show();window.addPaths({a,path});QTRY_COMPARE(window.catalog()->rowCount(),2);
+        auto* view=window.findChild<FileListView*>();auto* model=window.filterModel();
+        int row=0;while(row<model->rowCount()&&model->index(row,0).data(Catalog::PathRole).toString()!=path)++row;QVERIFY(row<model->rowCount());
+        bool chosen=false;QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("revealImageFile");if(!action){menu->close();return;}chosen=true;menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);});
+        view->customContextMenuRequested(view->visualRect(model->index(row,0)).center());QVERIFY(chosen);
+        QTRY_COMPARE(receiver.items,QStringList{QUrl::fromLocalFile(path).toString(QUrl::FullyEncoded)});
+    }
+#endif
     void metadataAndThumbnails() {
         const auto file=makeImage(root("metadata"),"orange.jpg",128,64,400);QVERIFY(!file.isEmpty());
         const auto metadata=readMetadata(file);QCOMPARE(metadata.width,128);QCOMPARE(metadata.height,64);QCOMPARE(metadata.iso,400);

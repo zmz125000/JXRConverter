@@ -34,18 +34,19 @@ renders accurate SDR base images,
 while preserving wide color gamut,  
 then outputs to JPG/AVIF Gain Map HDR.   
 
-It also supports scRGB and PQ outputs  
+It also supports PNG, JXL with scRGB, HLG and PQ outputs  
 and comes with a Qt6 GUI for Windows, Linux and macOS.
 
 Features:  
 1. Convert JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL PQ HDR.
 2. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
-3. Support auto color management, keeping source wide color gamut and color tag.
-4. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for UHDR SDR base image.
-5. RAW images are processed and output as scRGB, Linear HDR or PQ HDR with BT.2020 color.
-6. Float32 high quality image processing.
-7. File listing with ultra fast thumbnails.
-8. HDR boost rendering for RAW images.
+3. Generic image conversion/compression.
+4. Support auto color management, keeping source wide color gamut and color tag.
+5. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for UHDR SDR base image.
+6. RAW images are processed and output as scRGB, Linear HDR or PQ HDR with BT.2020 color.
+7. Float32 high quality image processing.
+8. File listing with ultra fast thumbnails.
+9. HDR boost rendering for RAW images.
 
 See [port status](docs/port-status.md) for the supported scope and remaining work.
 See the [conversion matrix](docs/conversion-matrix.md) for input classes, output formats and processing paths.
@@ -55,6 +56,9 @@ See the [conversion matrix](docs/conversion-matrix.md) for input classes, output
 </a>
 
 <img width="2232" height="1561" alt="JXRConverter screenshot" src="https://github.com/user-attachments/assets/a9cdc1e5-86de-4592-8fa6-4db33049ab23" />
+<img width="1920" height="1080" alt="JXRConverter JXR JPG HDR sample" src="https://github.com/zmz125000/LocalViewer-art/blob/master/Screenshots/PRAGMATA%204_21_2026%2010_24_50%20PM_low_gainmap.jpg?raw=true" />
+<img width="1920" height="1080" alt="JXRConverter JXR JPG HDR sample" src="https://github.com/zmz125000/LocalViewer-art/blob/master/Screenshots/S.T.A.L.K.E.R.%202_%20Heart%20of%20Chornobyl%20%20%2011_23_2025%2010_04_32%20AM_low_gainmap.jpg?raw=true" />
+
 
 ## Build
 
@@ -120,6 +124,7 @@ Those links are unrelated to the project.
 - [Pictureflect Photo Viewer](https://pictureflect.com/)
 - [Special K Image Viewer](https://github.com/SpecialKO/SKIV)
 - [HDRFrame](https://apps.microsoft.com/detail/9p4ngn61cr4t)
+- [jxr2uhdr](https://github.com/tfx2001/jxr2uhdr/) jxr2uhdr is another tool that has accurate SDR output.
 
 ## License
 
