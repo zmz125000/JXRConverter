@@ -387,7 +387,10 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             cache.previous=o;cache.ready=true;
         }
         auto output_exif=exif;prepare_export_exif(output_exif,w,h);
-        q.exif=output_exif.data();q.exif_size=output_exif.size();q.source_bits=cache.bits;
+        q.exif=output_exif.data();q.exif_size=output_exif.size();
+        // A reconstructed base + gain map has F32 precision, regardless of
+        // either encoded plane's depth. Quantize it at the selected export depth.
+        q.source_bits=full_gainmap?32:cache.bits;
         q.analysis=&cache.analysis;
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
         int rc;
@@ -415,7 +418,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             rc=encode_jxl_source(w,h,scrgb.data(),true,color,path.c_str(),q);
         } else if(o.target==Target::png||o.target==Target::png_hdr||o.target==Target::png_hlg) {
             const int transfer=o.target==Target::png_hlg?18:o.target==Target::png_hdr?16:13;
-            rc=encode_png_f32(w,h,linear.data(),gamut,transfer,q.png_depth(cache.bits),path.c_str(),q);
+            rc=encode_png_f32(w,h,linear.data(),gamut,transfer,q.png_depth(q.source_bits),path.c_str(),q);
         } else if(o.target==Target::jxl_hlg) {
             rc=encode_jxl_f32(w,h,linear.data(),gamut,true,path.c_str(),q,false,true);
         } else if(o.target==Target::avif_hlg) {

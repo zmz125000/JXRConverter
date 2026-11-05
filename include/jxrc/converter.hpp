@@ -17,9 +17,9 @@ struct Quality {
     Preset preset = Preset::high;
     float jxl_distance = 0.5f;
     int codec_quality = 90;
-    int avif_depth = 10; // Custom maximum depth; sources of 8 bits or less stay 8-bit.
+    int avif_depth = 10; // Custom maximum depth; source cap excludes full gain-map reconstruction.
     int png_depth = 16; // PNG controls are independent of preset.
-    bool auto_bit_depth = true; // PNG: 8-bit sources use 8, deeper sources use 16.
+    bool auto_bit_depth = true; // PNG: 8-bit sources use 8; deeper/reconstructed sources use 16.
     bool downsize_gainmap = false;
 };
 enum class RawHdrMode { source, boost, custom };

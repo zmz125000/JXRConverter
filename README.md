@@ -44,9 +44,10 @@ Features:
 4. Support auto color management, keeping source wide color gamut and color tag.
 5. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for UHDR SDR base image.
 6. RAW images are processed and output as scRGB, Linear HDR or PQ HDR with BT.2020 color.
-7. Float32 high quality image processing.
-8. File listing with ultra fast thumbnails.
-9. HDR boost rendering for RAW images.
+7. Gain map reconstruction mode, reverse gain map to F32 for Linear and PQ outputs.
+8. Float32 high quality image processing.
+9. File listing with ultra fast thumbnails.
+10. HDR boost rendering for RAW images.
 
 See [port status](docs/port-status.md) for the supported scope and remaining work.
 See the [conversion matrix](docs/conversion-matrix.md) for input classes, output formats and processing paths.

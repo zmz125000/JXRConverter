@@ -183,4 +183,38 @@ void gain_map_f32_tests(const std::filesystem::path& dir) {
     check(bool(jpegSource)&&reconstruct_gain_map_f32(jpegSource.get(),hdr,gamut,&sdr)&&hdr.size()==input.size()&&sdr.size()==input.size(),"JPEG gain-map F32 reconstruction");
     jxrc::Options jpegOptions;jpegOptions.mode=jxrc::Mode::process;jpegOptions.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;jpegOptions.target=jxrc::Target::jxl_linear;
     jxrc::convert(jpeg,dir/"jpeg-gain-f32.jxl",jpegOptions);
+    // Reconstruction adds precision beyond either encoded plane. An 8-bit
+    // JPEG or 10-bit AVIF base must not cap the reconstructed export's depth.
+    const auto tenBitSource=dir/"f32-gain-source-10bit.avif";
+    StillEncodeQuality tenBitQuality(0);tenBitQuality.source_bits=10;
+    check(encode_avif_f32(16,12,input.data(),UHDR_CG_DISPLAY_P3,2,tenBitSource.string().c_str(),tenBitQuality,originalSdr.data())==0,"10-bit gain fixture");
+    for(const auto& gainSource:{jpeg,tenBitSource}) {
+        jxrc::ConversionSession depthSession(gainSource);
+        auto depthOptions=jpegOptions;
+        for(auto preset:{jxrc::Preset::lossless,jxrc::Preset::medium,jxrc::Preset::custom}) {
+            depthOptions.quality.preset=preset;depthOptions.quality.avif_depth=8;
+            for(auto target:{jxrc::Target::avif,jxrc::Target::avif_pq,jxrc::Target::avif_gainmap,jxrc::Target::avif_hlg}) {
+                depthOptions.target=target;
+                const auto output=dir/(gainSource.stem().string()+"-depth-"+std::to_string(int(preset))+"-"+std::to_string(int(target))+".avif");
+                depthSession.convert(output,depthOptions);
+                check(jxrc::inspect(output).bits==(preset==jxrc::Preset::lossless?12u:preset==jxrc::Preset::medium?10u:8u),"Full reconstruction retained the encoded base depth cap");
+            }
+        }
+        depthOptions.target=jxrc::Target::png_hdr;
+        const auto png=dir/(gainSource.stem().string()+"-depth.png");
+        depthSession.convert(png,depthOptions);
+        check(jxrc::inspect(png).bits==16,"Automatic PNG depth ignored reconstructed F32 precision");
+        depthOptions.quality.auto_bit_depth=false;depthOptions.quality.png_depth=8;depthOptions.overwrite=true;
+        depthSession.convert(png,depthOptions);
+        check(jxrc::inspect(png).bits==8,"Full reconstruction ignored explicit PNG depth");
+    }
+    for(auto reconstruction:{jxrc::GainMapReconstruction::off,jxrc::GainMapReconstruction::automatic}) {
+        auto baseOptions=jpegOptions;baseOptions.gain_map_reconstruction=reconstruction;baseOptions.quality.preset=jxrc::Preset::lossless;
+        for(auto target:{jxrc::Target::avif,jxrc::Target::png}) {
+            baseOptions.target=target;
+            const auto output=dir/("jpeg-base-depth-"+std::to_string(int(reconstruction))+"-"+std::to_string(int(target)));
+            jxrc::convert(jpeg,output,baseOptions);
+            check(jxrc::inspect(output).bits==8,"Off/Auto changed the original base depth");
+        }
+    }
 }

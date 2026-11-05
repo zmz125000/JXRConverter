@@ -18,7 +18,7 @@ struct StillEncodeQuality {
     // Borrowed TIFF EXIF for this synchronous encode; never owns image pixels.
     const uint8_t* exif = nullptr;
     size_t exif_size = 0;
-    unsigned source_bits = 32; // Maximum output depth follows the source, not the float working buffer.
+    unsigned source_bits = 32; // Source precision; a full gain-map reconstruction is F32.
     bool jxl_half = false;
     int png_bits = 16;
     bool png_auto_bits = true;
