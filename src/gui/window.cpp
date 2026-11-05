@@ -706,17 +706,31 @@ void MainWindow::restoreBrowserScroll() {
         changingAspect_=previous;restoringBrowserScroll_=false;
     });
 }
+namespace {
+QString jobParentName(const QStringList& files) {
+    QStringList names;
+    for(const auto& file:files) {
+        const auto directory=QFileInfo(file).absoluteDir();
+        const auto name=directory.dirName().isEmpty()?QDir::toNativeSeparators(directory.absolutePath()):directory.dirName();
+        if(!names.contains(name))names.append(name);
+    }
+    return names.join(", ");
+}
+}
 void MainWindow::loadJobs() {
     QFile file(configDirectory()+"/jobs.json");if(!file.open(QIODevice::ReadOnly)||file.size()>16*1024*1024)return;
     const auto data=QJsonDocument::fromJson(file.readAll()).object();
     auto files=[](const QJsonValue& value){QStringList paths;for(const auto& entry:value.toArray())if(entry.isString()&&!entry.toString().isEmpty())paths.append(entry.toString());paths.removeDuplicates();return paths;};
     auto outputs=[](const QJsonValue& value){QHash<QString,OutputProgress> result;const auto object=value.toObject();for(auto it=object.begin();it!=object.end();++it){const auto entry=it.value().toObject();auto state=entry.value("state").toString();if(state=="Queued"||state=="Running")state="Interrupted";result.insert(it.key(),{entry.value("input").toString(),state});}return result;};
     temporaryJob_.files=files(data.value("temporary"));temporaryJob_.outputs=outputs(data.value("temporaryOutputs"));temporaryJob_.folder=data.value("temporaryFolder").toString();
+    temporaryJob_.name=data.value("temporaryName").toString();temporaryJob_.createdAt=QDateTime::fromString(data.value("temporaryCreatedAt").toString(),Qt::ISODateWithMs);
     QSet<qint64> ids;
     for(const auto& value:data.value("jobs").toArray()){
         const auto object=value.toObject();const auto number=object.value("number").toVariant().toLongLong();
         if(number<1||ids.contains(number)||number>1000000000)continue;
-        savedJobs_.append({number,files(object.value("files")),outputs(object.value("outputs")),object.value("folder").toString(),object.value("quick").toBool()});ids.insert(number);nextJob_=std::max(nextJob_,number+1);
+        const auto paths=files(object.value("files"));
+        const auto name=object.contains("name")?object.value("name").toString():jobParentName(paths);
+        savedJobs_.append({number,paths,outputs(object.value("outputs")),object.value("folder").toString(),object.value("quick").toBool(),name,QDateTime::fromString(object.value("createdAt").toString(),Qt::ISODateWithMs)});ids.insert(number);nextJob_=std::max(nextJob_,number+1);
     }
     const auto selected=data.value("viewedJob").toVariant().toLongLong();if(ids.contains(selected))viewedJob_=selected;
 }
@@ -726,8 +740,8 @@ void MainWindow::saveJobs() {
     // Merely starting with history restore off must not erase saved lists.
     if(!jobHistoryLoaded_&&!jobHistoryDirty_)return;
     auto outputs=[](const SavedJob& job){QJsonObject result;for(auto it=job.outputs.cbegin();it!=job.outputs.cend();++it){QJsonObject value;value.insert("input",it->input);value.insert("state",it->state);result.insert(it.key(),value);}return result;};
-    QJsonArray jobs;for(const auto& job:savedJobs_){QJsonObject object;object.insert("number",QString::number(job.number));object.insert("files",QJsonArray::fromStringList(job.files));object.insert("outputs",outputs(job));object.insert("folder",job.folder);object.insert("quick",job.quick);jobs.append(object);}
-    QJsonObject object;object.insert("version",2);object.insert("temporary",QJsonArray::fromStringList(temporaryJob_.files));object.insert("temporaryOutputs",outputs(temporaryJob_));object.insert("temporaryFolder",temporaryJob_.folder);object.insert("jobs",jobs);object.insert("viewedJob",QString::number(viewedJob_));
+    QJsonArray jobs;for(const auto& job:savedJobs_){QJsonObject object;object.insert("number",QString::number(job.number));object.insert("files",QJsonArray::fromStringList(job.files));object.insert("outputs",outputs(job));object.insert("folder",job.folder);object.insert("quick",job.quick);object.insert("name",job.name);object.insert("createdAt",job.createdAt.toUTC().toString(Qt::ISODateWithMs));jobs.append(object);}
+    QJsonObject object;object.insert("version",3);object.insert("temporary",QJsonArray::fromStringList(temporaryJob_.files));object.insert("temporaryOutputs",outputs(temporaryJob_));object.insert("temporaryFolder",temporaryJob_.folder);object.insert("temporaryName",temporaryJob_.name);object.insert("temporaryCreatedAt",temporaryJob_.createdAt.toUTC().toString(Qt::ISODateWithMs));object.insert("jobs",jobs);object.insert("viewedJob",QString::number(viewedJob_));
     QSaveFile file(configDirectory()+"/jobs.json");const auto bytes=QJsonDocument(object).toJson();
     if(!file.open(QIODevice::WriteOnly)||file.write(bytes)!=bytes.size()||!file.commit())logMessage("Warning: cannot save job file lists");
 }
@@ -737,7 +751,8 @@ QString MainWindow::jobText(qint64 number) const {
     for(const auto& output:job->outputs){auto& c=counts[output.input];++c.total;if(output.state=="Finished"||output.state=="Skipped"||output.state=="Failed"||output.state=="Cancelled"||output.state=="Interrupted")++c.terminal;if(output.state=="Finished")++c.finished;else if(output.state=="Skipped")++c.skipped;else if(output.state=="Failed")++c.failed;}
     int finished=0,skipped=0,failed=0;
     for(const auto& input:job->files){const auto c=counts.value(input);if(c.total&&c.terminal==c.total){if(c.failed)++failed;else if(c.skipped==c.total)++skipped;else if(c.finished+c.skipped==c.total)++finished;}}
-    return (number?QString(job->quick?"Quick job #%1":"Job #%1").arg(number):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed)+(queue_->hasRunningBatch(number)?" *":isDraftJob(number)?" (?)":"");
+    const auto name=QString(job->name).replace('&',"&&");
+    return (number?QString(job->quick?"Quick #%1":"#%1").arg(number)+(name.isEmpty()?QString():" "+name):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed)+(queue_->hasRunningBatch(number)?" *":isDraftJob(number)?" (?)":"");
 }
 void MainWindow::refreshJobs() {
     QVector<qint64> ids{0};for(auto it=savedJobs_.crbegin();it!=savedJobs_.crend();++it)ids.append(it->number);
@@ -756,7 +771,7 @@ void MainWindow::showJob(qint64 number) {
 }
 void MainWindow::clearJobs() {
     if(queue_->busy())return;
-    savedJobs_.clear();temporaryJob_={0,{},{},{}};jobSelections_.clear();viewedJob_=0;nextJob_=1;quickJob_=-1;
+    savedJobs_.clear();temporaryJob_={0,{},{},{},false,{},{}};jobSelections_.clear();viewedJob_=0;nextJob_=1;quickJob_=-1;
     jobHistoryLoaded_=true;jobHistoryDirty_=true;jobMenu_->clear();
     if(statusFilter_->checkedId()==2)statusFilter_->button(0)->setChecked(true);
     refreshJobs();saveJobs();updateFilter();
@@ -770,15 +785,18 @@ bool MainWindow::isDraftJob(qint64 number) const {
 void MainWindow::createDraftJob(const QStringList& files) {
     if(files.isEmpty())return;
     QStringList unique=files;unique.removeDuplicates();
-    const auto number=nextJob_++;savedJobs_.append({number,unique,{},{}});jobHistoryDirty_=true;showJob(number);
+    const auto number=nextJob_++;savedJobs_.append({number,unique,{},{},false,jobParentName(unique),QDateTime::currentDateTimeUtc()});jobHistoryDirty_=true;showJob(number);
 }
 void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse,bool quick) {
     jobHistoryDirty_=true;
     SavedJob* saved=&temporaryJob_;
     if(reuse){for(auto& job:savedJobs_)if(!jobs.isEmpty()&&job.number==jobs.first().batch)saved=&job;}
-    else if(!temporary){savedJobs_.append({nextJob_++,{},{},{}});saved=&savedJobs_.last();}
+    else if(!temporary){savedJobs_.append({nextJob_++,{},{},{},quick,{},QDateTime::currentDateTimeUtc()});saved=&savedJobs_.last();}
+    const bool creating=saved->files.isEmpty()&&!jobs.isEmpty();
+    if(creating&&!saved->createdAt.isValid())saved->createdAt=QDateTime::currentDateTimeUtc();
     if(quick)saved->quick=true;
     for(const auto& job:jobs){if(!saved->files.contains(job.input))saved->files.append(job.input);saved->outputs.insert(job.output,{job.input,"Queued"});}
+    if(creating)saved->name=jobParentName(saved->files);
     if(!jobs.isEmpty())saved->folder=QFileInfo(jobs.first().output).absolutePath();
     if(jumpToJob_->isChecked())showJob(saved->number);
     else{refreshJobs();saveJobs();updateFilter();}

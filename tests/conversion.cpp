@@ -1235,6 +1235,10 @@ static void transparency_background(const fs::path& dir) {
             jxrc::Options o;o.mode=jxrc::Mode::process;o.target=target;o.transparency_background=background;o.quality.preset=jxrc::Preset::lossless;
             const auto output=dir/("alpha-"+std::to_string(int(target))+"-"+std::to_string(int(background)));
             session.convert(output,o);const auto encoded=bytes(output);
+            if(background==jxrc::TransparencyBackground::black) {
+                const auto whiteOutput=dir/("alpha-"+std::to_string(int(target))+"-"+std::to_string(int(jxrc::TransparencyBackground::white)));
+                check(encoded==bytes(whiteOutput),"White/Black changed a non-JPEG conversion");
+            }
             if(remove&&(target==jxrc::Target::png||target==jxrc::Target::jxl||target==jxrc::Target::avif)) {
                 auto preserve=o;preserve.mode=jxrc::Mode::preserve;
                 const auto preserved=dir/(output.filename().string()+"-preserve");jxrc::convert(input,preserved,preserve);

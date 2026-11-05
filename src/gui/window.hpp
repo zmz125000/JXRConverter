@@ -144,9 +144,9 @@ private:
     QSet<QString> loggedWarnings_, selectedImages_, selectedTabImages_, rememberedImages_;
     QHash<qint64,QSet<QString>> jobSelections_;
     struct OutputProgress {QString input, state;};
-    struct SavedJob { qint64 number; QStringList files; QHash<QString,OutputProgress> outputs; QString folder; bool quick = false; };
+    struct SavedJob { qint64 number; QStringList files; QHash<QString,OutputProgress> outputs; QString folder; bool quick = false; QString name; QDateTime createdAt; };
     QVector<SavedJob> savedJobs_;
-    SavedJob temporaryJob_{0,{},{},{}};
+    SavedJob temporaryJob_{0,{},{},{},false,{},{}};
     qint64 nextJob_ = 1, viewedJob_ = 0, quickJob_ = -1;
     struct BrowserState {
         QVariantMap controls;
