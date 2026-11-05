@@ -9,6 +9,7 @@
 
 namespace jxrc {
 enum class Mode { preserve, process };
+enum class TransparencyBackground { white, black, white_remove_alpha, black_remove_alpha };
 enum class GainMapReconstruction { off, automatic, full_image };
 // Append targets to retain saved GUI target identifiers.
 enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg };
@@ -46,6 +47,7 @@ struct Options {
     unsigned max_edge = 0;
     unsigned threads = 0; // Per-conversion codec budget; 0 uses automatic defaults.
     bool jpeg_transcoding = false; // Eligible SDR JPEG coefficients to JXL, without exposure/resizing.
+    TransparencyBackground transparency_background = TransparencyBackground::black; // Background for JPEG; remove_alpha choices flatten every format in linear light.
     bool keep_exif = false;
     bool overwrite = false;
     bool srgb_clamp = false; // Process mode: constrain output gamut to sRGB/BT.709; retain HDR transfer/headroom.

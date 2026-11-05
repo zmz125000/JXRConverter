@@ -415,7 +415,7 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,
+    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,transparencyBackground_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
@@ -479,7 +479,10 @@ QWidget* MainWindow::buildControls() {
     outputFormatsLayout->addWidget(exif_);outputFormatsLayout->addWidget(transcode_);
     reconstruction_=combo({"Off","Auto","Full"},"gainMapReconstruction");reconstruction_->setCurrentIndex(1);
     reconstruction_->setToolTip("For gain-map inputs: Off transfers the source base/map; Auto repairs the gain map for SDR/source outputs; Full reconstructs the complete image in F32 for any output target. Non-gain-map inputs are unaffected. Full requires Process pixels mode.");
-    auto* reconstructionForm=new QFormLayout;reconstructionForm->addRow("Gain map reconstruction",reconstruction_);outputFormatsLayout->addLayout(reconstructionForm);
+    auto* reconstructionForm=new QFormLayout;reconstructionForm->addRow("Gain map reconstruction",reconstruction_);
+    transparencyBackground_=combo({"White","Black","White (remove alpha)","Black (remove alpha)"},"transparencyBackground");transparencyBackground_->setCurrentIndex(1);
+    transparencyBackground_->setToolTip("White / Black fill transparent areas in JPEG exports and retain alpha in other formats. Remove alpha fills transparent areas in every output format. Transparent gain-map sources require Full reconstruction to remove alpha.");
+    reconstructionForm->addRow("Transparency background color",transparencyBackground_);outputFormatsLayout->addLayout(reconstructionForm);
     layout->addWidget(outputFormats);
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
@@ -604,7 +607,7 @@ Options MainWindow::options() const {
     return optionsForTarget(targets.first());
 }
 Options MainWindow::optionsForTarget(Target target) const {
-    Options o;o.gain_map_reconstruction=GainMapReconstruction(reconstruction_->currentIndex());o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=target;o.quality.preset=Preset(preset_->currentIndex());
+    Options o;o.transparency_background=TransparencyBackground(transparencyBackground_->currentIndex());o.gain_map_reconstruction=GainMapReconstruction(reconstruction_->currentIndex());o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=target;o.quality.preset=Preset(preset_->currentIndex());
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()==0?10:avifDepth_->currentIndex()==1?12:8;o.quality.downsize_gainmap=downsize_->isChecked();o.quality.auto_bit_depth=autoBitDepth_->isChecked();o.quality.png_depth=pngDepth_->currentIndex()?16:8;
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isChecked()&&target==Target::jxl&&(o.mode==Mode::preserve||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     if(o.mode==Mode::process) {

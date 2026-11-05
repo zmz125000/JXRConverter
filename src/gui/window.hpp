@@ -113,7 +113,7 @@ private:
     ThumbnailDelegate* delegate_;
     QStackedWidget* views_;
     QButtonGroup *viewMode_, *statusFilter_;
-    QComboBox *reconstruction_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *pngDepth_, *rawMode_, *wb_;
+    QComboBox *transparencyBackground_, *reconstruction_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *pngDepth_, *rawMode_, *wb_;
     QListWidget* targets_ = nullptr;
     QLineEdit *search_, *instant_, *format_, *output_;
     QSlider* size_;

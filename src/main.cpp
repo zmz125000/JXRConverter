@@ -21,6 +21,8 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
   --jpeg-transcoding           Lossless JPEG coefficients to SDR JXL (no pixel edits)
   --threads 0..65535            Per-conversion CPU budget; 0 = automatic
   --keep-exif                   Keep source EXIF where supported
+  --transparency-background white|black|white-remove-alpha|black-remove-alpha
+                               Default: black; remove-alpha flattens every output format
   --gain-map-reconstruction off|auto|full    Default: auto; Full enables HDR conversion of gain-map sources
   --overwrite                   Replace existing output after successful encoding
 Processing controls (PQ/HLG targets require process mode):
@@ -79,6 +81,7 @@ int run(int argc,char** argv) {
         else if(arg=="--downsize-gainmap"){o.quality.downsize_gainmap=true;custom=true;}
         else if(arg=="--jpeg-transcoding")o.jpeg_transcoding=true;
         else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}
+        else if(arg=="--transparency-background")o.transparency_background=choice<jxrc::TransparencyBackground>(value(),{{"black",jxrc::TransparencyBackground::black},{"white",jxrc::TransparencyBackground::white},{"white-remove-alpha",jxrc::TransparencyBackground::white_remove_alpha},{"black-remove-alpha",jxrc::TransparencyBackground::black_remove_alpha}});
         else if(arg=="--keep-exif")o.keep_exif=true;
         else if(arg=="--gain-map-reconstruction")o.gain_map_reconstruction=choice<jxrc::GainMapReconstruction>(value(),{{"off",jxrc::GainMapReconstruction::off},{"auto",jxrc::GainMapReconstruction::automatic},{"full",jxrc::GainMapReconstruction::full_image}});
         else if(arg=="--overwrite")o.overwrite=true;

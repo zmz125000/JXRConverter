@@ -112,7 +112,7 @@ int encode_png_source(unsigned w,unsigned h,const void* pixels,bool sixteen,
     if(!pixels||color.exponent_bits||color.channels<1||color.channels>4||color.orientation<1||color.orientation>8)return -100;
     const unsigned dw=color.orientation>=5?h:w,dh=color.orientation>=5?w:h;
     const bool gray=color.channels<=2||(color.icc_size>=20&&!std::memcmp(color.icc+16,"GRAY",4));
-    const bool alpha=color.channels==2||color.channels==4;
+    const bool alpha=!quality.remove_alpha&&(color.channels==2||color.channels==4);
     const unsigned channels=(gray?1:3)+(alpha?1:0),depth=quality.png_depth(color.bits);
     // Preserve a source profile verbatim. When RGB source codes have only known
     // SDR CICP tags, add the matching ICC fallback for readers that ignore cICP.
@@ -171,16 +171,17 @@ int encode_png_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t ga
         color.icc=static_cast<const uint8_t*>(profile->getData())+ultrahdr::kICCIdentifierSize;
         color.icc_size=profile->getLength()-ultrahdr::kICCIdentifierSize;
     }
-    return write_png(w,h,depth,4,false,color,path,quality,[&](unsigned y,uint8_t* row){
+    const unsigned channels=quality.remove_alpha?3:4;
+    return write_png(w,h,depth,channels,false,color,path,quality,[&](unsigned y,uint8_t* row){
         for(unsigned x=0;x<w;++x) {
             const auto* p=rgba+(size_t(y)*w+x)*4;
             float rgb[3]={p[0],p[1],p[2]};
             if(transfer==18)linear_to_hlg_rgb(rgb[0],rgb[1],rgb[2],gamut);
-            for(unsigned c=0;c<4;++c) {
+            for(unsigned c=0;c<channels;++c) {
                 float v=c==3?p[3]:rgb[c];if(!std::isfinite(v))v=0.f;
                 if(c==3||transfer==18)v=std::clamp(v,0.f,1.f);
                 else v=transfer==16?linear_to_pq_code(v):srgb_oetf(v);
-                put_sample(row,size_t(x)*4+c,unsigned(std::lround(v*(depth==8?255.f:65535.f))),depth);
+                put_sample(row,size_t(x)*channels+c,unsigned(std::lround(v*(depth==8?255.f:65535.f))),depth);
             }
         }
     },true,analysis);

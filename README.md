@@ -106,6 +106,8 @@ Process mode decodes and processes linear-light pixels. Processing SDR targets c
 
 For supported formats and conversion paths, see the [conversion matrix](docs/conversion-matrix.md). For GUI build and usage, see [Desktop GUI](docs/desktop-gui.md).
 
+**Transparency background color**, below Gain map reconstruction, offers White, Black, White (remove alpha), and Black (remove alpha). White / Black fill JPEG exports while other formats retain alpha. The remove-alpha choices flatten every format in linear light; transparent gain-map sources require Full reconstruction. CLI: `--transparency-background white|black|white-remove-alpha|black-remove-alpha` (default: black).
+
 ## Thanks
 
 - [libultrahdr](https://github.com/google/libultrahdr)

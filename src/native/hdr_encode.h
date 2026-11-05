@@ -13,6 +13,8 @@
 class RenderAnalysis;
 /** One captured export quality selection; existing native callers default to High. */
 struct StillEncodeQuality {
+    bool transparency_background_white = false;
+    bool remove_alpha = false;
     int gain_map_reconstruction = 1; // jxrc::GainMapReconstruction: Off / Auto / Full.
     RenderAnalysis* analysis = nullptr; // Optional metadata cache for the borrowed F32 render.
     // Borrowed TIFF EXIF for this synchronous encode; never owns image pixels.

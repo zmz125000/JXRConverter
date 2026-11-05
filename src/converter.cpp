@@ -168,6 +168,7 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
 }
 }
 void validate(const Options& o) {
+    range(static_cast<int>(o.transparency_background),0,3,"transparency background");
     range(static_cast<int>(o.gain_map_reconstruction),0,2,"gain map reconstruction");
     range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,13,"target");
     range(static_cast<int>(o.quality.preset),0,4,"preset");
@@ -201,12 +202,14 @@ struct ConversionSession::Impl {
     Options previous;
 };
 namespace {
+bool remove_alpha(const Options& o) {return o.transparency_background==TransparencyBackground::white_remove_alpha||o.transparency_background==TransparencyBackground::black_remove_alpha;}
+bool white_background(const Options& o) {return o.transparency_background==TransparencyBackground::white||o.transparency_background==TransparencyBackground::white_remove_alpha;}
 bool scrgb_output(const Options& o) {return o.target==Target::jxl_scrgb;}
 bool convert_gamut(const Options& o) {return o.convert_gamut && !o.srgb_clamp && !scrgb_output(o);}
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
-    return std::make_tuple(o.mode,format==5?0.f:o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
+    return std::make_tuple(remove_alpha(o),remove_alpha(o)&&white_background(o),o.mode,format==5?0.f:o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
         format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr,r.auto_exposure,r.auto_exposure_protect_highlights);
@@ -236,6 +239,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     const auto& bytes=cache.bytes;const int format=cache.format;Staging stage(output);
     const auto path=stage.file.u8string();
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
+    q.transparency_background_white=white_background(o);q.remove_alpha=remove_alpha(o);
     q.png_bits=o.quality.png_depth;q.png_auto_bits=o.quality.auto_bit_depth;
     q.gain_map_reconstruction=static_cast<int>(o.gain_map_reconstruction);
     const bool full_gainmap=cache.gainmap&&o.gain_map_reconstruction==GainMapReconstruction::full_image;
@@ -263,7 +267,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
     bool source_done=false;
-    if(direct_sdr || direct_gainmap || direct_jxl || (o.mode==Mode::preserve && format!=4&&!full_gainmap)) {
+    if(direct_gainmap || direct_sdr || direct_jxl || (o.mode==Mode::preserve && format!=4&&!full_gainmap)) {
         require(format==0||format==1||format==3||format==6||format==7,"Source preservation supports JPEG, AVIF, HEIC, JXL and regular raster images; use --mode process for RAW/JXR");
         int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:o.target==Target::png?3:2;
         int rc=0;
@@ -282,7 +286,11 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 if(o.keep_exif&&regular->format=="TIFF")regular->exif=portable_source_exif(bytes.data(),bytes.size(),regular->width,regular->height,regular->orientation);
                 rc=convert_regular_source(*regular,target,path.c_str(),q,o.keep_exif,info);
             } else rc=convert_source(bytes.data(),bytes.size(),format,target,path.c_str(),q,o.keep_exif,info);
-            require(rc>0 || (rc==0&&direct_sdr),"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
+            // Try the integer/source path first: opaque images need no color
+            // processing. Only actual transparency requires linear compositing.
+            const bool flatten=rc==-97&&q.remove_alpha;
+            if(flatten&&cache.gainmap)throw std::runtime_error("Select Full gain-map reconstruction to remove alpha from a transparent gain-map source");
+            require(rc>0 || (rc==0&&direct_sdr) || flatten,"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
         }
         if(rc>0) {
             source_done=true;
@@ -382,6 +390,19 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                     }
                 };
                 clampGamut(linear);clampGamut(sdr_base);gamut=UHDR_CG_BT_709;
+            }
+            if(remove_alpha(o)) {
+                // Preserved scRGB JXR uses 80 nits per unit; other working
+                // buffers use 203. Background white always represents 203 nits.
+                const float background=white_background(o)?(cache.scrgb?kSdrWhiteNits/80.f:1.f):0.f;
+                auto flatten=[&](std::vector<float>& pixels) {
+                    for(size_t i=0;i<pixels.size();i+=4) {
+                        const float a=std::isfinite(pixels[i+3])?std::clamp(pixels[i+3],0.f,1.f):0.f;
+                        for(unsigned c=0;c<3;++c)pixels[i+c]=(a>0.f?pixels[i+c]*a:0.f)+background*(1.f-a);
+                        pixels[i+3]=1.f;
+                    }
+                };
+                flatten(linear);flatten(sdr_base);
             }
             cache.analysis.bind(linear.data(),size_t(w)*h,gamut);
             cache.previous=o;cache.ready=true;

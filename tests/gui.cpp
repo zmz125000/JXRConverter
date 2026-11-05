@@ -190,10 +190,14 @@ private slots:
             QVERIFY(group&&exif&&transcode&&reconstruction);QCOMPARE(exif->parentWidget(),group);QCOMPARE(transcode->parentWidget(),group);QCOMPARE(reconstruction->parentWidget(),group);
             QCOMPARE(reconstruction->count(),3);QCOMPARE(reconstruction->itemText(0),QString("Off"));QCOMPARE(reconstruction->itemText(1),QString("Auto"));QCOMPARE(reconstruction->itemText(2),QString("Full"));QCOMPARE(reconstruction->currentIndex(),1);
             QVERIFY(group->layout()->indexOf(exif)>group->layout()->indexOf(window.findChild<QListWidget*>("conversionTargets")));QVERIFY(group->layout()->indexOf(transcode)>group->layout()->indexOf(exif));
+            auto* background=window.findChild<QComboBox*>("transparencyBackground");QVERIFY(background);QCOMPARE(background->parentWidget(),group);
+            QCOMPARE(background->count(),4);QCOMPARE(background->itemText(0),QString("White"));QCOMPARE(background->itemText(1),QString("Black"));
+            QCOMPARE(background->itemText(2),QString("White (remove alpha)"));QCOMPARE(background->itemText(3),QString("Black (remove alpha)"));
+            background->setCurrentIndex(2);QCOMPARE(window.options().transparency_background,jxrc::TransparencyBackground::white_remove_alpha);
             reconstruction->setCurrentIndex(2);QCOMPARE(window.options().gain_map_reconstruction,jxrc::GainMapReconstruction::full_image);
             window.findChild<QComboBox*>("qualityPreset")->setCurrentIndex(0);QCOMPARE(reconstruction->currentIndex(),2);
         }
-        {MainWindow restored;QCOMPARE(restored.findChild<QComboBox*>("gainMapReconstruction")->currentIndex(),2);}
+        {MainWindow restored;QCOMPARE(restored.findChild<QComboBox*>("gainMapReconstruction")->currentIndex(),2);QCOMPARE(restored.findChild<QComboBox*>("transparencyBackground")->currentIndex(),2);}
         appSettings().clear();
         const auto directory=root("reconstruction-input"),photo=makeImage(directory,"ordinary.jpg",32,24,100);
         jxrc::Options create;create.mode=jxrc::Mode::process;create.target=jxrc::Target::avif_gainmap;

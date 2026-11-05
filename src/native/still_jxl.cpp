@@ -44,7 +44,7 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
     const size_t pixels = static_cast<size_t>(w) * h;
     if (!rgba || !path || !pixels) return -60;
     const unsigned input_channels = source ? source->channels : 4;
-    const bool alpha = input_channels == 2 || input_channels == 4;
+    const bool alpha = !quality.remove_alpha && (input_channels == 2 || input_channels == 4);
     const bool gray = input_channels <= 2 || (source && source->icc_size >= 20 && !std::memcmp(source->icc + 16, "GRAY", 4));
     auto encoder = JxlEncoderMake(nullptr);
     const unsigned threads = std::min(4u, hdr_pixel_jobs(pixels));
@@ -133,10 +133,10 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
     std::vector<uint8_t> gray_alpha;
     const size_t sample_bytes = type == JXL_TYPE_UINT8 ? 1 : type == JXL_TYPE_FLOAT ? 4 : 2;
     const void* input = rgba;
-    if (gray && input_channels != output_channels) {
+    if (input_channels != output_channels) {
         gray_alpha.resize(pixels * sample_bytes * output_channels);
         for (size_t i=0;i<pixels;++i) {
-            std::memcpy(gray_alpha.data()+i*sample_bytes*output_channels, static_cast<const uint8_t*>(rgba)+i*sample_bytes*input_channels, sample_bytes);
+            std::memcpy(gray_alpha.data()+i*sample_bytes*output_channels, static_cast<const uint8_t*>(rgba)+i*sample_bytes*input_channels, sample_bytes*(gray?1:3));
             if (alpha) std::memcpy(gray_alpha.data()+(i*output_channels+1)*sample_bytes,
                 static_cast<const uint8_t*>(rgba)+(i*input_channels+input_channels-1)*sample_bytes, sample_bytes);
         }

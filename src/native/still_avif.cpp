@@ -55,6 +55,7 @@ Image make_image(unsigned w, unsigned h, unsigned depth, uhdr_color_gamut_t gamu
 }
 
 int write_avif(avifImage* image, const char* path, StillEncodeQuality quality,const avifRGBImage* rgb=nullptr,bool color_metadata_ready=false,RenderAnalysis* analysis=nullptr) {
+    if(quality.remove_alpha)avifImageFreePlanes(image,AVIF_PLANES_A);
     if(!color_metadata_ready) {
         const auto* cached=analysis?analysis->cached_light(image->transferCharacteristics,image->depth):nullptr;
         if(cached) {

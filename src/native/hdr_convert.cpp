@@ -1447,6 +1447,7 @@ int encode_still_export_f32(const float* src,unsigned w,unsigned h,int gamut,int
                             const char* path,StillEncodeQuality quality,const float* sdr_base) {
     if(!src||!path||!w||!h||mode<0||mode>kExportJxlPq||uint64_t(w)*h>80000000)return -50;
     const auto cg=export_gamut(gamut);const size_t pixels=size_t(w)*h;
+    const float background=quality.transparency_background_white?1.f:0.f;
     if(mode==kExportJxl||mode==kExportJxlHdr||mode==kExportJxlPq)
         return encode_jxl_f32(w,h,src,cg,mode!=kExportJxl,path,quality,mode==kExportJxlPq);
     if(mode>=kExportAvif&&mode<=kExportAvifGainMap)
@@ -1455,7 +1456,7 @@ int encode_still_export_f32(const float* src,unsigned w,unsigned h,int gamut,int
         std::vector<uint8_t> rgba(pixels*4);
         for(size_t i=0;i<pixels;++i) {
             const float alpha=std::isfinite(src[i*4+3])?std::clamp(src[i*4+3],0.f,1.f):0.f;
-            for(unsigned c=0;c<3;++c)rgba[i*4+c]=linear_to_srgb_u8(src[i*4+c]*alpha);
+            for(unsigned c=0;c<3;++c)rgba[i*4+c]=linear_to_srgb_u8((alpha>0.f?src[i*4+c]*alpha:0.f)+background*(1.f-alpha));
             rgba[i*4+3]=255;
         }
         return encode_srgb_jpeg_u8(w,h,rgba.data(),path,cg,quality);
@@ -1466,9 +1467,9 @@ int encode_still_export_f32(const float* src,unsigned w,unsigned h,int gamut,int
     for(size_t i=0;i<pixels;++i) {
         const float alpha=std::isfinite(src[i*4+3])?std::clamp(src[i*4+3],0.f,1.f):0.f;
         for(unsigned c=0;c<3;++c) {
-            float v=src[i*4+c]*alpha;if(!std::isfinite(v))v=0.f;
+            float v=(alpha>0.f?src[i*4+c]*alpha:0.f)+background*(1.f-alpha);if(!std::isfinite(v))v=0.f;
             half[i*4+c]=float_to_half(std::clamp(v,0.f,kMaxLinear));
-            if(sdr_base)base[i*4+c]=linear_to_srgb_u8(sdr_base[i*4+c]*alpha);
+            if(sdr_base)base[i*4+c]=linear_to_srgb_u8((alpha>0.f?sdr_base[i*4+c]*alpha:0.f)+background*(1.f-alpha));
         }
         half[i*4+3]=float_to_half(1.f);if(sdr_base)base[i*4+3]=255;
     }

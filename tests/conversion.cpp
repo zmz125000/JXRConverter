@@ -1169,6 +1169,163 @@ static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
     jxrc::convert(apple,dir/"apple-rendered.jxl",options);check(jxrc::inspect(dir/"apple-rendered.jxl").hdr,"HEIC float32 pixel-processing path");
 }
 
+static void transparency_background(const fs::path& dir) {
+    // Opaque inputs must retain their source codes/profile and direct routes,
+    // even with Remove alpha selected. In particular, do not round-trip their
+    // 16-bit colors through the F32 working gamut or disable JPEG transcoding.
+    std::vector<uint16_t> opaque(16*12*4);
+    for(size_t i=0;i<opaque.size();++i)opaque[i]=i%4==3?65535:uint16_t((i*7919)%65536);
+    StillSourceColor opaqueColor;opaqueColor.bits=16;
+    const auto opaquePng=dir/"background-opaque.png";
+    check(encode_png_source(16,12,opaque.data(),true,opaqueColor,opaquePng.string().c_str(),StillEncodeQuality(0))==0,"Opaque source fixture");
+    jxrc::Options sourceOptions;sourceOptions.mode=jxrc::Mode::process;sourceOptions.target=jxrc::Target::jxl;sourceOptions.quality.preset=jxrc::Preset::lossless;
+    const auto opaqueJxl=dir/"background-opaque.jxl";jxrc::convert(opaquePng,opaqueJxl,sourceOptions);
+    const auto referenceBytes=bytes(opaquePng);const auto reference=decode_regular(referenceBytes.data(),referenceBytes.size());
+    for(const auto& source:{opaquePng,opaqueJxl})for(auto mode:{jxrc::Mode::preserve,jxrc::Mode::process}) {
+        auto o=sourceOptions;o.mode=mode;o.target=jxrc::Target::png;o.transparency_background=jxrc::TransparencyBackground::white_remove_alpha;
+        auto baselineOptions=o;baselineOptions.transparency_background=jxrc::TransparencyBackground::black;
+        const auto baseline=dir/(source.filename().string()+"-baseline-"+std::to_string(int(mode))+".png");jxrc::convert(source,baseline,baselineOptions);
+        const auto baselineBytes=bytes(baseline);const auto baselineImage=decode_regular(baselineBytes.data(),baselineBytes.size());
+        const auto output=dir/(source.filename().string()+"-opaque-"+std::to_string(int(mode))+".png");jxrc::convert(source,output,o);
+        const auto encoded=bytes(output);const auto decoded=decode_regular(encoded.data(),encoded.size());
+        check(encoded[25]==2&&decoded.bits==16,"Opaque remove-alpha PNG layout/depth");
+        check(decoded.pixels==reference.pixels,"Remove alpha processed opaque source color codes");
+        check(decoded.icc==baselineImage.icc,"Remove alpha processed opaque source ICC");
+    }
+    sourceOptions.target=jxrc::Target::jpeg;const auto opaqueJpeg=dir/"background-opaque.jpg";jxrc::convert(opaquePng,opaqueJpeg,sourceOptions);
+    sourceOptions.target=jxrc::Target::jxl;sourceOptions.jpeg_transcoding=true;
+    const auto coefficients=dir/"background-coefficients.jxl",removedCoefficients=dir/"background-coefficients-removed.jxl";
+    jxrc::convert(opaqueJpeg,coefficients,sourceOptions);sourceOptions.transparency_background=jxrc::TransparencyBackground::white_remove_alpha;
+    jxrc::convert(opaqueJpeg,removedCoefficients,sourceOptions);
+    check(bytes(coefficients)==bytes(removedCoefficients),"Remove alpha disabled opaque JPEG coefficient transcoding");
+    // Wide uniform bands keep JPEG boundary ringing away from sampled pixels.
+    const unsigned w=96,h=32;std::vector<float> pixels(size_t(w)*h*4);
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+        auto* p=pixels.data()+(size_t(y)*w+x)*4;
+        p[0]=p[1]=p[2]=.25f;p[3]=float(x/32)*.5f;
+    }
+    const auto input=dir/"background-input.png";
+    check(encode_png_f32(w,h,pixels.data(),UHDR_CG_BT_709,13,16,input.string().c_str(),StillEncodeQuality(0))==0,"Background PNG fixture");
+    jxrc::ConversionSession session(input);
+    for(auto target:{jxrc::Target::jpeg,jxrc::Target::jpeg_gainmap})for(bool white:{false,true}) {
+        jxrc::Options o;o.mode=jxrc::Mode::process;o.target=target;o.quality.preset=jxrc::Preset::lossless;
+        o.transparency_background=white?jxrc::TransparencyBackground::white:jxrc::TransparencyBackground::black;
+        const auto name=std::to_string(int(target))+(white?"-white":"-black");
+        const auto jpeg=dir/(name+".jpg"),png=dir/(name+".png");session.convert(jpeg,o);
+        jxrc::Options unpack;unpack.target=jxrc::Target::png;unpack.gain_map_reconstruction=jxrc::GainMapReconstruction::off;
+        jxrc::convert(jpeg,png,unpack);
+        const auto data=bytes(png);const auto decoded=decode_regular(data.data(),data.size());
+        check(decoded.bits==8,"Background JPEG base depth");
+        for(unsigned band=0;band<3;++band) {
+            const float alpha=band*.5f,linear=.25f*alpha+(white?1.f:0.f)*(1.f-alpha);
+            const int expected=linear_to_srgb_u8(linear);
+            const size_t at=(size_t(16)*w+band*32+16)*4;
+            for(unsigned c=0;c<3;++c)check(std::abs(int(decoded.pixels[at+c])-expected)<=3,"JPEG transparency background or linear compositing changed");
+        }
+        const auto fresh=dir/(name+"-fresh.jpg");jxrc::convert(input,fresh,o);
+        check(bytes(fresh)==bytes(jpeg),"Background selection leaked between session outputs");
+    }
+    for(auto target:{jxrc::Target::png,jxrc::Target::png_hdr,jxrc::Target::png_hlg,
+                     jxrc::Target::jxl,jxrc::Target::jxl_linear,jxrc::Target::jxl_scrgb,jxrc::Target::jxl_pq,jxrc::Target::jxl_hlg,
+                     jxrc::Target::avif,jxrc::Target::avif_pq,jxrc::Target::avif_hlg,jxrc::Target::avif_gainmap}) {
+        for(auto background:{jxrc::TransparencyBackground::white,jxrc::TransparencyBackground::black,
+                             jxrc::TransparencyBackground::white_remove_alpha,jxrc::TransparencyBackground::black_remove_alpha}) {
+            const bool remove=background==jxrc::TransparencyBackground::white_remove_alpha||background==jxrc::TransparencyBackground::black_remove_alpha;
+            const bool white=background==jxrc::TransparencyBackground::white||background==jxrc::TransparencyBackground::white_remove_alpha;
+            jxrc::Options o;o.mode=jxrc::Mode::process;o.target=target;o.transparency_background=background;o.quality.preset=jxrc::Preset::lossless;
+            const auto output=dir/("alpha-"+std::to_string(int(target))+"-"+std::to_string(int(background)));
+            session.convert(output,o);const auto encoded=bytes(output);
+            if(remove&&(target==jxrc::Target::png||target==jxrc::Target::jxl||target==jxrc::Target::avif)) {
+                auto preserve=o;preserve.mode=jxrc::Mode::preserve;
+                const auto preserved=dir/(output.filename().string()+"-preserve");jxrc::convert(input,preserved,preserve);
+                check(bytes(preserved)==encoded,"Remove alpha was bypassed in preserve mode");
+            }
+            std::vector<float> decoded;unsigned dw=0,dh=0;uhdr_color_gamut_t gamut;int gain=0,transfer=0;bool hdr=false;
+            if(target==jxrc::Target::png||target==jxrc::Target::png_hdr||target==jxrc::Target::png_hlg) {
+                const auto raster=decode_regular(encoded.data(),encoded.size());regular_to_linear(raster,decoded,gamut);
+                if(remove)check(encoded[25]==2,"PNG remove alpha retained an alpha channel");
+            } else if(target==jxrc::Target::avif||target==jxrc::Target::avif_pq||target==jxrc::Target::avif_hlg||target==jxrc::Target::avif_gainmap) {
+                check(decode_avif_to_linear_f32(encoded.data(),encoded.size(),decoded,dw,dh,&gain,&transfer,&gamut,nullptr)==0,"Background AVIF decode");
+                auto* decoder=avifDecoderCreate();check(decoder!=nullptr,"Background AVIF decoder");
+                check(avifDecoderSetIOMemory(decoder,encoded.data(),encoded.size())==AVIF_RESULT_OK&&avifDecoderParse(decoder)==AVIF_RESULT_OK&&avifDecoderNextImage(decoder)==AVIF_RESULT_OK,"Background AVIF planes");
+                if(remove)check(!decoder->image->alphaPlane,"AVIF remove alpha retained an alpha plane");
+                avifDecoderDestroy(decoder);
+            } else {
+                check(decode_jxl_to_linear_f32(encoded.data(),encoded.size(),decoded,dw,dh,&gamut,&hdr,&transfer,false,nullptr)==0,"Background JXL decode");
+                auto decoder=JxlDecoderMake(nullptr);JxlBasicInfo info{};
+                check(JxlDecoderSubscribeEvents(decoder.get(),JXL_DEC_BASIC_INFO)==JXL_DEC_SUCCESS,"Background JXL events");
+                JxlDecoderSetInput(decoder.get(),encoded.data(),encoded.size());JxlDecoderCloseInput(decoder.get());
+                check(JxlDecoderProcessInput(decoder.get())==JXL_DEC_BASIC_INFO&&JxlDecoderGetBasicInfo(decoder.get(),&info)==JXL_DEC_SUCCESS,"Background JXL alpha info");
+                if(remove)check(!info.alpha_bits&&!info.num_extra_channels,"JXL remove alpha retained an alpha channel");
+            }
+            for(unsigned band=0;band<3;++band) {
+                const size_t at=(size_t(16)*w+band*32+16)*4;const float a=band*.5f;
+                const float expected=remove?.25f*a+(white?1.f:0.f)*(1.f-a):.25f;
+                for(unsigned c=0;c<3;++c)check(std::abs(decoded[at+c]-expected)<.025f,"Transparency background changed color");
+                check(std::abs(decoded[at+3]-(remove?1.f:a))<.002f,"Transparency background changed alpha");
+            }
+        }
+    }
+    // HDR white is SDR reference white (203 nits), independent of the PQ
+    // 10000-nit encoding ceiling and the source's brighter foreground.
+    auto hdrPixels=pixels;for(size_t i=0;i<hdrPixels.size();++i)if(i%4!=3)hdrPixels[i]=4.f;
+    const auto hdrInput=dir/"background-hdr.png";
+    check(encode_png_f32(w,h,hdrPixels.data(),UHDR_CG_BT_709,16,16,hdrInput.string().c_str(),StillEncodeQuality(0))==0,"HDR background fixture");
+    for(auto target:{jxrc::Target::png_hdr,jxrc::Target::png_hlg,jxrc::Target::avif_pq,jxrc::Target::avif_hlg,jxrc::Target::jxl_linear,jxrc::Target::jxl_scrgb}) {
+        jxrc::Options o;o.mode=jxrc::Mode::process;o.target=target;o.quality.preset=jxrc::Preset::lossless;o.transparency_background=jxrc::TransparencyBackground::white_remove_alpha;
+        const auto output=dir/("alpha-hdr-white-"+std::to_string(int(target)));jxrc::convert(hdrInput,output,o);
+        const auto encoded=bytes(output);std::vector<float> decoded;unsigned dw=0,dh=0;uhdr_color_gamut_t gamut;int gain=0,transfer=0;bool hdr=false;
+        if(target==jxrc::Target::png_hdr||target==jxrc::Target::png_hlg)regular_to_linear(decode_regular(encoded.data(),encoded.size()),decoded,gamut);
+        else if(target==jxrc::Target::avif_pq||target==jxrc::Target::avif_hlg)check(decode_avif_to_linear_f32(encoded.data(),encoded.size(),decoded,dw,dh,&gain,&transfer,&gamut,nullptr)==0,"HDR background AVIF decode");
+        else check(decode_jxl_to_linear_f32(encoded.data(),encoded.size(),decoded,dw,dh,&gamut,&hdr,&transfer,false,nullptr)==0,"HDR background JXL decode");
+        for(unsigned band=0;band<3;++band)for(unsigned c=0;c<3;++c) {
+            const float alpha=band*.5f,expected=4.f*alpha+(1.f-alpha);
+            check(std::abs(decoded[(size_t(16)*w+band*32+16)*4+c]-expected)<.025f,"HDR alpha white is not 203 nits");
+        }
+    }
+    // Preserved scRGB JXR uses 80 nits per unit, unlike the 203-nit working
+    // buffer. Its opaque background still needs to decode to 203 nits.
+    const auto xr=dir/"background-scrgb.jxr";
+    {
+        auto require=[](ERR rc){check(!Failed(rc),"Alpha scRGB JXR fixture encode");};
+        std::vector<uint8_t> memory(1024*1024);WMPStream* stream=nullptr;PKImageEncode* encoder=nullptr;
+        require(CreateWS_Memory(&stream,memory.data(),memory.size()));require(PKImageEncode_Create_WMP(&encoder));
+        struct Release {PKImageEncode*& e;~Release(){if(e)e->Release(&e);}} release{encoder};
+        CWMIStrCodecParam parameters{};parameters.cfColorFormat=YUV_444;parameters.bdBitDepth=BD_LONG;parameters.bfBitstreamFormat=SPATIAL;parameters.sbSubband=SB_ALL;
+        parameters.uiDefaultQPIndex=1;parameters.uiDefaultQPIndexAlpha=1;parameters.uAlphaMode=2;
+        require(encoder->Initialize(encoder,stream,&parameters,sizeof(parameters)));
+        require(encoder->SetPixelFormat(encoder,GUID_PKPixelFormat64bppRGBAHalf));require(encoder->SetSize(encoder,w,h));require(encoder->SetResolution(encoder,96,96));
+        std::vector<uint16_t> half(pixels.size());std::transform(pixels.begin(),pixels.end(),half.begin(),float_to_half);
+        require(encoder->WritePixels(encoder,h,reinterpret_cast<U8*>(half.data()),w*8));
+        const auto length=std::max(size_t(encoder->WMP.nOffImage)+size_t(encoder->WMP.nCbImage),size_t(encoder->WMP.nOffAlpha)+size_t(encoder->WMP.nCbAlpha));
+        memory.resize(length);write(xr,memory);
+    }
+    const auto xrBytes=bytes(xr);std::vector<float> xrPixels;unsigned xw=0,xh=0;bool halfSource=false;
+    check(decode_jxr_scrgb(xrBytes.data(),xrBytes.size(),xrPixels,xw,xh,halfSource)&&halfSource,"Alpha scRGB fixture decode");
+    for(auto mode:{jxrc::Mode::preserve,jxrc::Mode::process}) {
+        jxrc::Options o;o.mode=mode;o.target=jxrc::Target::jxl_linear;o.convert_gamut=false;o.quality.preset=jxrc::Preset::lossless;o.transparency_background=jxrc::TransparencyBackground::white_remove_alpha;
+        const auto output=dir/("alpha-scrgb-white-"+std::to_string(int(mode))+".jxl");jxrc::convert(xr,output,o);
+        const auto encoded=bytes(output);std::vector<float> decoded;unsigned dw=0,dh=0;uhdr_color_gamut_t gamut;bool hdr=false;int transfer=0;
+        check(decode_jxl_to_linear_f32(encoded.data(),encoded.size(),decoded,dw,dh,&gamut,&hdr,&transfer,false,nullptr)==0,"Alpha scRGB result decode");
+        for(size_t i=0;i<decoded.size();i+=4)for(unsigned c=0;c<3;++c) {
+            const float alpha=xrPixels[i+3],expected=xrPixels[i+c]*80.f/203.f*alpha+1.f-alpha;
+            check(std::abs(decoded[i+c]-expected)<.001f,"scRGB alpha white is not 203 nits");
+        }
+    }
+    // Removing alpha from an existing gain map needs both renditions rebuilt.
+    const auto gainSource=dir/("alpha-"+std::to_string(int(jxrc::Target::avif_gainmap))+"-"+std::to_string(int(jxrc::TransparencyBackground::white)));
+    jxrc::Options rebuild;rebuild.mode=jxrc::Mode::process;rebuild.target=jxrc::Target::avif_gainmap;
+    rebuild.transparency_background=jxrc::TransparencyBackground::white_remove_alpha;
+    fails([&]{jxrc::convert(gainSource,dir/"remove-gain-auto.avif",rebuild);});
+    rebuild.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;
+    jxrc::convert(gainSource,dir/"remove-gain-full.avif",rebuild);
+    const auto rebuilt=bytes(dir/"remove-gain-full.avif");std::vector<float> full;unsigned fw=0,fh=0;int gain=0,transfer=0;uhdr_color_gamut_t gamut;
+    check(decode_avif_to_linear_f32(rebuilt.data(),rebuilt.size(),full,fw,fh,&gain,&transfer,&gamut,nullptr)==0&&gain,"Removed gain-map alpha decode");
+    for(size_t i=3;i<full.size();i+=4)check(full[i]==1.f,"Reconstructed gain-map alpha was retained");
+    jxrc::Options invalid;invalid.transparency_background=static_cast<jxrc::TransparencyBackground>(4);
+    fails([&]{jxrc::validate(invalid);});
+}
+
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
@@ -1177,6 +1334,7 @@ int main(int argc,char** argv) try {
     if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--transparency") {transparency_background(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--raw-auto-exposure") {raw_auto_exposure(dir);std::cout<<"RAW auto exposure tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}
@@ -1189,6 +1347,7 @@ int main(int argc,char** argv) try {
     std::memcpy(avif_header.data()+8,"mif1",4);
     check(is_avif_input(avif_header.data(),avif_header.size()),"AVIF compatible brand rejected");
     check(!is_avif_input(cr3_header.data(),8),"Truncated BMFF identified as AVIF");
+    transparency_background(dir);
     srgb_clamping(dir);
     shared_render(dir);shared_output_analysis(dir);
     signed_float_jxl(dir);

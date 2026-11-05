@@ -27,6 +27,21 @@ using Decoder = std::unique_ptr<avifDecoder, decltype(&avifDecoderDestroy)>;
 using Uhdr = std::unique_ptr<uhdr_codec_private_t, void (*)(uhdr_codec_private_t*)>;
 constexpr unsigned kLimit = 80000000;
 bool ok(uhdr_error_info_t e) { return e.error_code == UHDR_CODEC_OK; }
+// Source decoders expose RGBA even for inputs without alpha. Inspect only the
+// alpha samples, retaining integer codes and custom ICC profiles when opaque.
+bool opaque_rgba(const void* pixels,size_t count,unsigned bits,bool floating=false) {
+    const auto* data=static_cast<const uint8_t*>(pixels);
+    const unsigned bytes=bits>16?4:bits>8?2:1;
+    for(size_t i=0;i<count;++i) {
+        const auto* p=data+(i*4+3)*bytes;
+        if(bytes==1) {if(*p!=255)return false;}
+        else if(bytes==2) {
+            uint16_t v;std::memcpy(&v,p,2);
+            if(floating?!(half_to_float(v)>=1.f):v!=65535)return false;
+        } else {float v;std::memcpy(&v,p,4);if(!(v>=1.f))return false;}
+    }
+    return true;
+}
 
 // Original EXIF orientation remains structural even when photographic EXIF is disabled.
 unsigned orientation(const uint8_t* data, size_t size) {
@@ -235,6 +250,11 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
         }
     }
     if(!complete)return Image(nullptr,avifImageDestroy);
+    if(quality.remove_alpha&&info.alpha_bits&&!opaque_rgba(pixels.data(),size_t(info.xsize)*info.ysize,
+        format.data_type==JXL_TYPE_UINT8?8:format.data_type==JXL_TYPE_FLOAT?32:16,
+        format.data_type==JXL_TYPE_FLOAT||format.data_type==JXL_TYPE_FLOAT16)) {
+        encoded_result=-97;return Image(nullptr,avifImageDestroy);
+    }
     int p=2,t=2;
     if(structured) {
         p=color.primaries==JXL_PRIMARIES_P3?(color.white_point==JXL_WHITE_POINT_DCI?11:12):static_cast<int>(color.primaries);
@@ -567,6 +587,10 @@ int write_gainmap_jpeg(avifImage* image,const char* path,StillEncodeQuality qual
 int write_source(avifImage* image,int target,const char* path,StillEncodeQuality quality,int* info,
                  const uint8_t* original_map=nullptr,size_t original_map_size=0,bool keep_exif=true) {
     if(!image)return -80;
+    if(quality.remove_alpha) {
+        if(!opaque_alpha(image))return -97; // Actual transparency needs linear compositing.
+        avifImageFreePlanes(image,AVIF_PLANES_A);
+    }
     const bool gain=image->gainMap && image->gainMap->image;
     if(gain && target==3)return -96;
     info[0]=image->width;info[1]=image->height;info[2]=gain && target!=1;info[3]=image->transferCharacteristics;
@@ -810,6 +834,7 @@ std::vector<uint8_t> source_jpeg_icc(const uint8_t* data,size_t size) { return j
 
 int convert_regular_source(const RegularImage& raster, int target, const char* path,
                            StillEncodeQuality quality, bool keep_exif, int* info) {
+    if(quality.remove_alpha&&!opaque_rgba(raster.pixels.data(),size_t(raster.width)*raster.height,raster.bits))return -97;
     std::vector<uint8_t> exif=keep_exif?raster.exif:std::vector<uint8_t>{};
     if(exif.empty())exif=orientation_exif(raster.orientation);
     quality.exif=exif.data();quality.exif_size=exif.size();
