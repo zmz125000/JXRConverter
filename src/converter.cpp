@@ -168,6 +168,7 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
 }
 }
 void validate(const Options& o) {
+    range(static_cast<int>(o.gain_map_reconstruction),0,2,"gain map reconstruction");
     range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,13,"target");
     range(static_cast<int>(o.quality.preset),0,4,"preset");
     range(o.quality.jxl_distance,0,3,"JXL distance");range(o.quality.codec_quality,1,100,"codec quality");
@@ -236,6 +237,14 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     const auto path=stage.file.u8string();
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
     q.png_bits=o.quality.png_depth;q.png_auto_bits=o.quality.auto_bit_depth;
+    q.gain_map_reconstruction=static_cast<int>(o.gain_map_reconstruction);
+    const bool full_gainmap=cache.gainmap&&o.gain_map_reconstruction==GainMapReconstruction::full_image;
+    if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
+    if(cache.gainmap&&!full_gainmap) {
+        const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
+        require(source_target&&!o.exposure&&!o.max_edge&&!o.srgb_clamp,
+            "Select Full gain-map reconstruction for HDR target conversion or pixel processing of a gain-map source");
+    }
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
@@ -246,20 +255,19 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         } else direct_sdr=cache.integer_sdr;
     }
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
-    // Plain JPEG/AVIF targets keep an existing SDR base and gain map when
-    // no pixel edit is requested, independently of the selected process mode.
-    const bool direct_gainmap=cache.gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp &&
-        (o.target==Target::jpeg||o.target==Target::avif);
+    // Off/Auto export the stored base to SDR/source targets, retaining an
+    // existing map in JPEG/AVIF. Full renders HDR before encoding any target.
+    const bool direct_gainmap=cache.gainmap && !full_gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp;
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
     bool source_done=false;
-    if(direct_sdr || direct_gainmap || direct_jxl || (o.mode==Mode::preserve && format!=4)) {
+    if(direct_sdr || direct_gainmap || direct_jxl || (o.mode==Mode::preserve && format!=4&&!full_gainmap)) {
         require(format==0||format==1||format==3||format==6||format==7,"Source preservation supports JPEG, AVIF, HEIC, JXL and regular raster images; use --mode process for RAW/JXR");
         int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:o.target==Target::png?3:2;
         int rc=0;
-        if(o.jpeg_transcoding && format==0) {
+        if(o.jpeg_transcoding && format==0&&!cache.gainmap) {
             require(is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))!=1,"JPEG coefficient transcoding cannot retain a gain map");
             ultrahdr::JpegDecoderHelper parser;
             require(parser.parseImage(bytes.data(),bytes.size()).error_code==UHDR_CODEC_OK,"JPEG header parse failed");

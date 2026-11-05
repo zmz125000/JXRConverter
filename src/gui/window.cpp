@@ -415,7 +415,7 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,
+    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
@@ -473,7 +473,14 @@ QWidget* MainWindow::buildControls() {
     auto* allTargets=new QPushButton("All");allTargets->setObjectName("allTargets");allTargets->setToolTip("Select all output formats available in the current conversion mode.");targetActions->addWidget(allTargets);
     connect(clearTargets,&QPushButton::clicked,this,[this]{const QSignalBlocker blocker(targets_);for(int i=0;i<targets_->count();++i)targets_->item(i)->setCheckState(Qt::Unchecked);updateMode();});
     connect(allTargets,&QPushButton::clicked,this,[this]{const QSignalBlocker blocker(targets_);for(int i=0;i<targets_->count();++i){auto* item=targets_->item(i);if(item->flags()&Qt::ItemIsEnabled)item->setCheckState(Qt::Checked);}updateMode();});
-    outputFormatsLayout->addLayout(targetActions);layout->addWidget(outputFormats);
+    outputFormatsLayout->addLayout(targetActions);
+    exif_=check("Keep EXIF","keepExif",true);exif_->setToolTip("Retain photographic EXIF, including camera, capture date, exposure and GPS, when present. Processed exports update orientation and dimensions; source raster offsets, thumbnails and maker notes are excluded.");transcode_=check("JXL lossless JPEG transcoding","jpegTranscoding");
+    transcode_->setToolTip("Store eligible SDR JPEG coefficients directly in JXL without RGB decoding or additional image loss. Ignores the quality preset for these JPEGs; other inputs use their normal conversion path. Exposure or resizing disables transcoding. Enable Keep EXIF to allow original JPEG byte reconstruction.");
+    outputFormatsLayout->addWidget(exif_);outputFormatsLayout->addWidget(transcode_);
+    reconstruction_=combo({"Off","Auto","Full"},"gainMapReconstruction");reconstruction_->setCurrentIndex(1);
+    reconstruction_->setToolTip("For gain-map inputs: Off transfers the source base/map; Auto repairs the gain map for SDR/source outputs; Full reconstructs the complete image in F32 for any output target. Non-gain-map inputs are unaffected. Full requires Process pixels mode.");
+    auto* reconstructionForm=new QFormLayout;reconstructionForm->addRow("Gain map reconstruction",reconstruction_);outputFormatsLayout->addLayout(reconstructionForm);
+    layout->addWidget(outputFormats);
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
     custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit","8 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
@@ -481,9 +488,6 @@ QWidget* MainWindow::buildControls() {
     auto* pngGroup=new QGroupBox("PNG options");auto* pngForm=new QFormLayout(pngGroup);autoBitDepth_=check("Auto bit depth","autoBitDepth",true);pngDepth_=combo({"8 bit","16 bit"},"pngDepth");pngDepth_->setCurrentIndex(1);pngForm->addRow(autoBitDepth_);pngForm->addRow("PNG bit depth",pngDepth_);layout->addWidget(pngGroup);
     connect(autoBitDepth_,&QCheckBox::toggled,this,[this](bool automatic){pngDepth_->setEnabled(!automatic);});pngDepth_->setEnabled(!autoBitDepth_->isChecked());
     autoBitDepth_->setToolTip("PNG uses 8 bits for 8-bit sources and 16 bits for deeper sources. Disable to choose PNG depth directly. Independent of quality presets.");
-    exif_=check("Keep EXIF","keepExif",true);exif_->setToolTip("Retain photographic EXIF, including camera, capture date, exposure and GPS, when present. Processed exports update orientation and dimensions; source raster offsets, thumbnails and maker notes are excluded.");transcode_=check("JXL lossless JPEG transcoding","jpegTranscoding");
-    transcode_->setToolTip("Store eligible SDR JPEG coefficients directly in JXL without RGB decoding or additional image loss. Ignores the quality preset for these JPEGs; other inputs use their normal conversion path. Exposure or resizing disables transcoding. Enable Keep EXIF to allow original JPEG byte reconstruction.");
-    layout->addWidget(exif_);layout->addWidget(transcode_);
     processing_=new QGroupBox("Pixel processing");auto* processingForm=new QFormLayout(processing_);exposure_=real(-3,3,0,0.1,"exposure");exposure_->setSuffix(" EV");
     exposure_->setToolTip("0 EV leaves exposure unchanged. −3 EV multiplies linear RGB by 1/8; +3 EV multiplies it by 8. For RAW gain-map output, use Custom RAW exposure instead.");
     maxEdge_=spin(0,65535,0,"maxEdge");maxEdge_->setSpecialValueText("Original size");bt2020_=check("Extended BT.2020 · JXL decoding","extendedBt2020",true);
@@ -600,7 +604,7 @@ Options MainWindow::options() const {
     return optionsForTarget(targets.first());
 }
 Options MainWindow::optionsForTarget(Target target) const {
-    Options o;o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=target;o.quality.preset=Preset(preset_->currentIndex());
+    Options o;o.gain_map_reconstruction=GainMapReconstruction(reconstruction_->currentIndex());o.mode=mode_->currentIndex()?Mode::process:Mode::preserve;o.target=target;o.quality.preset=Preset(preset_->currentIndex());
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()==0?10:avifDepth_->currentIndex()==1?12:8;o.quality.downsize_gainmap=downsize_->isChecked();o.quality.auto_bit_depth=autoBitDepth_->isChecked();o.quality.png_depth=pngDepth_->currentIndex()?16:8;
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isChecked()&&target==Target::jxl&&(o.mode==Mode::preserve||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     if(o.mode==Mode::process) {
@@ -983,10 +987,19 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         QMap<int,QStringList> inputsByTarget;
         const bool needsHdr=std::any_of(targets.cbegin(),targets.cend(),[](Target target){return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png;});
+        QHash<QString,bool> knownGainMaps;
+        if(needsHdr)for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.inspected&&!record.transfer.isEmpty())knownGainMaps.insert(record.path,record.gainmap);}
         for(const auto& path:paths) {
-            const bool hdrGroup=!needsHdr||exactTargets||hdrInput(path);
+            const bool gainMap=needsHdr&&(knownGainMaps.contains(path)?knownGainMaps.value(path):gainMapInput(path));
+            const bool hdrGroup=!needsHdr||exactTargets||gainMap||hdrInput(path);
             for(auto target:targets) {
                 const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap||target==Target::png_hdr||target==Target::png_hlg||target==Target::jxl_hlg||target==Target::avif_hlg;
+                if(hdrTarget&&gainMap&&reconstruction_->currentIndex()!=int(GainMapReconstruction::full_image)) {
+                    if(target==Target::jpeg_gainmap)target=Target::jpeg;
+                    else if(target==Target::png_hdr||target==Target::png_hlg)target=Target::png;
+                    else if(target==Target::avif_pq||target==Target::avif_gainmap||target==Target::avif_hlg)target=Target::avif;
+                    else target=Target::jxl;
+                }
                 if(hdrTarget&&!hdrGroup&&!exactTargets) {
                     if(!acceptSdr_->isChecked())continue;
                     if(target==Target::jpeg_gainmap)target=Target::jpeg;

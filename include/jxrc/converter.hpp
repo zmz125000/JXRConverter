@@ -9,6 +9,7 @@
 
 namespace jxrc {
 enum class Mode { preserve, process };
+enum class GainMapReconstruction { off, automatic, full_image };
 // Append targets to retain saved GUI target identifiers.
 enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg };
 enum class Preset { lossless, high, medium, low, custom };
@@ -50,6 +51,9 @@ struct Options {
     bool srgb_clamp = false; // Process mode: constrain output gamut to sRGB/BT.709; retain HDR transfer/headroom.
     bool extended_bt2020 = true;
     bool convert_gamut = true; // Process mode: convert scRGB to BT.2020 for wider viewer compatibility.
+    // Gain-map inputs only: transfer source, repair source, or reconstruct F32.
+    // Ordinary SDR/HDR sources keep their normal conversion behavior.
+    GainMapReconstruction gain_map_reconstruction = GainMapReconstruction::automatic;
 };
 struct Result {
     unsigned width = 0, height = 0;

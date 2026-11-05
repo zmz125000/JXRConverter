@@ -71,6 +71,10 @@ bool hdrInput(const QString& path) {
     static const QSet<QString> sdrExtensions={"jpg","jpeg","jpe","avif","heic","heif","hif","webp","tif","tiff","bmp","gif"};
     return !sdrExtensions.contains(extension);
 }
+bool gainMapInput(const QString& path) {
+    static const QSet<QString> formats={"jpg","jpeg","jpe","avif","heic","heif","hif"};
+    return formats.contains(QFileInfo(path).suffix().toLower())&&inspect(nativePath(path)).gainmap;
+}
 int coreCount() { return std::max(1,QThread::idealThreadCount()); }
 int recommendedWorkers(int cores) {
     return std::max(1,cores/4);

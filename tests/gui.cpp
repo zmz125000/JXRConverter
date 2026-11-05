@@ -182,6 +182,36 @@ private slots:
         const auto avifRecord=readMetadata(avif);QCOMPARE(avifRecord.width,128);QCOMPARE(avifRecord.format,QString("AVIF"));
         const auto nativeThumbnail=readThumbnail(avif,40);QVERIFY(!nativeThumbnail.isNull());QCOMPARE(nativeThumbnail.width(),40);
     }
+    void gainMapReconstructionControls() {
+        appSettings().clear();
+        {
+            MainWindow window;window.show();auto* group=window.findChild<QGroupBox*>("outputFormats");
+            auto* exif=window.findChild<QCheckBox*>("keepExif");auto* transcode=window.findChild<QCheckBox*>("jpegTranscoding");auto* reconstruction=window.findChild<QComboBox*>("gainMapReconstruction");
+            QVERIFY(group&&exif&&transcode&&reconstruction);QCOMPARE(exif->parentWidget(),group);QCOMPARE(transcode->parentWidget(),group);QCOMPARE(reconstruction->parentWidget(),group);
+            QCOMPARE(reconstruction->count(),3);QCOMPARE(reconstruction->itemText(0),QString("Off"));QCOMPARE(reconstruction->itemText(1),QString("Auto"));QCOMPARE(reconstruction->itemText(2),QString("Full"));QCOMPARE(reconstruction->currentIndex(),1);
+            QVERIFY(group->layout()->indexOf(exif)>group->layout()->indexOf(window.findChild<QListWidget*>("conversionTargets")));QVERIFY(group->layout()->indexOf(transcode)>group->layout()->indexOf(exif));
+            reconstruction->setCurrentIndex(2);QCOMPARE(window.options().gain_map_reconstruction,jxrc::GainMapReconstruction::full_image);
+            window.findChild<QComboBox*>("qualityPreset")->setCurrentIndex(0);QCOMPARE(reconstruction->currentIndex(),2);
+        }
+        {MainWindow restored;QCOMPARE(restored.findChild<QComboBox*>("gainMapReconstruction")->currentIndex(),2);}
+        appSettings().clear();
+        const auto directory=root("reconstruction-input"),photo=makeImage(directory,"ordinary.jpg",32,24,100);
+        jxrc::Options create;create.mode=jxrc::Mode::process;create.target=jxrc::Target::avif_gainmap;
+        const auto gain=directory+"/gain.avif";jxrc::convert(std::filesystem::u8path(photo.toStdString()),std::filesystem::u8path(gain.toStdString()),create);QVERIFY(gainMapInput(gain));
+        create.target=jxrc::Target::png_hdr;const auto ordinaryHdr=directory+"/nongain.png";jxrc::convert(std::filesystem::u8path(photo.toStdString()),std::filesystem::u8path(ordinaryHdr.toStdString()),create);
+        MainWindow window;window.show();window.addPaths({photo,gain,ordinaryHdr});QTRY_COMPARE(window.catalog()->rowCount(),3);
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==int(jxrc::Target::avif_pq)?Qt::Checked:Qt::Unchecked);
+        auto* reconstruction=window.findChild<QComboBox*>("gainMapReconstruction");auto* accept=window.findChild<QCheckBox*>("acceptSdr");QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);int batches=0;
+        for(int policy=0;policy<3;++policy)for(bool allow:{false,true}) {
+            const auto output=root("reconstruction-output")+QString("-%1-%2").arg(policy).arg(allow?"allow":"hdr");
+            reconstruction->setCurrentIndex(policy);accept->setChecked(allow);window.findChild<QLineEdit*>("outputDirectory")->setText(output);
+            window.findChild<QPushButton*>("convertVisible")->click();++batches;QTRY_COMPARE(done.count(),batches);QCOMPARE(done.last()[1].toInt(),0);QCOMPARE(window.queue()->total(),allow?3:2);
+            const auto gainOutput=output+(policy==2?"/gain_high_pq.avif":"/gain_high_sdr.avif");QVERIFY(QFileInfo::exists(gainOutput));
+            const auto gainInfo=jxrc::inspect(std::filesystem::u8path(gainOutput.toStdString()));QCOMPARE(gainInfo.gainmap,policy!=2);if(policy==2)QCOMPARE(gainInfo.transfer,std::string("PQ"));
+            const auto nongainInfo=jxrc::inspect(std::filesystem::u8path((output+"/nongain_high_pq.avif").toStdString()));QCOMPARE(nongainInfo.transfer,std::string("PQ"));
+            QCOMPARE(QFileInfo::exists(output+"/ordinary_high_sdr.avif"),allow);
+        }
+    }
     void pngThumbnailFallback() {
         const auto path=root("preview-only.png");QImage image(96,48,QImage::Format_RGBA8888);image.fill(QColor(180,95,45));QVERIFY(image.save(path,"PNG"));
         QFile file(path);QVERIFY(file.open(QIODevice::ReadOnly));auto bytes=file.readAll();file.close();

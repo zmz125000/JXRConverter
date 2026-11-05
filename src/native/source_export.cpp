@@ -579,13 +579,21 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
     if(target==2) {
         // Equivalent ICCs can use CICP; custom ICCs remain intact in the ISO container.
         gain_map_cicp(image);
-        if(image->gainMap && (image->gainMap->image->yuvFormat!=AVIF_PIXEL_FORMAT_YUV444||
+        const bool repair=quality.gain_map_reconstruction!=0;
+        if(image->gainMap && ((repair&&image->gainMap->image->yuvFormat!=AVIF_PIXEL_FORMAT_YUV444)||
             (!quality.avif_lossless()&&image->gainMap->image->matrixCoefficients==AVIF_MATRIX_COEFFICIENTS_IDENTITY))) {
-            auto* map=image->gainMap->image;std::vector<float> codes;unsigned w=0,h=0;
-            if(!decode_gain_map_f32(image->gainMap,codes,w,h))return -91;
-            std::vector<uint16_t> rgb(size_t(w)*h*4,65535);
-            for(size_t i=0;i<size_t(w)*h;++i)for(unsigned c=0;c<3;++c)rgb[i*4+c]=uint16_t(std::lround(codes[i*3+c]*65535.f));
-            auto packed=from_rgb(w,h,rgb.data(),true,map->depth,2,2,quality,true);
+            auto* map=image->gainMap->image;Image packed(nullptr,avifImageDestroy);
+            if(repair) {
+                std::vector<float> codes;unsigned w=0,h=0;
+                if(!decode_gain_map_f32(image->gainMap,codes,w,h))return -91;
+                std::vector<uint16_t> rgb(size_t(w)*h*4,65535);
+                for(size_t i=0;i<size_t(w)*h;++i)for(unsigned c=0;c<3;++c)rgb[i*4+c]=uint16_t(std::lround(codes[i*3+c]*65535.f));
+                packed=from_rgb(w,h,rgb.data(),true,map->depth,2,2,quality,true);
+            } else {
+                std::vector<uint8_t> rgb;const bool sixteen=map->depth>8;
+                if(!rgb_pixels(map,sixteen?16:8,rgb))return -91;
+                packed=from_rgb(map->width,map->height,rgb.data(),sixteen,map->depth,2,2,quality,true);
+            }
             if(!packed)return -91;
             image->gainMap->image=packed.release();avifImageDestroy(map);
         }
@@ -685,7 +693,6 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         auto parsed=avifDecoderParse(decoder.get());
         if(parsed!=AVIF_RESULT_OK) {decoder->ignoreExif=AVIF_TRUE;parsed=avifDecoderParse(decoder.get());}
         if(parsed!=AVIF_RESULT_OK)return -92;
-        if((target==1||target==3) && decoder->image->gainMap)return -96;
         if(target==0 && !decoder->image->gainMap &&
            (decoder->image->transferCharacteristics==16 || decoder->image->transferCharacteristics==18))return 0;
         if(avifDecoderNextImage(decoder.get())!=AVIF_RESULT_OK)return -93;
@@ -695,7 +702,6 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         jpeg.reset(uhdr_create_decoder());if(!jpeg)return -80;
         uhdr_compressed_image_t source{const_cast<uint8_t*>(data),size_t(size),size_t(size),UHDR_CG_UNSPECIFIED,UHDR_CT_UNSPECIFIED,UHDR_CR_FULL_RANGE};
         const bool gain=ok(uhdr_dec_set_image(jpeg.get(),&source)) && ok(uhdr_dec_probe(jpeg.get()));
-        if(gain && (target==1||target==3))return -96;
         const auto* base=gain?uhdr_dec_get_base_image(jpeg.get()):nullptr;
         if(target==1 || target==3 || (target==0&&!gain)) {
             int info[5]{};
@@ -724,7 +730,6 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         }
     } else if(kind==7) {
         image=decode_heif_avif(data,size,0,&original_map,&original_map_size);
-        if((target==1||target==3)&&image->gainMap)return -96;
         if(image->exif.size)exif.assign(image->exif.data,image->exif.data+image->exif.size);
     } else if(kind==3) {
         bool unsupported=false;
@@ -738,6 +743,11 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         if(!exif.empty() && avifGetExifOrientationOffset(exif.data(),exif.size(),&offset)==AVIF_RESULT_OK && offset<exif.size())exif[offset]=1;
     } else return 0;
     avifImage* source_image=decoded_image?decoded_image:image.get();
+    if((target==1||target==3)&&source_image->gainMap&&quality.gain_map_reconstruction!=2) {
+        // These SDR/source formats cannot carry an ISO gain map. Off/Auto
+        // deliberately export the stored base; Full uses the F32 render path.
+        avifGainMapDestroy(source_image->gainMap);source_image->gainMap=nullptr;
+    }
     if(target==2&&(kind==7||(!quality.avif_lossless()&&source_image->matrixCoefficients==AVIF_MATRIX_COEFFICIENTS_IDENTITY))) {
         // HEIF decoding uses lossless identity RGB packing internally. Apply
         // the requested AVIF packing here, not lossy AV1 to those RGB planes.

@@ -21,6 +21,7 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
   --jpeg-transcoding           Lossless JPEG coefficients to SDR JXL (no pixel edits)
   --threads 0..65535            Per-conversion CPU budget; 0 = automatic
   --keep-exif                   Keep source EXIF where supported
+  --gain-map-reconstruction off|auto|full    Default: auto; Full enables HDR conversion of gain-map sources
   --overwrite                   Replace existing output after successful encoding
 Processing controls (PQ/HLG targets require process mode):
   HLG uses the BT.2100 1000-nit reference display (gamma 1.2).
@@ -79,6 +80,7 @@ int run(int argc,char** argv) {
         else if(arg=="--jpeg-transcoding")o.jpeg_transcoding=true;
         else if(arg=="--threads"){int n=integer(value());if(n<0)throw std::invalid_argument("threads must be nonnegative");o.threads=unsigned(n);}
         else if(arg=="--keep-exif")o.keep_exif=true;
+        else if(arg=="--gain-map-reconstruction")o.gain_map_reconstruction=choice<jxrc::GainMapReconstruction>(value(),{{"off",jxrc::GainMapReconstruction::off},{"auto",jxrc::GainMapReconstruction::automatic},{"full",jxrc::GainMapReconstruction::full_image}});
         else if(arg=="--overwrite")o.overwrite=true;
         else if(arg=="--srgb-clamp")o.srgb_clamp=true;
         else if(arg=="--convert-gamut")o.convert_gamut=true;

@@ -139,7 +139,34 @@ void gain_map_f32_tests(const std::filesystem::path& dir) {
     check(avifDecoderSetIOFile(after.get(),repaired.string().c_str())==AVIF_RESULT_OK&&avifDecoderParse(after.get())==AVIF_RESULT_OK,"Fast repair output parse");
     check(after->image->matrixCoefficients==AVIF_MATRIX_COEFFICIENTS_BT709&&after->image->gainMap->image->matrixCoefficients==AVIF_MATRIX_COEFFICIENTS_BT709,"Lossy base/gain identity packing was retained");
     check(avifSameGainMapMetadata(before->image->gainMap,after->image->gainMap),"Fast repair modified gain-map math");
-    jxrc::ConversionSession session(source);jxrc::Options options;options.mode=jxrc::Mode::process;options.quality.preset=jxrc::Preset::lossless;
+    std::vector<uint8_t> storedBase;
+    for(auto reconstruction:{jxrc::GainMapReconstruction::off,jxrc::GainMapReconstruction::automatic,jxrc::GainMapReconstruction::full_image}) {
+        jxrc::Options policy;policy.mode=jxrc::Mode::process;policy.gain_map_reconstruction=reconstruction;policy.target=jxrc::Target::png;policy.quality.preset=jxrc::Preset::lossless;
+        const auto png=dir/("gain-policy-"+std::to_string(int(reconstruction))+".png");jxrc::convert(source,png,policy);
+        if(reconstruction==jxrc::GainMapReconstruction::off)storedBase=read(png);
+        else if(reconstruction==jxrc::GainMapReconstruction::automatic)check(read(png)==storedBase,"Auto reconstructed the full image for a source target");
+        else check(read(png)!=storedBase,"Full failed to reconstruct for an SDR output target");
+        for(auto target:{jxrc::Target::jpeg,jxrc::Target::avif}) {
+            policy.target=target;const auto output=dir/("gain-policy-"+std::to_string(int(reconstruction))+"-"+std::to_string(int(target)));
+            jxrc::convert(source,output,policy);check(jxrc::inspect(output).gainmap==(reconstruction!=jxrc::GainMapReconstruction::full_image),"Source/Full gain-map routing");
+        }
+        policy.target=jxrc::Target::avif_pq;
+        if(reconstruction!=jxrc::GainMapReconstruction::full_image) {
+            bool rejected=false;try{jxrc::convert(source,dir/("forbidden-pq-"+std::to_string(int(reconstruction))),policy);}catch(const std::exception& e){rejected=std::string(e.what()).find("Full gain-map reconstruction")!=std::string::npos;}
+            check(rejected,"Off/Auto silently reconstructed a full HDR gain-map source");
+        }
+    }
+    // This control is exclusively for gain-map inputs. Ordinary HDR sources
+    // still take their normal processing path with any of the three settings.
+    const auto ordinaryHdr=dir/"ordinary-hdr.jxl";
+    check(encode_jxl_f32(16,12,input.data(),UHDR_CG_DISPLAY_P3,true,ordinaryHdr.string().c_str(),StillEncodeQuality(0),false)==0,"Non-gain-map HDR fixture");
+    std::vector<uint8_t> ordinaryReference;
+    for(auto reconstruction:{jxrc::GainMapReconstruction::off,jxrc::GainMapReconstruction::automatic,jxrc::GainMapReconstruction::full_image}) {
+        jxrc::Options policy;policy.mode=jxrc::Mode::process;policy.target=jxrc::Target::png_hdr;policy.gain_map_reconstruction=reconstruction;
+        const auto output=dir/("ordinary-policy-"+std::to_string(int(reconstruction))+".png");jxrc::convert(ordinaryHdr,output,policy);
+        if(ordinaryReference.empty())ordinaryReference=read(output);else check(read(output)==ordinaryReference,"Gain-map policy changed a non-gain-map HDR source");
+    }
+    jxrc::ConversionSession session(source);jxrc::Options options;options.mode=jxrc::Mode::process;options.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;options.quality.preset=jxrc::Preset::lossless;
     for(auto target:{jxrc::Target::jxl_linear,jxrc::Target::avif_gainmap,jxrc::Target::jxl_pq,jxrc::Target::png_hdr,jxrc::Target::png_hlg,jxrc::Target::jxl_hlg,jxrc::Target::avif_hlg}) {
         options.target=target;const auto shared=dir/("gain-shared-"+std::to_string(int(target))),independent=dir/("gain-independent-"+std::to_string(int(target)));
         session.convert(shared,options);jxrc::convert(source,independent,options);
@@ -154,6 +181,6 @@ void gain_map_f32_tests(const std::filesystem::path& dir) {
     check(encode_still_export_f32(input.data(),16,12,1,1,jpeg.string().c_str(),StillEncodeQuality(0),originalSdr.data())==0,"JPEG gain fixture");
     const auto jpegBytes=read(jpeg);auto jpegSource=decode_jpeg_gain_map(jpegBytes.data(),jpegBytes.size());
     check(bool(jpegSource)&&reconstruct_gain_map_f32(jpegSource.get(),hdr,gamut,&sdr)&&hdr.size()==input.size()&&sdr.size()==input.size(),"JPEG gain-map F32 reconstruction");
-    jxrc::Options jpegOptions;jpegOptions.mode=jxrc::Mode::process;jpegOptions.target=jxrc::Target::jxl_linear;
+    jxrc::Options jpegOptions;jpegOptions.mode=jxrc::Mode::process;jpegOptions.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;jpegOptions.target=jxrc::Target::jxl_linear;
     jxrc::convert(jpeg,dir/"jpeg-gain-f32.jxl",jpegOptions);
 }

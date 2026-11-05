@@ -823,7 +823,7 @@ static void png_outputs(const fs::path& dir) {
         check(png.icc==icc&&png.pixels==directPng.pixels,"Direct JXL/AVIF to PNG changed source ICC or codes");
     }
     const auto heic=dir/"png-source.heic";write(heic,heic_sdr_fixture);jxrc::convert(heic,dir/"png-from-heic.png",o);
-    const auto gain=dir/"png-source-gain.jpg";encode(gain,1);fails([&]{jxrc::convert(gain,dir/"png-lost-gain.png",o);});
+    const auto gain=dir/"png-source-gain.jpg";encode(gain,1);jxrc::convert(gain,dir/"png-source-base.png",o);check(!jxrc::inspect(dir/"png-source-base.png").hdr,"Auto source PNG must export the stored SDR base");
     const auto linear=dir/"png-source-linear.jxl";encode(linear,3);fails([&]{jxrc::convert(linear,dir/"png-clipped-linear.png",o);});
     o.mode=jxrc::Mode::process;o.max_edge=32;jxrc::convert(linear,dir/"png-rendered-linear.png",o);
 }
@@ -1165,7 +1165,7 @@ static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
         options.mode=jxrc::Mode::process;const auto automatic=jxrc::convert(input,processed,options);
         check(automatic.gainmap==result.gainmap&&bytes(processed)==bytes(preserved),"HEIC automatic source export changed the base/map");
     }
-    jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl_linear;options.exposure=1;
+    jxrc::Options options;options.mode=jxrc::Mode::process;options.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;options.target=jxrc::Target::jxl_linear;options.exposure=1;
     jxrc::convert(apple,dir/"apple-rendered.jxl",options);check(jxrc::inspect(dir/"apple-rendered.jxl").hdr,"HEIC float32 pixel-processing path");
 }
 
@@ -1201,7 +1201,7 @@ int main(int argc,char** argv) try {
     for(int mode=0;mode<8;++mode) {
         const auto source=dir/("fixture"+std::to_string(mode));encode(source,mode,mode!=0&&mode!=2&&mode!=4);
         for(auto target:{jxrc::Target::jpeg,jxrc::Target::jpeg_gainmap,jxrc::Target::jxl,jxrc::Target::jxl_linear,jxrc::Target::jxl_pq,jxrc::Target::avif,jxrc::Target::avif_pq,jxrc::Target::avif_gainmap}) {
-            jxrc::Options o;o.mode=jxrc::Mode::process;o.target=target;o.quality.preset=jxrc::Preset::lossless;
+            jxrc::Options o;o.mode=jxrc::Mode::process;o.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;o.target=target;o.quality.preset=jxrc::Preset::lossless;
             const auto output=dir/("process-"+std::to_string(mode)+"-"+std::to_string(int(target)));
             jxrc::Result r;try{r=jxrc::convert(source,output,o);}catch(const std::exception& e){throw std::runtime_error("Input mode "+std::to_string(mode)+" target "+std::to_string(int(target))+": "+e.what());}check(r.width==64&&r.height==48,"Processed dimensions");check(fs::file_size(output)>10,"Encoded output");
         }
@@ -1224,7 +1224,7 @@ int main(int argc,char** argv) try {
         check(jxrc::convert(input,preserved,automatic).gainmap,"Plain target lost source gain map in Preserve mode");
         automatic.mode=jxrc::Mode::process;check(jxrc::convert(input,processed,automatic).gainmap,"Plain target flattened source gain map");
         check(bytes(preserved)==bytes(processed),"Automatic source base/gain map was processed");
-        automatic.exposure=1;check(!jxrc::convert(input,dir/(name+"-exposure"),automatic).gainmap,"Exposure bypassed pixel processing");
+        automatic.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;automatic.exposure=1;check(!jxrc::convert(input,dir/(name+"-exposure"),automatic).gainmap,"Exposure bypassed pixel processing");
     }
     // Per-channel ISO metadata must survive AVIF -> JPEG; Ultra HDR's XMP
     // writer cannot represent it, so this output must use its ISO packet.
@@ -1240,7 +1240,7 @@ int main(int argc,char** argv) try {
     }
     heif_gainmaps(dir,gain);
     gain_map_f32_tests(dir);
-    o.target=jxrc::Target::jxl;fails([&]{jxrc::convert(gain,dir/"lost.jxl",o);});check(!fs::exists(dir/"lost.jxl"),"Failed output published");
+    o.target=jxrc::Target::jxl;jxrc::convert(gain,dir/"source-base.jxl",o);check(!jxrc::inspect(dir/"source-base.jxl").hdr,"Auto source JXL must export the stored SDR base");
     o.target=jxrc::Target::avif;r=jxrc::convert(pq,dir/"pq.avif",o);check(r.transfer==16,"Preserved PQ transfer");
     // Linear JXL stores samples normalized to its declared intensity; process round trip restores absolute values.
     o.mode=jxrc::Mode::process;o.target=jxrc::Target::jxl_linear;o.extended_bt2020=false;
