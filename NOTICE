@@ -1,8 +1,11 @@
-JXRConverter contains code derived from LocalViewer / EhViewer.
+JXRConverter contains image-processing code derived from LocalViewer.
 LocalViewer reference commit: e74a70c2811a1e6a80841ea975ba171e219cf306
 Reference snapshot: LocalViewer/app/src/main/cpp in this workspace.
-EhViewer copyright 2014-2016 Hippo Seven; subsequent contributions belong to
-LocalViewer / EhViewer contributors. See COPYING (GNU GPL version 3).
+The author confirms that the image-processing code ported here was written by
+Jingxuan Zhou and authorizes its release under MIT; see LICENSE.
+LocalViewer's broader EhViewer lineage does not by itself determine the license
+of this author-owned image-processing code. Third-party code retains its notices
+and licenses.
 
 The src/native files were extracted from LocalViewer's native conversion code.
 Changes include removal of Android/JNI presentation and entry points, portable
@@ -17,6 +20,8 @@ libjxl and skcms (BSD/Apache-2.0 and accompanying dependency notices), libavif
 and patent license), libtiff (libtiff license), and stb_image (MIT/public domain).
 Consult each dependency's license files when distributing binaries and source.
 
+COPYING retains GPL version 3 for distributions combined with Exiv2; it is not
+the license of the project's original source code.
 The native converter links Exiv2 (GPL and accompanying dependency notices) for
 photographic metadata. The optional desktop links Qt 6 Widgets
 (LGPL/GPL/commercial licensing). The pinned Ultra HDR CPU-count

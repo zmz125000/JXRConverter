@@ -129,4 +129,4 @@ Those links are unrelated to the project.
 
 ## License
 
-The port retains LocalViewer's GPLv3 license.
+JXRConverter's original code ported from LocalViewer, is licensed under [MIT](LICENSE).

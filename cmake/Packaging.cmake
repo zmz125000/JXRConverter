@@ -6,7 +6,7 @@ set(jxrc_runtime_data "${CMAKE_INSTALL_DATADIR}/JXRConverter")
 if(APPLE AND JXRC_BUILD_GUI)
     set(jxrc_runtime_data "JXRConverter.app/Contents/Resources/share/JXRConverter")
 endif()
-install(FILES README.md COPYING NOTICE
+install(FILES README.md LICENSE COPYING NOTICE
     DESTINATION ${jxrc_runtime_data} COMPONENT Runtime)
 install(FILES docs/dependencies.md docs/build-warnings.md docs/release-audit.md docs/redistribution.md
     DESTINATION ${jxrc_runtime_data}/docs COMPONENT Runtime)

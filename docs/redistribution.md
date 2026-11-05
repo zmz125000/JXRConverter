@@ -1,8 +1,30 @@
 # Redistribution and corresponding source
 
-JXRConverter is distributed under GPL version 3; it contains GPL code derived
-from LocalViewer/EhViewer and uses Exiv2. Moving a GPL library into a separate
-DLL does not remove the combined application's GPL obligations.
+JXRConverter's original source code is licensed under MIT in `LICENSE`. This
+includes the image-processing code ported from LocalViewer: the author confirms
+that they wrote that code and authorizes its release under MIT. The previous
+blanket attribution to LocalViewer/EhViewer's GPL license did not distinguish
+that author-owned code from the broader upstream application.
+
+## Source license and combined distributions
+
+The current engine links Exiv2 (`src/native/exif_metadata.cpp` and
+`CMakeLists.txt`). Exiv2 is GPL-2.0-or-later. Distributions of this combined engine,
+CLI and desktop application must comply with GPLv3, whose text remains in
+`COPYING`. MIT permits inclusion of project code in that GPL-covered combination;
+it does not relicense Exiv2. Moving Exiv2 into a separate shared library alone
+does not remove those obligations.
+
+To distribute the engine under terms that permit non-GPL applications to link
+it, replace Exiv2 with a compatible implementation or obtain suitable separate
+licensing permission. The remaining dependencies retain their own licenses;
+MIT licensing of project code does not remove the LGPL requirements of libheif,
+libde265, LibRaw or Qt in distributions that include them.
+
+See the [GNU FAQ on changing licenses](https://www.gnu.org/licenses/gpl-faq.html#CanDeveloperThirdParty)
+and [Exiv2's license](https://github.com/Exiv2/exiv2/blob/main/LICENSE.txt).
+
+## Dependency licenses and release packages
 
 The codec dependencies can remain linked into the shared JXRConverter engine:
 
