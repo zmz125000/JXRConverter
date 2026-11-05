@@ -79,6 +79,7 @@ protected:
 // Use the same InstantPopup behavior as Recent folders, while drawing the
 // regular push-button control used by the neighboring actions.
 class PopupButton : public QToolButton {
+protected:
     mutable QPushButton appearance_;
     void syncAppearance() const {appearance_.setText(text());appearance_.setIcon(icon());appearance_.setIconSize(iconSize());}
     QStyleOptionButton buttonOption() const {
@@ -95,6 +96,56 @@ public:
     QSize minimumSizeHint() const override {return sizeHint();}
 protected:
     void paintEvent(QPaintEvent*) override {auto option=buttonOption();QPainter painter(this);style()->drawControl(QStyle::CE_PushButton,&option,&painter,&appearance_);}
+};
+class JobButton : public PopupButton {
+    QPushButton* reference_;
+    QTimer timer_;
+    QString lastText_;
+    int offset_=0;
+    int widthLimit() const {return 3*(reference_->isVisible()?reference_->width():reference_->sizeHint().width());}
+    void matchWidth() {setMaximumWidth(widthLimit());updateGeometry();update();}
+public:
+    explicit JobButton(QPushButton* reference):reference_(reference) {
+        setSizePolicy(QSizePolicy::Maximum,QSizePolicy::Fixed);
+        reference_->installEventFilter(this);matchWidth();timer_.setInterval(30);
+        connect(&timer_,&QTimer::timeout,this,[this]{++offset_;update();});
+    }
+    QSize sizeHint() const override {auto size=PopupButton::sizeHint();size.setWidth(std::min(size.width(),widthLimit()));return size;}
+    QSize minimumSizeHint() const override {return sizeHint();}
+protected:
+    bool eventFilter(QObject* object,QEvent* event) override {
+        if(object==reference_&&(event->type()==QEvent::Resize||event->type()==QEvent::Show||event->type()==QEvent::Hide||event->type()==QEvent::FontChange||event->type()==QEvent::StyleChange))matchWidth();
+        return PopupButton::eventFilter(object,event);
+    }
+    void hideEvent(QHideEvent* event) override {timer_.stop();offset_=0;PopupButton::hideEvent(event);}
+    void paintEvent(QPaintEvent* event) override {
+        syncAppearance();auto option=buttonOption();
+        const auto content=style()->subElementRect(QStyle::SE_PushButtonContents,&option,&appearance_);
+        const int textWidth=fontMetrics().size(Qt::TextShowMnemonic,text()).width();
+        if(lastText_!=text()){lastText_=text();offset_=0;}
+        if(textWidth<=content.width()) {timer_.stop();offset_=0;PopupButton::paintEvent(event);return;}
+        if(!timer_.isActive()&&isVisible())timer_.start();
+        const int cycle=textWidth+std::max(24,fontMetrics().horizontalAdvance("   "));
+        offset_%=cycle;
+        QPainter painter(this);auto chrome=option;chrome.text.clear();style()->drawControl(QStyle::CE_PushButton,&chrome,&painter,&appearance_);
+        painter.setClipRect(content);
+        for(int x=content.left()-offset_;x<content.right();x+=cycle) {
+            option.rect=QRect(x,content.top(),textWidth,content.height());
+            style()->drawControl(QStyle::CE_PushButtonLabel,&option,&painter,&appearance_);
+        }
+    }
+};
+class OutputTargetList : public QListWidget {
+    void fitRows() {
+        int height=2*frameWidth();for(int row=0;row<count();++row)height+=sizeHintForRow(row);
+        setFixedHeight(height);
+    }
+protected:
+    void showEvent(QShowEvent* event) override {QListWidget::showEvent(event);fitRows();}
+    void changeEvent(QEvent* event) override {
+        QListWidget::changeEvent(event);
+        if(event->type()==QEvent::FontChange||event->type()==QEvent::StyleChange)fitRows();
+    }
 };
 const QStringList aspectNames={"16:9","4:3","1:1","9:16 (portrait)","3:4 (portrait)"};
 const double aspectRatios[]={16.0/9,4.0/3,1,9.0/16,3.0/4};
@@ -225,7 +276,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
     cancelJob_=new QPushButton("Cancel job");cancelJob_->setObjectName("cancelJob");cancelJob_->setToolTip("Cancel this job’s pending outputs; active conversions finish");actionsLayout->addWidget(cancelJob_);cancelJob_->hide();connect(cancelJob_,&QPushButton::clicked,this,[this]{queue_->cancelBatch(viewedJob_);updateCounts();});
-    jobButton_=new PopupButton;jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
+    jobButton_=new JobButton(cancelJob_);jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
     jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Show the selected job and choose a job. Scroll over this button to switch jobs. Counts: finished / all / skipped / failed (images).");
     connect(jobMenu_,&QMenu::aboutToShow,this,[this]{showJob(viewedJob_);});
     running_=new QPushButton("Running");running_->setObjectName("runningJob");actionsLayout->addWidget(running_);connect(running_,&QPushButton::clicked,this,[this]{const auto batch=queue_->runningBatch();if(batch>=0)showJob(batch);});
@@ -451,7 +502,7 @@ QWidget* MainWindow::buildControls() {
     auto* panel=new QWidget;panel->setObjectName("conversionControls");auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(14,16,14,16);layout->setSpacing(14);
     auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");mode_->setCurrentIndex(1);general->addRow("Mode",mode_);layout->addLayout(general);
     auto* outputFormats=new QGroupBox("Output formats · select one or more");outputFormats->setObjectName("outputFormats");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
-    targets_=new QListWidget;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setMinimumHeight(155);targets_->setMaximumHeight(210);
+    targets_=new OutputTargetList;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG"};
     const QList<Target> targetOrder={Target::jpeg,Target::jpeg_gainmap,
         Target::png,Target::png_hdr,Target::png_hlg,
@@ -752,7 +803,7 @@ QString MainWindow::jobText(qint64 number) const {
     int finished=0,skipped=0,failed=0;
     for(const auto& input:job->files){const auto c=counts.value(input);if(c.total&&c.terminal==c.total){if(c.failed)++failed;else if(c.skipped==c.total)++skipped;else if(c.finished+c.skipped==c.total)++finished;}}
     const auto name=QString(job->name).replace('&',"&&");
-    return (number?QString(job->quick?"Quick #%1":"#%1").arg(number)+(name.isEmpty()?QString():" "+name):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed)+(queue_->hasRunningBatch(number)?" *":isDraftJob(number)?" (?)":"");
+    return (number?QString("#%1").arg(number)+(name.isEmpty()?QString():" "+name):QString("Temporary"))+QString(" (%1/%2/%3/%4)").arg(finished).arg(job->files.size()).arg(skipped).arg(failed)+(queue_->hasRunningBatch(number)?" *":isDraftJob(number)?" (?)":"");
 }
 void MainWindow::refreshJobs() {
     QVector<qint64> ids{0};for(auto it=savedJobs_.crbegin();it!=savedJobs_.crend();++it)ids.append(it->number);

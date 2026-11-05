@@ -863,7 +863,7 @@ private slots:
             auto* menu=window.findChild<QMenu*>("jobMenu");QCOMPARE(menu->actions().size(),2);QVERIFY(savedJob(window,1)->isChecked());QCOMPARE(savedJob(window,1)->text(),QString("#1 job-history (2/2/0/0)"));
             window.findChild<QPushButton*>("statusAll")->click();
             auto* view=window.findChild<FileListView*>();view->selectionModel()->select(window.filterModel()->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
-            window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,2)->isChecked());QCOMPARE(savedJob(window,2)->text(),QString("Quick #2 job-history (0/1/1/0)"));
+            window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,2)->isChecked());QCOMPARE(savedJob(window,2)->text(),QString("#2 job-history (0/1/1/0)"));
             window.addPaths({c});QTRY_COMPARE(window.catalog()->rowCount(),3);
             auto single=[&](int row){bool chosen=false;QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("convertImage");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});view->customContextMenuRequested(view->visualRect(window.filterModel()->index(row,0)).center());return chosen;};
             QVERIFY(single(2));QTRY_COMPARE(done.count(),3);window.findChild<QPushButton*>("statusAll")->click();QVERIFY(single(1));QTRY_COMPARE(done.count(),4);
@@ -898,6 +898,35 @@ private slots:
             MainWindow restored;restored.show();QVERIFY(savedJob(restored,30));QCOMPARE(savedJob(restored,30)->text(),QString("#30 pragmata (2/2/0/0)"));
             QVERIFY(chooseJob(restored,30));QCOMPARE(savedJobJson(30).value("createdAt").toString(),created);
         }
+    }
+    void boundedScrollingJobAndFullTargetList() {
+        appSettings().clear();appSettings().setValue("controls/loadPreviousJobs",true);
+        const auto path=makeImage(temp_.path()+"/pragmata "+QString(120,'W'),"long.jpg",64,48,100);
+        QJsonObject job;job.insert("number","30");job.insert("files",QJsonArray{path});
+        QJsonObject history;history.insert("jobs",QJsonArray{job});
+        QFile file(configDirectory()+"/jobs.json");QVERIFY(file.open(QIODevice::WriteOnly));file.write(QJsonDocument(history).toJson());file.close();
+        MainWindow window;window.show();QVERIFY(chooseJob(window,30));
+        auto* button=window.findChild<QToolButton*>("statusJob");auto* cancel=window.findChild<QPushButton*>("cancelJob");
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");auto* theme=window.findChild<QComboBox*>("theme");
+        QVERIFY(button);QVERIFY(cancel);QVERIFY(targets);QVERIFY(theme);
+        for(int index=0;index<theme->count();++index) {
+            theme->setCurrentIndex(index);
+            for(int width:{980,1440}) {
+                window.resize(width,900);QTest::qWait(30);
+                QVERIFY(button->width()<=3*cancel->width());QCOMPARE(button->height(),cancel->height());
+                QVERIFY(button->sizeHint().width()<=3*cancel->width());
+                QCOMPARE(targets->count(),14);QCOMPARE(targets->verticalScrollBar()->maximum(),0);
+                QVERIFY(targets->viewport()->rect().contains(targets->visualItemRect(targets->item(targets->count()-1))));
+            }
+        }
+        const auto labelFont=button->font();const auto first=button->grab().toImage();
+        QTRY_VERIFY(button->grab().toImage()!=first);
+        window.findChild<QPushButton*>("statusAll")->click();QTRY_COMPARE(button->text(),QString("Jobs"));
+        QTRY_VERIFY(button->width()<3*cancel->sizeHint().width());
+        QTest::qWait(150);
+        QCOMPARE(button->font(),labelFont);
+        const auto shortLabel=button->grab().toImage();QTest::qWait(100);QCOMPARE(button->grab().toImage(),shortLabel);
+        QVERIFY(savedJob(window,30)->text().contains(QString(120,'W')));
     }
     void jobStartupPreferencesAndClear() {
         appSettings().clear();const auto directory=root("job-startup");const auto a=makeImage(directory,"a.jpg",64,48,100),b=makeImage(directory,"b.jpg",64,48,100);
@@ -1086,28 +1115,28 @@ private slots:
             auto* view=window.findChild<FileListView*>();auto* selection=view->selectionModel();auto* model=window.filterModel();
             auto select=[&](int row){selection->select(model->index(row,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);};
             auto* convert=window.findChild<QPushButton*>("convertSelected");QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
-            select(0);convert->click();QVERIFY(savedJob(window,7));QVERIFY(savedJob(window,7)->text().startsWith("Quick #7"));
+            select(0);convert->click();QVERIFY(savedJob(window,7));QVERIFY(savedJob(window,7)->text().startsWith("#7"));
             quickCreated=savedJobJson(7).value("createdAt").toString();QVERIFY(QDateTime::fromString(quickCreated,Qt::ISODateWithMs).isValid());
             select(1);selection->select(model->index(2,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
             QVERIFY(convert->isEnabled());convert->click();QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),2);
             QTRY_COMPARE(done.count(),1);QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/0_high_sdr.avif"));QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/2_high_sdr.avif"));
-            QCOMPARE(savedJob(window,7)->text(),QString("Quick #7 quick-input (3/3/0/0)"));QCOMPARE(appSettings().value("jobs/nextNumber").toInt(),8);
+            QCOMPARE(savedJob(window,7)->text(),QString("#7 quick-input (3/3/0/0)"));QCOMPARE(appSettings().value("jobs/nextNumber").toInt(),8);
             window.findChild<QPushButton*>("selectAllImages")->click();convert->click();QTRY_COMPARE(done.count(),2);
             QVERIFY(savedJob(window,8));QVERIFY(savedJob(window,8)->text().startsWith("#8"));
             select(3);convert->click();QTRY_COMPARE(done.count(),3);
-            QCOMPARE(savedJob(window,7)->text(),QString("Quick #7 quick-input (4/4/0/0)"));QCOMPARE(appSettings().value("jobs/nextNumber").toInt(),9);
+            QCOMPARE(savedJob(window,7)->text(),QString("#7 quick-input (4/4/0/0)"));QCOMPARE(appSettings().value("jobs/nextNumber").toInt(),9);
             QCOMPARE(savedJobJson(7).value("name").toString(),QString("quick-input"));QCOMPARE(savedJobJson(7).value("createdAt").toString(),quickCreated);
             window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(true);
         }
         {
-            MainWindow window;window.show();QVERIFY(savedJob(window,7));QVERIFY(savedJob(window,7)->text().startsWith("Quick #7"));
+            MainWindow window;window.show();QVERIFY(savedJob(window,7));QVERIFY(savedJob(window,7)->text().startsWith("#7"));
             QCOMPARE(savedJobJson(7).value("createdAt").toString(),quickCreated);
             window.addPaths(inputs);QTRY_COMPARE(window.catalog()->rowCount(),5);
             auto* view=window.findChild<FileListView*>();view->selectionModel()->select(window.filterModel()->index(0,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
             QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);auto* convert=window.findChild<QPushButton*>("convertSelected");convert->click();QTRY_COMPARE(done.count(),1);
-            QVERIFY(savedJob(window,9));QVERIFY(savedJob(window,9)->text().startsWith("Quick #9"));
+            QVERIFY(savedJob(window,9));QVERIFY(savedJob(window,9)->text().startsWith("#9"));
             window.findChild<QAction*>("clearJobs")->trigger();convert->click();QTRY_COMPARE(done.count(),2);
-            QVERIFY(savedJob(window,1));QVERIFY(savedJob(window,1)->text().startsWith("Quick #1"));
+            QVERIFY(savedJob(window,1));QVERIFY(savedJob(window,1)->text().startsWith("#1"));
         }
     }
     void mixedSourceHdrTargets() {
