@@ -44,8 +44,9 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
     const size_t pixels = static_cast<size_t>(w) * h;
     if (!rgba || !path || !pixels) return -60;
     const unsigned input_channels = source ? source->channels : 4;
-    const bool alpha = !quality.remove_alpha && (input_channels == 2 || input_channels == 4);
-    const bool gray = input_channels <= 2 || (source && source->icc_size >= 20 && !std::memcmp(source->icc + 16, "GRAY", 4));
+    const bool cmyk = source && source->cmyk;
+    const bool alpha = !cmyk && !quality.remove_alpha && (input_channels == 2 || input_channels == 4);
+    const bool gray = input_channels <= 2 || (source && source->gray) || (source && source->icc_size >= 20 && !std::memcmp(source->icc + 16, "GRAY", 4));
     auto encoder = JxlEncoderMake(nullptr);
     const unsigned threads = std::min(4u, hdr_pixel_jobs(pixels));
     auto runner = JxlThreadParallelRunnerMake(nullptr, threads);
@@ -58,7 +59,7 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
     if (source) info.orientation = static_cast<JxlOrientation>(source->orientation);
     info.exponent_bits_per_sample = source ? source->exponent_bits : type == JXL_TYPE_FLOAT ? 8 : type == JXL_TYPE_FLOAT16 ? 5 : 0;
     info.num_color_channels = gray ? 1 : 3;
-    info.num_extra_channels = alpha ? 1 : 0;
+    info.num_extra_channels = alpha || cmyk ? 1 : 0;
     info.alpha_bits = alpha ? info.bits_per_sample : 0;
     info.alpha_exponent_bits = alpha ? info.exponent_bits_per_sample : 0;
     info.alpha_premultiplied = JXL_FALSE;
@@ -104,10 +105,16 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
         }
     }
     color.rendering_intent = JXL_RENDERING_INTENT_RELATIVE;
+    if(cmyk && JxlEncoderSetCodestreamLevel(encoder.get(),10)!=JXL_ENC_SUCCESS)return -62;
     if (JxlEncoderSetBasicInfo(encoder.get(), &info) != JXL_ENC_SUCCESS ||
         (source && source->icc_size ?
             JxlEncoderSetICCProfile(encoder.get(), source->icc, source->icc_size) :
             JxlEncoderSetColorEncoding(encoder.get(), &color)) != JXL_ENC_SUCCESS) return -62;
+    if(cmyk) {
+        JxlExtraChannelInfo black;JxlEncoderInitExtraChannelInfo(JXL_CHANNEL_BLACK,&black);
+        black.bits_per_sample=info.bits_per_sample;black.exponent_bits_per_sample=info.exponent_bits_per_sample;
+        if(JxlEncoderSetExtraChannelInfo(encoder.get(),0,&black)!=JXL_ENC_SUCCESS)return -62;
+    }
     auto* frame = JxlEncoderFrameSettingsCreate(encoder.get(), nullptr);
     // Lossless and ICC-preserving lossy use original-profile / modular coding.
     // High/mid/low without an ICC use perceptual XYB at distances 0.5/1.0/1.5,
@@ -151,6 +158,12 @@ static int encode_jxl_pixels(unsigned w, unsigned h, const void* rgba, uhdr_colo
         JxlEncoderCloseBoxes(encoder.get());
     }
     if (JxlEncoderAddImageFrame(frame, &format, input, pixels * sample_bytes * output_channels) != JXL_ENC_SUCCESS) return -64;
+    if(cmyk) {
+        std::vector<uint8_t> black(pixels*sample_bytes);
+        for(size_t i=0;i<pixels;++i)std::memcpy(black.data()+i*sample_bytes,static_cast<const uint8_t*>(rgba)+(i*4+3)*sample_bytes,sample_bytes);
+        const JxlPixelFormat black_format{1,type,JXL_NATIVE_ENDIAN,0};
+        if(JxlEncoderSetExtraChannelBuffer(frame,&black_format,black.data(),black.size(),0)!=JXL_ENC_SUCCESS)return -64;
+    }
     JxlEncoderCloseInput(encoder.get());
     return write_jxl_output(encoder.get(), path);
 }

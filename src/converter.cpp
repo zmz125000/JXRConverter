@@ -12,7 +12,6 @@
 #include "hdr_parallel.h"
 #include "linear_color_profile.h"
 #include "skcms.h"
-#include "ultrahdr/jpegdecoderhelper.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -142,29 +141,11 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
             pixels[size_t(y)*w*4+x]=store_working<Sample>(half_to_float(static_cast<const uint16_t*>(image->planes[0])[size_t(y)*image->stride[0]*4+x]));
         return;
     }
-    ultrahdr::JpegDecoderHelper jpeg;
-    require(jpeg.parseImage(bytes.data(),bytes.size()).error_code==UHDR_CODEC_OK,"JPEG parse failed");
-    require(uint64_t(jpeg.getDecompressedImageWidth())*jpeg.getDecompressedImageHeight()<=80000000,"JPEG dimensions exceed limit");
-    require(jpeg.decompressImage(bytes.data(),bytes.size(),ultrahdr::DECODE_STREAM).error_code==UHDR_CODEC_OK,"JPEG decode failed");
-    auto image=jpeg.getDecompressedImage();w=image.w;h=image.h;
-    require(w&&h,"Empty JPEG");
-    const unsigned channels=image.fmt==UHDR_IMG_FMT_8bppYCbCr400?1:image.fmt==UHDR_IMG_FMT_24bppRGB888?3:image.fmt==UHDR_IMG_FMT_32bppRGBA8888?4:0;
-    require(channels!=0,"Unsupported JPEG pixel layout");
-    auto preview_pixels=reduce_preview(static_cast<const uint8_t*>(image.planes[0]),w,h,size_t(image.stride[0])*channels,channels,thumbnail_edge);
-    if(!preview_pixels.empty()){image.w=w;image.h=h;image.planes[0]=preview_pixels.data();image.stride[0]=w;}
-    skcms_ICCProfile source=*skcms_sRGB_profile(),destination;
-    const auto icc=source_jpeg_icc(bytes.data(),bytes.size());
-    if(!icc.empty())require(skcms_Parse(icc.data(),icc.size(),&source),"Invalid JPEG ICC profile");
-    require(make_linear_bt2020_profile(&destination),"Cannot build working profile");gamut=UHDR_CG_BT_2100;
-    std::vector<uint8_t> rgba(size_t(w)*h*4);
-    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
-        const auto* p=static_cast<const uint8_t*>(image.planes[0])+size_t(y)*image.stride[0]*channels+x*channels;
-        const size_t i=(size_t(y)*w+x)*4;
-        for(unsigned c=0;c<3;++c)rgba[i+c]=p[channels==1?0:c];
-        rgba[i+3]=255;
-    }
-    pixels.resize(size_t(w)*h*4);
-    require(skcms_Transform(rgba.data(),skcms_PixelFormat_RGBA_8888,skcms_AlphaFormat_Unpremul,&source,pixels.data(),working_format<Sample>(),skcms_AlphaFormat_Unpremul,&destination,size_t(w)*h),"JPEG color transform failed");
+    auto image=decode_jpeg(bytes.data(),bytes.size());w=image.width;h=image.height;hdr=false;
+    auto reduced=reduce_preview(image.pixels.data(),w,h,size_t(w)*4,4,thumbnail_edge);
+    if(!reduced.empty())image.pixels=std::move(reduced);
+    image.width=w;image.height=h;
+    regular_to_linear(image,pixels,gamut);
 }
 }
 void validate(const Options& o) {
@@ -273,10 +254,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         int rc=0;
         if(o.jpeg_transcoding && format==0&&!cache.gainmap) {
             require(is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))!=1,"JPEG coefficient transcoding cannot retain a gain map");
-            ultrahdr::JpegDecoderHelper parser;
-            require(parser.parseImage(bytes.data(),bytes.size()).error_code==UHDR_CODEC_OK,"JPEG header parse failed");
-            info[0]=parser.getDecompressedImageWidth();info[1]=parser.getDecompressedImageHeight();info[3]=13;
-            require(info[0]>0&&info[1]>0&&uint64_t(info[0])*info[1]<=80000000,"JPEG dimensions exceed limit");
+            const auto parser=decode_jpeg(bytes.data(),bytes.size(),true);
+            require(!parser.cmyk,"CMYK JPEG coefficient transcoding is unsupported; disable Lossless JPEG transcoding to preserve CMYK samples in JXL");
+            info[0]=parser.width;info[1]=parser.height;info[3]=13;
             rc=transcode_jpeg(bytes.data(),bytes.size(),path.c_str(),o.keep_exif);
             require(rc==0,"JPEG coefficient transcoding failed (codec "+std::to_string(rc)+")");
             rc=1;

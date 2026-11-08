@@ -30,7 +30,7 @@ else()
 endif()
 add_library(jxrc ${jxrc_library_type} src/converter.cpp src/inspect.cpp src/native/hdr_convert.cpp src/native/jxl_hdr.cpp
     src/native/avif_hdr.cpp src/native/gain_map.cpp src/native/still_jxl.cpp src/native/still_avif.cpp
-    src/native/exif_metadata.cpp src/native/heif_decode.cpp src/native/source_export.cpp src/native/raw_still.cpp src/native/regular_decode.cpp src/native/linear_decode.cpp src/native/png_encode.cpp src/native/thread_budget.cpp)
+    src/native/exif_metadata.cpp src/native/heif_decode.cpp src/native/source_export.cpp src/native/raw_still.cpp src/native/regular_decode.cpp src/native/jpeg_decode.cpp src/native/linear_decode.cpp src/native/png_encode.cpp src/native/thread_budget.cpp)
 add_library(jxrc::jxrc ALIAS jxrc)
 set_target_properties(jxrc PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON VERSION ${PROJECT_VERSION} SOVERSION 0)
 if(JXRC_SHARED_ENGINE)

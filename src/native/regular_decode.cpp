@@ -110,6 +110,7 @@ RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false
     png_read_info(png,info);
     image.width=png_get_image_width(png,info);image.height=png_get_image_height(png,info);dimensions(image.width,image.height);
     const int color=png_get_color_type(png,info),depth=png_get_bit_depth(png,info);
+    image.gray=color==PNG_COLOR_TYPE_GRAY||color==PNG_COLOR_TYPE_GRAY_ALPHA;
     image.bits=depth==16?16:8;
     bool cicp=false;
     // cICP takes precedence over ICC/sRGB/gAMA/cHRM. Keep source codes intact.
@@ -210,6 +211,7 @@ RegularImage decode_tiff(const uint8_t* data,size_t size,bool metadata_only=fals
     const bool floating=format==SAMPLEFORMAT_IEEEFP;
     check((floating&&(bits==16||bits==32||bits==64))||((bits==8||bits==16)&&format==SAMPLEFORMAT_UINT),"Unsupported TIFF sample representation");
     const unsigned colors=photo==PHOTOMETRIC_RGB||photo==PHOTOMETRIC_LOGLUV?3:1;
+    image.gray=colors==1;
     check(log || photo==PHOTOMETRIC_RGB || photo==PHOTOMETRIC_MINISBLACK || photo==PHOTOMETRIC_MINISWHITE,"TIFF requires RGB or grayscale photometric data");
     check(planar==PLANARCONFIG_CONTIG || planar==PLANARCONFIG_SEPARATE,"Unsupported TIFF planar layout");
     check(samples==colors || samples==colors+1,"Unsupported TIFF channel count");

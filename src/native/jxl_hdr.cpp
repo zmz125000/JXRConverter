@@ -240,6 +240,8 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
     uhdr_color_gamut_t cg = UHDR_CG_BT_709;
     std::vector<uint8_t> source_icc;
     std::vector<float> pixels;
+    std::vector<float> black;
+    int black_index=-1;
     JxlPixelFormat format = {4, JXL_TYPE_FLOAT, JXL_NATIVE_ENDIAN, 0};
     std::vector<uint8_t> exif_box;
     bool collecting_exif = false;
@@ -281,6 +283,12 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
             if (frame_complete) break;
         } else if (status == JXL_DEC_BASIC_INFO) {
             if (JxlDecoderGetBasicInfo(dec.get(), &info) != JXL_DEC_SUCCESS) return -7;
+            for(unsigned i=0;i<info.num_extra_channels;++i) {
+                JxlExtraChannelInfo extra;
+                if(JxlDecoderGetExtraChannelInfo(dec.get(),i,&extra)!=JXL_DEC_SUCCESS)return -7;
+                if(extra.type==JXL_CHANNEL_BLACK)black_index=static_cast<int>(i);
+            }
+            if(black_index>=0&&info.alpha_bits)return -7;
             if (out_source_depth) *out_source_depth = static_cast<int>(info.bits_per_sample);
             w = info.xsize;
             h = info.ysize;
@@ -332,6 +340,12 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
                 JXL_DEC_SUCCESS) {
                 return -11;
             }
+            if(black_index>=0) {
+                size_t count=0;
+                if(JxlDecoderExtraChannelBufferSize(dec.get(),&format,&count,black_index)!=JXL_DEC_SUCCESS)return -11;
+                black.resize(count/sizeof(float));
+                if(JxlDecoderSetExtraChannelBuffer(dec.get(),&format,black.data(),count,black_index)!=JXL_DEC_SUCCESS)return -11;
+            }
         } else if (status == JXL_DEC_FRAME_PROGRESSION && thumbnail_edge > 0) {
             const size_t ratio = JxlDecoderGetIntendedDownsamplingRatio(dec.get());
             // Finish the first progressive rendition with enough source detail.
@@ -351,6 +365,10 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
     if (pixels.empty() || w == 0 || h == 0) return -12;
 
     const size_t pixels_n = static_cast<size_t>(w) * static_cast<size_t>(h);
+    if(source_icc.size()>=20&&!std::memcmp(source_icc.data()+16,"CMYK",4)) {
+        if(black.size()!=pixels_n)return -13;
+        for(size_t i=0;i<pixels_n;++i)pixels[i*4+3]=black[i];
+    }
     const bool original_profile = info.uses_original_profile == JXL_TRUE;
     const bool hdr_cms = original_profile && (is_pq || is_hlg);
     const float cms_intensity = std::clamp(std::isfinite(info.intensity_target) && info.intensity_target > 0.f ? info.intensity_target : 1000.f, is_pq ? 1.f : kSdrWhiteNits, kMaxNits);

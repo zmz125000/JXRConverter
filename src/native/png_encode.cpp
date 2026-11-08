@@ -111,7 +111,7 @@ int encode_png_source(unsigned w,unsigned h,const void* pixels,bool sixteen,
                       const StillSourceColor& color,const char* path,StillEncodeQuality quality) {
     if(!pixels||color.exponent_bits||color.channels<1||color.channels>4||color.orientation<1||color.orientation>8)return -100;
     const unsigned dw=color.orientation>=5?h:w,dh=color.orientation>=5?w:h;
-    const bool gray=color.channels<=2||(color.icc_size>=20&&!std::memcmp(color.icc+16,"GRAY",4));
+    const bool gray=color.gray||color.channels<=2||(color.icc_size>=20&&!std::memcmp(color.icc+16,"GRAY",4));
     const bool alpha=!quality.remove_alpha&&(color.channels==2||color.channels==4);
     const unsigned channels=(gray?1:3)+(alpha?1:0),depth=quality.png_depth(color.bits);
     // Preserve a source profile verbatim. When RGB source codes have only known

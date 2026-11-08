@@ -22,6 +22,7 @@ void hdr_input_tests(const std::filesystem::path&);
 #include <vector>
 
 #include "regular_fixtures.hpp"
+#include "jpeg_fixtures.hpp"
 #include "heic_fixtures.hpp"
 #include "heif_decode.h"
 #include "exif_jxr_fixture.hpp"
@@ -490,6 +491,116 @@ static void shared_render(const fs::path& dir) {
     const auto half=dir/"half-linear.jxl";
     check(encode_jxl_f32(1,1,hdr,UHDR_CG_BT_709,true,half.string().c_str(),quality,false)==0,"Half-float linear JXL encode");
     check(jxrc::inspect(half).bits==16,"Half-float JXR storage choice");
+}
+
+// General JPEG decoding must not inherit Ultra HDR's RGB-only/8192 limit.
+// A small synthetic CMYK -> D50 XYZ LUT, with identity input/output tables.
+static std::vector<uint8_t> cmyk_profile() {
+    std::vector<uint8_t> profile(144+48+1024+48+768,0);
+    auto u32=[&](size_t at,uint32_t value){for(int i=3;i>=0;--i){profile[at+i]=uint8_t(value);value>>=8;}};
+    u32(0,profile.size());u32(8,0x02100000);std::memcpy(profile.data()+12,"prtrCMYKXYZ ",12);
+    std::memcpy(profile.data()+36,"acsp",4);u32(68,63190);u32(72,65536);u32(76,54061);
+    u32(128,1);std::memcpy(profile.data()+132,"A2B0",4);u32(136,144);u32(140,profile.size()-144);
+    std::memcpy(profile.data()+144,"mft1",4);profile[152]=4;profile[153]=3;profile[154]=2;
+    for(unsigned c=0;c<3;++c)u32(156+(c*3+c)*4,65536);
+    for(unsigned c=0;c<4;++c)for(unsigned v=0;v<256;++v)profile[192+c*256+v]=v;
+    for(unsigned entry=0;entry<16;++entry) {
+        const double r=(entry&8)?0:(entry&1)?0:1,g=(entry&4)?0:(entry&1)?0:1,b=(entry&2)?0:(entry&1)?0:1;
+        const double xyz[]={.4360747*r+.3850649*g+.1430804*b,.2225045*r+.7168786*g+.0606169*b,.0139322*r+.0971045*g+.7141733*b};
+        for(unsigned c=0;c<3;++c)profile[1216+entry*3+c]=uint8_t(std::lround(xyz[c]*128));
+    }
+    for(unsigned c=0;c<3;++c)for(unsigned v=0;v<256;++v)profile[1264+c*256+v]=v;
+    profile.insert(profile.begin()+144,12,0);u32(128,2);u32(136,156);
+    const size_t white=profile.size();std::memcpy(profile.data()+144,"wtpt",4);u32(148,white);u32(152,20);
+    profile.resize(white+20,0);std::memcpy(profile.data()+white,"XYZ ",4);
+    u32(white+8,63190);u32(white+12,65536);u32(white+16,54061);u32(0,profile.size());
+    return profile;
+}
+
+static void jpeg_inputs(const fs::path& dir) {
+    const auto profile=cmyk_profile();
+    auto tagged=jpeg_cmyk;
+    const unsigned length=profile.size()+16;
+    std::vector<uint8_t> marker={255,226,uint8_t(length>>8),uint8_t(length),'I','C','C','_','P','R','O','F','I','L','E',0,1,1};
+    marker.insert(marker.end(),profile.begin(),profile.end());tagged.insert(tagged.begin()+2,marker.begin(),marker.end());
+    unsigned index=0;
+    for(const auto* fixture:std::vector<const std::vector<uint8_t>*>{&jpeg_cmyk,&jpeg_cmyk_no_adobe,&jpeg_ycck,&tagged}) {
+        const auto source=dir/("cmyk-"+std::to_string(index++)+".jpg");write(source,*fixture);
+        const auto info=jxrc::inspect(source);check(info.width==32&&info.height==8&&!info.hdr,"CMYK JPEG inspection");
+        const auto decoded=decode_jpeg(fixture->data(),fixture->size());
+        for(unsigned patch=0;patch<4;++patch) {
+            const auto* pixel=decoded.pixels.data()+(2*32+patch*8+4)*4;
+            if(fixture!=&tagged)for(unsigned c=0;c<3;++c)check(std::abs(int(pixel[c])-(patch==c?0:255))<=3,"CMYK/YCCK JPEG colors");
+            else check(decoded.icc.empty(),"Converted CMYK retained its CMYK ICC");
+            check(pixel[3]==255,"CMYK K was treated as alpha");
+        }
+        check(!jxrc::preview(source,24).rgba.empty(),"CMYK JPEG preview");
+        for(auto target:{jxrc::Target::jpeg,jxrc::Target::png,jxrc::Target::jxl,jxrc::Target::avif}) {
+            jxrc::Options options;options.target=target;options.quality.preset=jxrc::Preset::lossless;
+            const auto output=dir/("cmyk-out-"+std::to_string(index)+"-"+std::to_string(int(target)));
+            jxrc::convert(source,output,options);check(jxrc::inspect(output).width==32,"CMYK preserved output");
+            if(target==jxrc::Target::jpeg) {
+                const auto out=bytes(output);const auto native=decode_jpeg(out.data(),out.size(),false,true);
+                check(native.cmyk&&native.channels==4&&native.icc==(fixture==&tagged?profile:std::vector<uint8_t>{}),"JPEG CMYK/ICC was not preserved");
+            }
+            if(target==jxrc::Target::jxl&&fixture==&tagged) {
+                const auto out=bytes(output);auto dec=JxlDecoderMake(nullptr);JxlBasicInfo basic{};
+                JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING|JXL_DEC_FULL_IMAGE);JxlDecoderSetInput(dec.get(),out.data(),out.size());JxlDecoderCloseInput(dec.get());
+                std::vector<uint8_t> cmy,black;JxlPixelFormat fmt{3,JXL_TYPE_UINT8,JXL_NATIVE_ENDIAN,0};
+                for(;;) {
+                    const auto status=JxlDecoderProcessInput(dec.get());
+                    if(status==JXL_DEC_BASIC_INFO) {
+                        JxlDecoderGetBasicInfo(dec.get(),&basic);JxlExtraChannelInfo extra{};JxlDecoderGetExtraChannelInfo(dec.get(),0,&extra);
+                        check(basic.num_extra_channels==1&&!basic.alpha_bits&&extra.type==JXL_CHANNEL_BLACK,"JXL CMYK black channel");
+                    } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
+                        size_t count=0;JxlDecoderImageOutBufferSize(dec.get(),&fmt,&count);cmy.resize(count);JxlDecoderSetImageOutBuffer(dec.get(),&fmt,cmy.data(),count);
+                        JxlDecoderExtraChannelBufferSize(dec.get(),&fmt,&count,0);black.resize(count);JxlDecoderSetExtraChannelBuffer(dec.get(),&fmt,black.data(),count,0);
+                    } else if(status==JXL_DEC_FULL_IMAGE)break;
+                    else check(status!=JXL_DEC_ERROR&&status!=JXL_DEC_NEED_MORE_INPUT,"CMYK JXL decode");
+                }
+                const auto native=decode_jpeg(fixture->data(),fixture->size(),false,true);
+                for(size_t i=0;i<black.size();++i) {
+                    check(black[i]==native.pixels[i*4+3],"JXL changed K samples");
+                    for(unsigned c=0;c<3;++c)check(cmy[i*3+c]==native.pixels[i*4+c],"JXL changed CMY samples");
+                }
+                check(!jxrc::preview(output,24).rgba.empty(),"CMYK JXL preview");
+                jxrc::Options back;back.target=jxrc::Target::jpeg;
+                const auto restored=dir/"cmyk-jxl-restored.jpg";jxrc::convert(output,restored,back);
+                const auto restored_bytes=bytes(restored);check(decode_jpeg(restored_bytes.data(),restored_bytes.size(),false,true).cmyk,"JXL to JPEG lost CMYK");
+                for(auto color_target:{jxrc::Target::png,jxrc::Target::avif}) {
+                    back.target=color_target;jxrc::convert(output,dir/("cmyk-jxl-rgb-"+std::to_string(int(color_target))),back);
+                }
+                back.mode=jxrc::Mode::process;back.target=jxrc::Target::png;back.exposure=.5;
+                jxrc::convert(output,dir/"cmyk-jxl-f32.png",back);
+            }
+        }
+        jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::png;options.exposure=1;
+        const auto output=dir/("cmyk-process-"+std::to_string(index)+".png");jxrc::convert(source,output,options);
+        check(jxrc::inspect(output).width==32,"CMYK F32 output");
+    }
+    const auto gray=dir/"gray-source.png",gray_jpeg=dir/"gray.jpg";
+    std::vector<uint8_t> gray_samples(32*8,125);StillSourceColor gray_color;gray_color.channels=1;
+    check(encode_png_source(32,8,gray_samples.data(),false,gray_color,gray.string().c_str(),StillEncodeQuality(0))==0,"Grayscale fixture");
+    jxrc::Options gray_options;gray_options.target=jxrc::Target::jpeg;jxrc::convert(gray,gray_jpeg,gray_options);
+    const auto gray_bytes=bytes(gray_jpeg);check(decode_jpeg(gray_bytes.data(),gray_bytes.size(),false,true).channels==1,"Grayscale JPEG expanded to RGB");
+    gray_options.target=jxrc::Target::png;const auto gray_png=dir/"gray-copy.png";jxrc::convert(gray_jpeg,gray_png,gray_options);
+    check(bytes(gray_png)[25]==0,"Grayscale PNG expanded to RGB");
+    gray_options.target=jxrc::Target::jxl;const auto gray_jxl=dir/"gray-copy.jxl";jxrc::convert(gray_jpeg,gray_jxl,gray_options);
+    const auto gray_data=bytes(gray_jxl);auto gray_decoder=JxlDecoderMake(nullptr);JxlDecoderSubscribeEvents(gray_decoder.get(),JXL_DEC_BASIC_INFO);
+    JxlDecoderSetInput(gray_decoder.get(),gray_data.data(),gray_data.size());check(JxlDecoderProcessInput(gray_decoder.get())==JXL_DEC_BASIC_INFO,"Grayscale JXL header");
+    JxlBasicInfo gray_info{};JxlDecoderGetBasicInfo(gray_decoder.get(),&gray_info);check(gray_info.num_color_channels==1,"Grayscale JXL expanded to RGB");
+    const auto png=dir/"wide-jpeg-source.png",jpeg=dir/"wide.jpg";
+    std::vector<uint8_t> pixels(9000*8*4,255);StillSourceColor color;
+    check(encode_png_source(9000,8,pixels.data(),false,color,png.string().c_str(),StillEncodeQuality(0))==0,"Wide JPEG fixture PNG");
+    jxrc::Options options;options.target=jxrc::Target::jpeg;jxrc::convert(png,jpeg,options);
+    check(jxrc::inspect(jpeg).width==9000,"Wide JPEG inspection");
+    check(!jxrc::preview(jpeg,64).rgba.empty(),"Wide JPEG preview");
+    options.target=jxrc::Target::png;jxrc::convert(jpeg,dir/"wide-direct.png",options);
+    options.mode=jxrc::Mode::process;options.exposure=.5;jxrc::convert(jpeg,dir/"wide-f32.png",options);
+    const auto encoded=bytes(jpeg);const auto decoded=decode_jpeg(encoded.data(),encoded.size());
+    check(decoded.width==9000&&decoded.pixels[0]==255,"Wide JPEG pixels");
+    auto corrupt=jpeg_cmyk;corrupt.resize(24);fails([&]{decode_jpeg(corrupt.data(),corrupt.size());});
+    std::cout<<"General JPEG inputs passed\n";
 }
 
 // Preserve native AVIF YUV planes and exercise JPEG quantization/compositing.
@@ -1353,6 +1464,7 @@ int main(int argc,char** argv) try {
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
     if(argc==2 && std::string(argv[1])=="--heif") {const auto gain=dir/"gain.jpg";encode(gain,1,true);heif_gainmaps(dir,gain);std::cout<<"HEIC tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--jpeg-inputs") {jpeg_inputs(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-inputs") {hdr_input_tests(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--gainmap-f32") {gain_map_f32_tests(dir);std::cout<<"Gain-map F32 tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
@@ -1377,7 +1489,7 @@ int main(int argc,char** argv) try {
     signed_float_jxl(dir);
     pq_jxl_peak(dir);
     raw_auto_exposure(dir);
-    regular_images(dir);jpeg_avif_paths(dir);
+    regular_images(dir);jpeg_inputs(dir);jpeg_avif_paths(dir);
     jxrc::validate({});
     { JxrcThreadBudget budget(1);check(hdr_pixel_jobs(80000000,8)==1,"Pixel thread budget ignored");check(ultrahdr::GetCPUCoreCount()==1,"Ultra HDR thread budget ignored"); }
 

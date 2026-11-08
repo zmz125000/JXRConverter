@@ -26,6 +26,17 @@ working convention. Scene-referred formats do not imply a universal exposure.
 Formats overlap: JPEG, AVIF, HEIF and JXL may be SDR or HDR, so transfer/gain-map
 metadata—not the extension alone—determines the input class.
 
+Unedited CMYK/YCCK JPEG sources retain CMYK samples and their ICC profile in
+JPEG output, and in JXL output when an embedded CMYK ICC profile is available.
+CMYK JXL uses level 10 and a black extra channel; compatible JXL-to-JXL/JPEG
+exports retain that channel. These paths avoid RGB/linear-light conversion.
+JPEG is still re-encoded at the selected quality. PNG/AVIF and pixel edits need
+RGB; CMYK ICC transforms apply there, with a conventional CMYK fallback for
+untagged JPEG. Untagged CMYK-to-JXL also uses that RGB fallback.
+Grayscale JPEG/PNG/TIFF retain grayscale in compatible unedited outputs.
+JPEG coefficient transcoding does not support CMYK; disable that separate
+option to use the native CMYK sample path.
+
 ## Output representations
 
 | Output representation | File targets | Encoding and caveats |

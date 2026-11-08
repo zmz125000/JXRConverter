@@ -384,6 +384,8 @@ int encode_avif_u8(unsigned w, unsigned h, const uint8_t* rgba, uhdr_color_gamut
 struct StillSourceColor {
     unsigned bits = 8;
     unsigned channels = 4;
+    bool cmyk = false;
+    bool gray = false;
     unsigned exponent_bits = 0;
     float intensity_target = 0.f;
     int primaries = 1;

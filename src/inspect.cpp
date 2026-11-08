@@ -3,7 +3,6 @@
 #include "input_format.h"
 #include "heif_decode.h"
 #include "regular_decode.h"
-#include "ultrahdr/jpegdecoderhelper.h"
 #include <avif/avif.h>
 #include <algorithm>
 #include <jxl/decode_cxx.h>
@@ -36,9 +35,8 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
     if(bytes.empty()||bytes.size()>512u*1024*1024)throw std::runtime_error("Input exceeds inspection limit");
     ImageInfo out;
     if(bytes.size()>2&&bytes[0]==255&&bytes[1]==216) {
-        ultrahdr::JpegDecoderHelper jpeg;
-        if(jpeg.parseImage(bytes.data(),bytes.size()).error_code!=UHDR_CODEC_OK)throw std::runtime_error("Invalid JPEG");
-        out.width=jpeg.getDecompressedImageWidth();out.height=jpeg.getDecompressedImageHeight();out.bits=8;out.format="JPEG";
+        const auto jpeg=decode_jpeg(bytes.data(),bytes.size(),true);
+        out.width=jpeg.width;out.height=jpeg.height;out.bits=jpeg.bits;out.format="JPEG";
         out.gainmap=is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))==1;out.transfer="sRGB";
         if(out.gainmap)out.transfer="Gain map";
         out.hdr=out.gainmap;
