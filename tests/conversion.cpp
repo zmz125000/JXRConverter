@@ -599,6 +599,23 @@ static void jpeg_inputs(const fs::path& dir) {
     options.mode=jxrc::Mode::process;options.exposure=.5;jxrc::convert(jpeg,dir/"wide-f32.png",options);
     const auto encoded=bytes(jpeg);const auto decoded=decode_jpeg(encoded.data(),encoded.size());
     check(decoded.width==9000&&decoded.pixels[0]==255,"Wide JPEG pixels");
+    // A tall or wide source remains safe under the pixel budget even when one
+    // axis exceeds the old, unrelated 16,384-pixel threshold.
+    const auto narrow=dir/"narrow.png";
+    std::vector<uint8_t> narrow_pixels(20000*2*4,255);
+    check(encode_png_source(20000,2,narrow_pixels.data(),false,color,narrow.string().c_str(),StillEncodeQuality(0))==0,"Narrow source fixture");
+    for(auto target:{jxrc::Target::jxl,jxrc::Target::avif}) {
+        jxrc::Options wide;wide.target=target;wide.quality.preset=jxrc::Preset::lossless;
+        const auto source=dir/(target==jxrc::Target::jxl?"narrow.jxl":"narrow.avif");
+        jxrc::convert(narrow,source,wide);
+        check(jxrc::inspect(source).width==20000,"Long, narrow source inspection");
+        try {check(!jxrc::preview(source,64).rgba.empty(),"Long, narrow source preview");}
+        catch(const std::exception& error){throw std::runtime_error(source.filename().string()+": "+error.what());}
+        wide.mode=jxrc::Mode::process;wide.target=jxrc::Target::png;wide.exposure=.1;
+        const auto output=dir/(target==jxrc::Target::jxl?"narrow-jxl.png":"narrow-avif.png");
+        jxrc::convert(source,output,wide);
+        check(jxrc::inspect(output).width==20000,"Long, narrow F32 source conversion");
+    }
     auto corrupt=jpeg_cmyk;corrupt.resize(24);fails([&]{decode_jpeg(corrupt.data(),corrupt.size());});
     std::cout<<"General JPEG inputs passed\n";
 }

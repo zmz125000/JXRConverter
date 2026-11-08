@@ -452,7 +452,7 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<Sample>
 
     I32 width = 0, height = 0;
     err = decoder->GetSize(decoder, &width, &height);
-    if (Failed(err) || width <= 0 || height <= 0 || width > 16384 || height > 16384 || uint64_t(width)*height>80000000) {
+    if (Failed(err) || width <= 0 || height <= 0 || uint64_t(width)*height>80000000) {
         ALOGE("GetSize failed/out of range: %d %dx%d", err, (int)width, (int)height);
         release_all();
         return false;

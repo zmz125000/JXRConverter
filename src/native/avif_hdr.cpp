@@ -175,6 +175,9 @@ bool scale_avif_to_max_edge(avifImage* image, unsigned max_edge) {
     if (image == nullptr || max_edge == 0 || image->width == 0 || image->height == 0) return true;
     const unsigned long_edge = image->width > image->height ? image->width : image->height;
     if (long_edge <= max_edge) return true;
+    // libavif's libyuv scaler refuses source axes above 16384 and may alter
+    // the image on failure. Decode at full size, then use our working resize.
+    if(image->width>16384 || image->height>16384)return true;
     const double scale = static_cast<double>(max_edge) / static_cast<double>(long_edge);
     uint32_t dw = static_cast<uint32_t>(std::lround(static_cast<double>(image->width) * scale));
     uint32_t dh = static_cast<uint32_t>(std::lround(static_cast<double>(image->height) * scale));
@@ -230,7 +233,7 @@ int linearize_avif_image(avifImage* image,std::vector<Sample>& out_rgba,unsigned
     if (!image || image->width == 0 || image->height == 0) {
         return -6;
     }
-    if (image->width > 16384 || image->height > 16384) {
+    if (uint64_t(image->width)*image->height > 80000000) {
         return -7;
     }
     if (!scale_avif_to_max_edge(image, max_edge)) {
@@ -394,6 +397,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     avifDecoder* dec = avifDecoderCreate();
     if (!dec) return -2;
     dec->imageSizeLimit = 80000000;
+    dec->imageDimensionLimit = 0;
     dec->ignoreExif = out_exif ? AVIF_FALSE : AVIF_TRUE;
     dec->ignoreXMP = AVIF_TRUE;
     // Default decode skips the gain-map item. ISO 21496-1 AVIF needs those pixels.
@@ -433,6 +437,10 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     }
 
     const int result=linearize_avif_image(dec->image,out_rgba,w,h,out_has_gainmap,out_transfer,out_cg,max_edge,sdr);
+    if(result==0 && max_edge && std::max(w,h)>max_edge) {
+        if constexpr(std::is_same_v<Sample,float>)scale_rgba_f32_max_edge(out_rgba,w,h,max_edge);
+        else scale_rgba_f16_max_edge(out_rgba,w,h,max_edge);
+    }
     avifDecoderDestroy(dec);return result;
 }
 

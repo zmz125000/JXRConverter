@@ -46,6 +46,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> dec(avifDecoderCreate(),avifDecoderDestroy);
         if(!dec)throw std::runtime_error("Cannot allocate AVIF inspector");
         dec->imageSizeLimit=80000000;
+        dec->imageDimensionLimit=0;
         if(avifDecoderSetIOMemory(dec.get(),bytes.data(),bytes.size())!=AVIF_RESULT_OK||avifDecoderParse(dec.get())!=AVIF_RESULT_OK)throw std::runtime_error("Unsupported AVIF/HEIF header");
         auto* image=dec->image;out.width=image->width;out.height=image->height;out.bits=image->depth;out.format="AVIF";
         out.gainmap=image->gainMap!=nullptr;

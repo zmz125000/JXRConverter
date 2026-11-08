@@ -23,7 +23,7 @@ struct Rgb {
         uint16_t result;std::memcpy(&result,row+(size_t(x)*4+c)*2,2);return result;
     }
 };
-bool dimensions(const avifImage* image){return image&&image->width&&image->height&&image->width<=16384&&image->height<=16384&&uint64_t(image->width)*image->height<=80000000&&image->depth>=8&&image->depth<=16;}
+bool dimensions(const avifImage* image){return image&&image->width&&image->height&&uint64_t(image->width)*image->height<=80000000&&image->depth>=8&&image->depth<=16;}
 double fraction(avifUnsignedFraction f){return f.d?double(f.n)/f.d:NAN;}
 double fraction(avifSignedFraction f){return f.d?double(f.n)/f.d:NAN;}
 bool profile(avifColorPrimaries cp,const avifRWData& icc,skcms_ICCProfile& linear) {

@@ -712,6 +712,7 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
     if(kind==1) {
         decoder.reset(avifDecoderCreate());if(!decoder)return -80;
         decoder->imageSizeLimit=kLimit;
+        decoder->imageDimensionLimit=0;
         decoder->ignoreExif=AVIF_FALSE;decoder->ignoreXMP=AVIF_TRUE;
         decoder->imageContentToDecode=target==1?AVIF_IMAGE_CONTENT_DECODE_DEFAULT:AVIF_IMAGE_CONTENT_ALL;decoder->maxThreads=std::min(4u,hdr_pixel_jobs(kLimit));
         if(avifDecoderSetIOMemory(decoder.get(),data,size)!=AVIF_RESULT_OK)return -92;
@@ -816,6 +817,7 @@ int source_orientation(const uint8_t* data,size_t size,int kind,std::vector<uint
     }
     if(kind==1) {
         Decoder dec(avifDecoderCreate(),avifDecoderDestroy);if(!dec)return -1;
+        dec->imageSizeLimit=kLimit;dec->imageDimensionLimit=0;
         dec->ignoreExif=AVIF_FALSE;
         if(avifDecoderSetIOMemory(dec.get(),data,size)!=AVIF_RESULT_OK||avifDecoderParse(dec.get())!=AVIF_RESULT_OK)return -1;
         if(dec->image->transformFlags&AVIF_TRANSFORM_CLAP)return -1;
