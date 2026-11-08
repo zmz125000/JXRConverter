@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include <memory>
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
@@ -826,7 +827,7 @@ int decode_raw(const uint8_t* data, size_t size, const jxrc::RawControls& contro
     auto& raw = *storage;
     request_embedded_matrix(raw, controls.white_balance);
     if (raw.open_buffer(data,size)!=LIBRAW_SUCCESS) return -1;
-    if (uint64_t(raw.imgdata.sizes.width)*raw.imgdata.sizes.height>80000000) return -2;
+    if (!fits_working_image(raw.imgdata.sizes.width,raw.imgdata.sizes.height)) return -2;
     Decoded result;
     if (!process_open_raw(raw,data,size,max_edge,hdr?(controls.hdr_mode==jxrc::RawHdrMode::source?3:4):1,
         (controls.hdr_mode==jxrc::RawHdrMode::source?10000.f:float(controls.target_nits))/203.f,
@@ -854,7 +855,7 @@ int decode_raw_f32(const uint8_t* data,size_t size,const jxrc::RawControls& cont
     auto storage=std::make_unique<HeadroomRaw>();auto& raw=*storage;
     request_embedded_matrix(raw,controls.white_balance);
     if(raw.open_buffer(data,size)!=LIBRAW_SUCCESS)return -1;
-    if(uint64_t(raw.imgdata.sizes.width)*raw.imgdata.sizes.height>80000000)return -2;
+    if(!fits_working_image(raw.imgdata.sizes.width,raw.imgdata.sizes.height))return -2;
     Decoded result;
     if(!process_open_raw(raw,data,size,max_edge,hdr?(controls.hdr_mode==jxrc::RawHdrMode::source?3:4):1,
         (controls.hdr_mode==jxrc::RawHdrMode::source?10000.f:float(controls.target_nits))/203.f,

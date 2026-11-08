@@ -1,3 +1,4 @@
+#include "image_size.h"
 // HEIC container/HEVC decoding is native on every platform. Apple/ProXDR
 // gain-map interpretation follows LocalViewer's HeifContainer/AppleGainMapDecode.
 #include "heif_decode.h"
@@ -10,7 +11,7 @@
 #include <stdexcept>
 
 namespace {
-constexpr uint64_t limit=80000000;
+
 void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
 void checked(heif_error error){if(error.code!=heif_error_Ok)throw std::runtime_error(std::string("HEIC: ")+(error.message?error.message:"decode failed"));}
 using Context=std::unique_ptr<heif_context,decltype(&heif_context_free)>;
@@ -22,11 +23,11 @@ struct Input {
     std::vector<uint8_t> exif;
     explicit Input(const uint8_t* data,size_t size){
         check(context!=nullptr,"Cannot allocate HEIC decoder");
-        auto* limits=heif_context_get_security_limits(context.get());limits->max_image_size_pixels=limit;limits->max_color_profile_size=16*1024*1024;
-        heif_context_set_max_decoding_threads(context.get(),std::min(4u,hdr_pixel_jobs(limit)));
+        auto* limits=heif_context_get_security_limits(context.get());limits->max_image_size_pixels=UINT32_MAX;limits->max_color_profile_size=16*1024*1024;
+        heif_context_set_max_decoding_threads(context.get(),std::min(4u,hdr_pixel_jobs(UINT32_MAX)));
         checked(heif_context_read_from_memory_without_copy(context.get(),data,size,nullptr));
         heif_image_handle* handle=nullptr;checked(heif_context_get_primary_image_handle(context.get(),&handle));base.reset(handle);
-        check(heif_image_handle_get_width(handle)>0&&heif_image_handle_get_height(handle)>0&&uint64_t(heif_image_handle_get_width(handle))*heif_image_handle_get_height(handle)<=limit,"HEIC dimensions exceed limit");
+        check(heif_image_handle_get_width(handle)>0&&heif_image_handle_get_height(handle)>0&&fits_working_image(heif_image_handle_get_width(handle),heif_image_handle_get_height(handle)),"HEIC dimensions exceed limit");
         heif_item_id id=0;
         if(heif_image_handle_get_list_of_metadata_block_IDs(handle,"Exif",&id,1)==1){
             const auto n=heif_image_handle_get_metadata_size(handle,id);check(n<=1024*1024,"HEIC EXIF exceeds limit");
@@ -80,7 +81,7 @@ RegularImage decode(heif_image_handle* handle,bool map,unsigned edge){
         checked(heif_image_scale_image(decoded,&small,std::max(1u,unsigned(uint64_t(w)*edge/longest)),std::max(1u,unsigned(uint64_t(h)*edge/longest)),nullptr));image.reset(small);decoded=small;
     }
     RegularImage raster;raster.width=heif_image_get_primary_width(decoded);raster.height=heif_image_get_primary_height(decoded);raster.bits=bits;raster.format="HEIC";
-    check(raster.width&&raster.height&&uint64_t(raster.width)*raster.height<=limit,"Invalid HEIC image dimensions");
+    check(raster.width&&raster.height&&fits_working_image(raster.width,raster.height),"Invalid HEIC image dimensions");
     int stride=0;const auto channel=map?heif_channel_Y:heif_channel_interleaved;const uint8_t* pixels=heif_image_get_plane_readonly(decoded,channel,&stride);check(pixels&&stride>0,"Missing HEIC pixels");
     const unsigned actualBits=heif_image_get_bits_per_pixel_range(decoded,channel);check(actualBits>=8&&actualBits<=16,"Invalid HEIC decoded precision");
     const bool sixteen=bits>8;const unsigned max=(1u<<actualBits)-1;
@@ -144,7 +145,7 @@ HeifSource decode_heif(const uint8_t* data,size_t size,unsigned edge){
     const auto oppo=proxdr(data,size);
     if(oppo.jpeg){
         ultrahdr::JpegDecoderHelper decoder;check(decoder.parseImage(oppo.jpeg,oppo.size).error_code==UHDR_CODEC_OK,"Invalid ProXDR gain-map JPEG");
-        check(uint64_t(decoder.getDecompressedImageWidth())*decoder.getDecompressedImageHeight()<=limit,"ProXDR gain map exceeds limit");
+        check(fits_working_image(decoder.getDecompressedImageWidth(),decoder.getDecompressedImageHeight()),"ProXDR gain map exceeds limit");
         check(decoder.decompressImage(oppo.jpeg,oppo.size,ultrahdr::DECODE_STREAM).error_code==UHDR_CODEC_OK,"ProXDR gain-map decode failed");const auto image=decoder.getDecompressedImage();
         check(image.fmt==UHDR_IMG_FMT_8bppYCbCr400||image.fmt==UHDR_IMG_FMT_24bppRGB888||image.fmt==UHDR_IMG_FMT_32bppRGBA8888,"Unsupported ProXDR map layout");source.gain.width=image.w;source.gain.height=image.h;source.gain.bits=8;source.gain.pixels.resize(size_t(image.w)*image.h*4);const unsigned channels=image.fmt==UHDR_IMG_FMT_8bppYCbCr400?1:image.fmt==UHDR_IMG_FMT_24bppRGB888?3:4;
         for(unsigned y=0;y<image.h;++y)for(unsigned x=0;x<image.w;++x){for(unsigned c=0;c<3;++c)source.gain.pixels[(size_t(y)*image.w+x)*4+c]=static_cast<const uint8_t*>(image.planes[0])[size_t(y)*image.stride[0]*channels+x*channels+(channels==1?0:c)];source.gain.pixels[(size_t(y)*image.w+x)*4+3]=255;}

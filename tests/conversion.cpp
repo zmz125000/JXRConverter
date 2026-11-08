@@ -599,6 +599,21 @@ static void jpeg_inputs(const fs::path& dir) {
     options.mode=jxrc::Mode::process;options.exposure=.5;jxrc::convert(jpeg,dir/"wide-f32.png",options);
     const auto encoded=bytes(jpeg);const auto decoded=decode_jpeg(encoded.data(),encoded.size());
     check(decoded.width==9000&&decoded.pixels[0]==255,"Wide JPEG pixels");
+    // Header inspection must accept a valid JPEG dimension beyond the old
+    // 80-megapixel ceiling without allocating the declared raster.
+    auto large_header=encoded;bool patched=false;
+    for(size_t at=2;at+10<large_header.size();) {
+        if(large_header[at]!=255)break;
+        const unsigned marker=large_header[at+1],length=unsigned(large_header[at+2])*256+large_header[at+3];
+        if(marker==0xc0||marker==0xc2) {
+            large_header[at+5]=uint8_t(9000>>8);large_header[at+6]=uint8_t(9000);
+            large_header[at+7]=uint8_t(10000>>8);large_header[at+8]=uint8_t(10000);patched=true;break;
+        }
+        if(length<2||at+2+length>large_header.size())break;at+=2+length;
+    }
+    check(patched,"JPEG header fixture patch");
+    const auto large_info=jxrc::inspect_bytes(large_header);
+    check(large_info.width==10000&&large_info.height==9000,"90-megapixel JPEG header rejected");
     // A tall or wide source remains safe under the pixel budget even when one
     // axis exceeds the old, unrelated 16,384-pixel threshold.
     const auto narrow=dir/"narrow.png";

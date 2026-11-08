@@ -1,3 +1,4 @@
+#include "image_size.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "codec_api.h"
 #include "hdr_parallel.h"
@@ -24,7 +25,7 @@ namespace {
 using Image = std::unique_ptr<avifImage, decltype(&avifImageDestroy)>;
 using Decoder = std::unique_ptr<avifDecoder, decltype(&avifDecoderDestroy)>;
 using Uhdr = std::unique_ptr<uhdr_codec_private_t, void (*)(uhdr_codec_private_t*)>;
-constexpr unsigned kLimit = 80000000;
+constexpr unsigned kLimit = AVIF_DEFAULT_IMAGE_SIZE_LIMIT;
 bool ok(uhdr_error_info_t e) { return e.error_code == UHDR_CODEC_OK; }
 // Source decoders expose RGBA even for inputs without alpha. Inspect only the
 // alpha samples, retaining integer codes and custom ICC profiles when opaque.
@@ -74,7 +75,7 @@ unsigned avif_source_depth(unsigned bits, const StillEncodeQuality& quality) {
 Image from_rgb(unsigned w, unsigned h, const void* pixels, bool sixteen, unsigned depth,
                int primaries, int transfer, StillEncodeQuality quality, bool map = false, bool gray = false) {
     Image image(avifImageCreate(w,h,depth,gray?AVIF_PIXEL_FORMAT_YUV400:AVIF_PIXEL_FORMAT_YUV444),avifImageDestroy);
-    if (!image || uint64_t(w)*h > kLimit) return Image(nullptr,avifImageDestroy);
+    if (!image || !fits_working_image(w,h)) return Image(nullptr,avifImageDestroy);
     image->colorPrimaries = static_cast<avifColorPrimaries>(primaries);
     image->transferCharacteristics = static_cast<avifTransferCharacteristics>(transfer);
     // Identity keeps RGB codes exact only when lossless; lossy AV1 quantizes the U/V planes
@@ -89,7 +90,7 @@ Image from_rgb(unsigned w, unsigned h, const void* pixels, bool sixteen, unsigne
     return image;
 }
 bool rgb_pixels(const avifImage* image, unsigned depth, std::vector<uint8_t>& pixels) {
-    if (!image || !image->width || !image->height || uint64_t(image->width)*image->height > kLimit) return false;
+    if (!image || !image->width || !image->height || !fits_working_image(image->width,image->height)) return false;
     pixels.resize(size_t(image->width)*image->height*4*(depth>8?2:1));
     avifRGBImage rgb; avifRGBImageSetDefaults(&rgb,image);
     rgb.format=AVIF_RGB_FORMAT_RGBA; rgb.depth=depth; rgb.alphaPremultiplied=AVIF_FALSE;
@@ -172,7 +173,7 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
     for(;;) {
         const auto status=JxlDecoderProcessInput(decoder.get());
         if(status==JXL_DEC_BASIC_INFO) {
-            if(JxlDecoderGetBasicInfo(decoder.get(),&info)!=JXL_DEC_SUCCESS || uint64_t(info.xsize)*info.ysize>kLimit)return Image(nullptr,avifImageDestroy);
+            if(JxlDecoderGetBasicInfo(decoder.get(),&info)!=JXL_DEC_SUCCESS || !fits_working_image(info.xsize,info.ysize))return Image(nullptr,avifImageDestroy);
             for(unsigned i=0;i<info.num_extra_channels;++i) {
                 JxlExtraChannelInfo extra;
                 if(JxlDecoderGetExtraChannelInfo(decoder.get(),i,&extra)!=JXL_DEC_SUCCESS)return Image(nullptr,avifImageDestroy);
@@ -497,7 +498,7 @@ bool insert_jpeg_exif(std::vector<uint8_t>& jpeg,const StillEncodeQuality& quali
 // at the 8-bit JPEG boundary; alpha compositing requires the render path.
 int write_rgb_jpeg(unsigned w,unsigned h,const void* pixels,const StillSourceColor& color,
                    const char* path,StillEncodeQuality quality) {
-    if(!pixels || !w || !h || uint64_t(w)*h>kLimit)return -94;
+    if(!pixels || !w || !h || !fits_working_image(w,h))return -94;
     if(color.cmyk) {
         if(!color.bits || color.bits>16 || color.channels!=4)return -94;
         return encode_cmyk_jpeg(w,h,static_cast<const uint8_t*>(pixels),color,path,quality);

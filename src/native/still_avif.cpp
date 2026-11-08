@@ -1,3 +1,4 @@
+#include "image_size.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "codec_api.h"
 #include "render_analysis.h"
@@ -276,7 +277,7 @@ int encode_avif_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t g
 // Quantize once, after transfer conversion, directly to the requested AV1 depth.
 int encode_avif_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t gamut,
                     int mode,const char* path,StillEncodeQuality quality,const float* sdr_base) {
-    if(!rgba||!path||!w||!h||uint64_t(w)*h>80000000||mode<0||mode>3)return -70;
+    if(!rgba||!path||!w||!h||!fits_working_image(w,h)||mode<0||mode>3)return -70;
     const size_t pixels=size_t(w)*h;
     const bool pq=mode==1,gain_map=mode==2,hlg=mode==3;
     auto* analysis=quality.analysis&&quality.analysis->matches(rgba,pixels,gamut)?quality.analysis:nullptr;

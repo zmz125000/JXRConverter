@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include "working_pixels.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
@@ -292,7 +293,7 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
             if (out_source_depth) *out_source_depth = static_cast<int>(info.bits_per_sample);
             w = info.xsize;
             h = info.ysize;
-            if (w == 0 || h == 0 || uint64_t(w)*h>80000000) return -8;
+            if (w == 0 || h == 0 || !fits_working_image(w,h)) return -8;
             JxlResizableParallelRunnerSetThreads(
                 runner.get(), std::min<size_t>(JxlResizableParallelRunnerSuggestThreads(w, h), hdr_pixel_jobs(static_cast<size_t>(w) * h)));
         } else if (status == JXL_DEC_COLOR_ENCODING) {

@@ -1,3 +1,4 @@
+#include "image_size.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "hdr_encode.h"
 #include "hdr_parallel.h"
@@ -248,7 +249,7 @@ int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg
 int encode_jxl_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t cg,
                    bool hdr,const char* path,StillEncodeQuality quality,bool pq,bool hlg) {
     const size_t pixels=static_cast<size_t>(w)*h;
-    if(!rgba||!path||!w||!h||pixels>80000000||(pq&&hlg))return -60;
+    if(!rgba||!path||!w||!h||pixels>SIZE_MAX/16||(pq&&hlg))return -60;
     if(hlg) {
         std::vector<uint16_t> encoded(pixels*4);
         hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned){

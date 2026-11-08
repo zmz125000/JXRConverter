@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include "codec_api.h"
 #include "render_analysis.h"
 #include "exif_metadata.h"
@@ -61,7 +62,7 @@ PngLightLevels png_light_levels(unsigned w,unsigned h,unsigned depth,unsigned ch
 template<class Row>
 int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
               const StillSourceColor& color,const char* path,StillEncodeQuality quality,Row fill,bool matching_cicp=false,RenderAnalysis* analysis=nullptr) {
-    if(!w||!h||uint64_t(w)*h>80000000||(depth!=8&&depth!=16)||!path)return -100;
+    if(!w||!h||!fits_working_image(w,h)||(depth!=8&&depth!=16)||!path)return -100;
     std::vector<uint8_t> row(size_t(w)*channels*(depth/8));
     const bool hdr=color.transfer==16||color.transfer==18;
     if(hdr&&color.primaries!=1&&color.primaries!=9&&color.primaries!=12)return -105;
@@ -158,7 +159,7 @@ int encode_png_source(unsigned w,unsigned h,const void* pixels,bool sixteen,
 // F32 stays in display-linear light until the final transfer and quantization.
 int encode_png_f32(unsigned w,unsigned h,const float* rgba,uhdr_color_gamut_t gamut,
                    int transfer,int depth,const char* path,StillEncodeQuality quality) {
-    if(!rgba||!w||!h||uint64_t(w)*h>80000000||(depth!=8&&depth!=16)||(transfer!=13&&transfer!=16&&transfer!=18))return -100;
+    if(!rgba||!w||!h||!fits_working_image(w,h)||(depth!=8&&depth!=16)||(transfer!=13&&transfer!=16&&transfer!=18))return -100;
     auto* analysis=quality.analysis&&quality.analysis->matches(rgba,size_t(w)*h,gamut)?quality.analysis:nullptr;
     if(analysis&&transfer==16)analysis->pq_levels(depth);
     StillSourceColor color;color.primaries=gamut==UHDR_CG_BT_2100?9:gamut==UHDR_CG_DISPLAY_P3?12:1;

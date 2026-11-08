@@ -132,7 +132,7 @@ QImage readThumbnail(const QString& path,int edge,const std::function<bool()>& c
             auto bytes=QByteArray::fromRawData(reinterpret_cast<const char*>(source.bytes.data()),qsizetype(source.bytes.size()));
             QBuffer buffer(&bytes);buffer.open(QIODevice::ReadOnly);QImageReader reader(&buffer,"PNG");reader.setAutoTransform(true);
             const auto size=reader.size();const int bound=std::clamp(edge,1,768);
-            if(size.width()>0&&size.height()>0&&qint64(size.width())*size.height()<=80000000) {
+            if(size.width()>0&&size.height()>0) {
                 if(std::max(size.width(),size.height())>bound)reader.setScaledSize(size.scaled(bound,bound,Qt::KeepAspectRatio));fallback=reader.read();
                 if(!fallback.isNull()) {
                     if(fallback.colorSpace().isValid())fallback.convertToColorSpace(QColorSpace::SRgb);

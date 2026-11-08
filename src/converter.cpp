@@ -1,3 +1,4 @@
+#include "native/image_size.h"
 #include "jxrc/converter.hpp"
 #include "jxrc/version.hpp"
 #include "reader_pixels.h"
@@ -121,7 +122,7 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
         status=uhdr_dec_set_out_color_transfer(dec.get(),UHDR_CT_LINEAR);
         require(status.error_code==UHDR_CODEC_OK,"Ultra HDR output transfer failed");
     if(uhdr_dec_set_image(dec.get(),&compressed).error_code==UHDR_CODEC_OK&&uhdr_dec_probe(dec.get()).error_code==UHDR_CODEC_OK) {
-        require(uhdr_dec_get_image_width(dec.get())>0&&uhdr_dec_get_image_height(dec.get())>0&&uint64_t(uhdr_dec_get_image_width(dec.get()))*uhdr_dec_get_image_height(dec.get())<=80000000,"JPEG dimensions exceed limit");
+        require(uhdr_dec_get_image_width(dec.get())>0&&uhdr_dec_get_image_height(dec.get())>0&&fits_working_image(uhdr_dec_get_image_width(dec.get()),uhdr_dec_get_image_height(dec.get())),"JPEG dimensions exceed limit");
         if constexpr(std::is_same_v<Sample,float>) {
             auto source=decode_jpeg_gain_map(bytes.data(),bytes.size());
             require(bool(source)&&reconstruct_gain_map_f32(source.get(),pixels,gamut,sdr),"JPEG gain-map F32 reconstruction failed");
@@ -316,7 +317,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 rc=decode_raw_f32(bytes.data(),bytes.size(),o.raw,hdr_target(o.target),o.max_edge,linear,sdr_base,w,h,cg);
                 gamut=cg==2?UHDR_CG_BT_2100:cg==1?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
             }
-            require(rc==0&&w&&h&&uint64_t(w)*h<=80000000&&
+            require(rc==0&&w&&h&&fits_working_image(w,h)&&
                     linear.size()==size_t(w)*h*4,
                     "Image decode failed (codec "+std::to_string(rc)+")");
             if(o.keep_exif&&(format==4||format==5))exif=portable_source_exif(bytes.data(),bytes.size(),w,h);

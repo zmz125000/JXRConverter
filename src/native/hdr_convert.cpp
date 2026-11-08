@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include "working_pixels.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
@@ -452,7 +453,7 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<Sample>
 
     I32 width = 0, height = 0;
     err = decoder->GetSize(decoder, &width, &height);
-    if (Failed(err) || width <= 0 || height <= 0 || uint64_t(width)*height>80000000) {
+    if (Failed(err) || width <= 0 || height <= 0 || !fits_working_image(width,height)) {
         ALOGE("GetSize failed/out of range: %d %dx%d", err, (int)width, (int)height);
         release_all();
         return false;
@@ -1379,10 +1380,10 @@ int encode_srgb_jpeg_u8(unsigned w, unsigned h, const uint8_t* rgba, const char*
 int encode_still_export(const uint8_t* src, size_t src_len, unsigned w, unsigned h, bool f16,
                         int gamut, int mode, bool premultiplied, const char* out_path, size_t sdr_offset = 0,
                         StillEncodeQuality quality = 1, bool mutable_input = false) {
-    if (!src || !out_path || w == 0 || h == 0 || mode < 0 || mode > kExportJxlPq) return -50;
+    if (!src || !out_path || !fits_working_image(w,h) || mode < 0 || mode > kExportJxlPq) return -50;
     const size_t pixels = static_cast<size_t>(w) * static_cast<size_t>(h);
     const size_t bpp = f16 ? 8u : 4u;
-    if (pixels == 0 || pixels > 80000000u || src_len < pixels * bpp) return -51;
+    if (pixels == 0 || pixels > SIZE_MAX/16 || src_len < pixels * bpp) return -51;
     if (sdr_offset && (!f16 || sdr_offset != pixels * 8u || sdr_offset > src_len || pixels * 4u > src_len - sdr_offset)) return -51;
     const uhdr_color_gamut_t cg = export_gamut(gamut);
     if (f16) {
@@ -1445,7 +1446,7 @@ int decode_jxr_memory(const uint8_t* data,size_t size,std::vector<uint16_t>& rgb
 
 int encode_still_export_f32(const float* src,unsigned w,unsigned h,int gamut,int mode,
                             const char* path,StillEncodeQuality quality,const float* sdr_base) {
-    if(!src||!path||!w||!h||mode<0||mode>kExportJxlPq||uint64_t(w)*h>80000000)return -50;
+    if(!src||!path||!w||!h||mode<0||mode>kExportJxlPq||!fits_working_image(w,h))return -50;
     const auto cg=export_gamut(gamut);const size_t pixels=size_t(w)*h;
     const float background=quality.transparency_background_white?1.f:0.f;
     if(mode==kExportJxl||mode==kExportJxlHdr||mode==kExportJxlPq)

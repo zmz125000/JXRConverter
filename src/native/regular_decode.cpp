@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include "regular_decode.h"
 #include "linear_color_profile.h"
 #include "hdr_encode.h"
@@ -12,7 +13,8 @@
 #define STBI_NO_STDIO
 #define STBI_NO_LINEAR
 #define STBI_NO_HDR
-#define STBI_MAX_DIMENSIONS 80000000
+#include <climits>
+#define STBI_MAX_DIMENSIONS INT_MAX
 #include <stb_image.h>
 #include <algorithm>
 #include <cmath>
@@ -26,7 +28,7 @@ namespace {
 constexpr size_t metadata_limit = 16 * 1024 * 1024;
 void check(bool ok, const char* message) { if (!ok) throw std::runtime_error(message); }
 void dimensions(unsigned w, unsigned h) {
-    check(w && h && uint64_t(w)*h <= 80000000, "Invalid or oversized raster dimensions");
+    check(w && h && fits_working_image(w,h), "Invalid or oversized raster dimensions");
 }
 bool signature(const uint8_t* data, size_t size, const char* text, size_t count) {
     return size >= count && !std::memcmp(data,text,count);
@@ -106,7 +108,7 @@ RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false
     check(info && end,"Cannot allocate PNG metadata");
     if(setjmp(png_jmpbuf(png)))throw std::runtime_error("Invalid or unsupported PNG");
     png_set_read_fn(png,&input,png_read);png_set_crc_action(png,PNG_CRC_ERROR_QUIT,PNG_CRC_ERROR_QUIT);
-    png_set_user_limits(png,80000000,80000000);png_set_chunk_malloc_max(png,metadata_limit);
+    png_set_user_limits(png,PNG_UINT_31_MAX,PNG_UINT_31_MAX);png_set_chunk_malloc_max(png,metadata_limit);
     png_read_info(png,info);
     image.width=png_get_image_width(png,info);image.height=png_get_image_height(png,info);dimensions(image.width,image.height);
     const int color=png_get_color_type(png,info),depth=png_get_bit_depth(png,info);

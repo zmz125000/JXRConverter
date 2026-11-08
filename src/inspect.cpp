@@ -1,3 +1,4 @@
+#include "native/image_size.h"
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
 #include "input_format.h"
@@ -45,7 +46,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
     } else if(is_avif_input(bytes.data(),bytes.size())) {
         std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> dec(avifDecoderCreate(),avifDecoderDestroy);
         if(!dec)throw std::runtime_error("Cannot allocate AVIF inspector");
-        dec->imageSizeLimit=80000000;
+        dec->imageSizeLimit=AVIF_DEFAULT_IMAGE_SIZE_LIMIT;
         dec->imageDimensionLimit=0;
         if(avifDecoderSetIOMemory(dec.get(),bytes.data(),bytes.size())!=AVIF_RESULT_OK||avifDecoderParse(dec.get())!=AVIF_RESULT_OK)throw std::runtime_error("Unsupported AVIF/HEIF header");
         auto* image=dec->image;out.width=image->width;out.height=image->height;out.bits=image->depth;out.format="AVIF";
@@ -79,7 +80,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         if(raw.imgdata.sizes.flip==5||raw.imgdata.sizes.flip==6)std::swap(out.width,out.height);
         out.bits=raw.get_internal_data_pointer()->unpacker_data.tiff_bps;
     }
-    if(!out.width||!out.height||uint64_t(out.width)*out.height>80000000)throw std::runtime_error("Invalid or oversized image dimensions");
+    if(!out.width||!out.height||!fits_working_image(out.width,out.height))throw std::runtime_error("Invalid or oversized image dimensions");
     return out;
 }
 }

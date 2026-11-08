@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include "regular_decode.h"
 #include <OpenEXR/ImfIO.h>
 #include <OpenEXR/ImfMultiPartInputFile.h>
@@ -17,7 +18,7 @@
 namespace {
 void check(bool ok,const char* message){if(!ok)throw std::runtime_error(message);}
 void dimensions(RegularImage& image,uint64_t w,uint64_t h) {
-    check(w&&h&&w<=80000000&&h<=80000000&&w*h<=80000000,"Invalid or oversized linear image dimensions");
+    check(w&&h&&w<=UINT32_MAX&&h<=UINT32_MAX&&fits_working_image(w,h),"Invalid or oversized linear image dimensions");
     image.width=unsigned(w);image.height=unsigned(h);image.transfer=8;image.bits=32;
 }
 struct MemoryStream final:Imf::IStream {

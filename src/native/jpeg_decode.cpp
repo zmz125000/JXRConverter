@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include "regular_decode.h"
 #include "skcms.h"
 #include <cstdio>
@@ -39,7 +40,7 @@ RegularImage decode_jpeg(const uint8_t* data,size_t size,bool metadata_only,bool
     image.width=decoder.image_width;image.height=decoder.image_height;
     image.gray=decoder.num_components==1;
     image.cmyk=decoder.jpeg_color_space==JCS_CMYK||decoder.jpeg_color_space==JCS_YCCK;
-    if(!image.width||!image.height||uint64_t(image.width)*image.height>80000000)
+    if(!image.width||!image.height||!fits_working_image(image.width,image.height))
         throw std::runtime_error("JPEG dimensions exceed limit");
     if(decoder.data_precision!=8)throw std::runtime_error("Unsupported JPEG sample precision");
     image.icc=source_jpeg_icc(data,size);

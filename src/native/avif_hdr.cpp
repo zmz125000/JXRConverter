@@ -1,3 +1,4 @@
+#include "image_size.h"
 #include "working_pixels.h"
 #include "render_analysis.h"
 #include "heif_decode.h"
@@ -233,7 +234,7 @@ int linearize_avif_image(avifImage* image,std::vector<Sample>& out_rgba,unsigned
     if (!image || image->width == 0 || image->height == 0) {
         return -6;
     }
-    if (uint64_t(image->width)*image->height > 80000000) {
+    if (!fits_working_image(image->width,image->height)) {
         return -7;
     }
     if (!scale_avif_to_max_edge(image, max_edge)) {
@@ -396,7 +397,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
 
     avifDecoder* dec = avifDecoderCreate();
     if (!dec) return -2;
-    dec->imageSizeLimit = 80000000;
+    dec->imageSizeLimit = AVIF_DEFAULT_IMAGE_SIZE_LIMIT;
     dec->imageDimensionLimit = 0;
     dec->ignoreExif = out_exif ? AVIF_FALSE : AVIF_TRUE;
     dec->ignoreXMP = AVIF_TRUE;
