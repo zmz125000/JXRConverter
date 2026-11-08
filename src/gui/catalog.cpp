@@ -178,11 +178,21 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     if (role == RawRole) return r.raw;
     if (role == SummaryRole) return QStringList{dimensions(r), r.format, r.transfer}.filter(QRegularExpression(".+")).join(" · ");
     if (role == DetailsRole) {
-        QStringList details{data(index,SummaryRole).toString()};
-        for(int column:{Bits,Primaries,Hdr,Gainmap,Raw,Size,Megapixels,AspectRatio,MaxEdge,Camera,Lens,Iso,Aperture,Shutter,Focal,Captured,Created,Modified,ExifDate,Path,Error,MetadataWarning}) {
+        QStringList details;
+        if(r.width>0&&r.height>0)details.append(dimensions(r));
+        details.append(r.format);
+        details.append(r.transfer);
+        if(r.bytes>0)details.append(QLocale().formattedDataSize(r.bytes,2,QLocale::DataSizeSIFormat));
+        if(r.bits>0)details.append(QString("%1-bit").arg(r.bits));
+        details.append(r.primaries);
+        if(r.hdr)details.append("HDR");
+        if(r.gainmap)details.append("Gain map");
+        if(r.raw)details.append("RAW");
+        for(int column:{Camera,Lens,Iso,Aperture,Shutter,Focal,Captured,Created,Modified,ExifDate,Error,MetadataWarning}) {
             const auto value=data(this->index(index.row(),column),Qt::DisplayRole).toString();
-            if(!value.isEmpty())details.append(headerData(column,Qt::Horizontal,Qt::DisplayRole).toString()+": "+value.simplified());
+            if(!value.isEmpty())details.append(value.simplified());
         }
+        details.removeDuplicates();
         return details.filter(QRegularExpression(".+")).join(" · ");
     }
     if (role == Qt::ToolTipRole) return r.path + "\n" + dimensions(r) + "\n" + r.camera + "\n" + r.imageDate().toString("yyyy-MM-dd HH:mm:ss") + "\n" + r.status + (r.error.isEmpty()?QString{}:"\n"+r.error) + (r.metadataWarning.isEmpty()?QString{}:"\nMetadata: "+r.metadataWarning);

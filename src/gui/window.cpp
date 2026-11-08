@@ -268,6 +268,13 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     views_=new QStackedWidget;list_=new FileListView;table_=new FileTableView;delegate_=new ThumbnailDelegate(list_);list_->setItemDelegate(delegate_);
     list_->setModel(proxy_);table_->setModel(proxy_);list_->setSelectionModel(selection_);table_->setSelectionModel(selection_);
     table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);for(int column:{Catalog::Captured,Catalog::Created,Catalog::Modified,Catalog::ExifDate})table_->setColumnWidth(column,170);for(int column:{Catalog::Path,Catalog::Error,Catalog::MetadataWarning})table_->setColumnWidth(column,300);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
+    detailColumnsTimer_=new QTimer(this);detailColumnsTimer_->setSingleShot(true);detailColumnsTimer_->setInterval(30);
+    connect(detailColumnsTimer_,&QTimer::timeout,this,&MainWindow::updateDetailColumns);
+    const auto scheduleDetailColumns=[this]{if(!detailColumnsTimer_->isActive())detailColumnsTimer_->start();};
+    connect(catalog_,&QAbstractItemModel::rowsInserted,this,scheduleDetailColumns);
+    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,scheduleDetailColumns);
+    connect(catalog_,&QAbstractItemModel::modelReset,this,scheduleDetailColumns);
+    connect(catalog_,&QAbstractItemModel::dataChanged,this,scheduleDetailColumns);
     views_->addWidget(list_);views_->addWidget(table_);layout->addWidget(views_,1);
     counts_=new QLabel("0 visible / 0 files\n0 selected");counts_->setObjectName("catalogCounts");counts_->setSizePolicy(QSizePolicy::Preferred,QSizePolicy::Preferred);
     libraryMessageTimer_=new QTimer(this);libraryMessageTimer_->setSingleShot(true);connect(libraryMessageTimer_,&QTimer::timeout,this,[this]{libraryMessage_.clear();updateCounts();});
@@ -977,6 +984,7 @@ void MainWindow::updatePresentation() {
     else restoringBrowserScroll_=false;
 }
 void MainWindow::applyPresentation() {
+    updateDetailColumns();
     findChild<QLabel*>("thumbnailSizeValue")->setText(QString::number(size_->value())+" dp");
     const bool details=viewMode_->checkedId()==2,grid=viewMode_->checkedId()==0;
     views_->setCurrentWidget(details?static_cast<QWidget*>(table_):list_);list_->setPresentation(grid,size_->value(),aspectRatios[aspectIndex_]);
@@ -1039,6 +1047,17 @@ void MainWindow::updateCounts() {
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
+}
+void MainWindow::updateDetailColumns() {
+    // Use loaded catalog values without triggering metadata reads. Keep Name
+    // as the empty table's anchor; filters should not make columns flicker.
+    QVector<bool> populated(Catalog::ColumnCount,false);populated[Catalog::Name]=true;
+    for(int row=0;row<catalog_->rowCount();++row)for(int column=0;column<Catalog::ColumnCount;++column) {
+        if(populated[column]||(column==Catalog::Size&&catalog_->record(row).bytes<=0))continue;
+        populated[column]=!catalog_->index(row,column).data().toString().trimmed().isEmpty();
+    }
+    for(int column=0;column<Catalog::ColumnCount;++column)
+        if(table_->isColumnHidden(column)==populated[column])table_->setColumnHidden(column,!populated[column]);
 }
 void MainWindow::showMetadata() {
     QModelIndex index=selection_->currentIndex();const auto selected=selection_->selectedRows(0);

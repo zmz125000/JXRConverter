@@ -42,10 +42,17 @@ public:
     void setSmoothScrolling(bool enabled);
     void selectAll() override;
     void setFillThumbnails(bool fill);
+    void setModel(QAbstractItemModel*) override;
+    void setSelectionModel(QItemSelectionModel*) override;
+    QRect visualRect(const QModelIndex&) const override;
+    QModelIndex indexAt(const QPoint&) const override;
+    void scrollTo(const QModelIndex&, ScrollHint hint = EnsureVisible) override;
 signals:
     void pathsDropped(const QStringList& paths);
     void bulkSelectionChanged(bool selecting);
 protected:
+    void resizeEvent(QResizeEvent*) override;
+    bool eventFilter(QObject*, QEvent*) override;
     void paintEvent(QPaintEvent*) override;
     void hideEvent(QHideEvent*) override;
     void wheelEvent(QWheelEvent*) override;
@@ -53,6 +60,8 @@ protected:
     void dragMoveEvent(QDragMoveEvent*) override;
     void dropEvent(QDropEvent*) override;
 private:
+    void updateFrozenColumn();
+    QTableView* frozen_;
     bool smooth_ = false;
     QPropertyAnimation* scrollAnimation_ = nullptr;
     double wheelRemainder_ = 0;

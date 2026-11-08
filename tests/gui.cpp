@@ -190,35 +190,86 @@ private slots:
         const auto avifRecord=readMetadata(avif);QCOMPARE(avifRecord.width,128);QCOMPARE(avifRecord.format,QString("AVIF"));
         const auto nativeThumbnail=readThumbnail(avif,40);QVERIFY(!nativeThumbnail.isNull());QCOMPARE(nativeThumbnail.width(),40);
     }
-    void listDescriptionsIncludeMetadataAndOverflow() {
+    void listDescriptionsIncludeMetadataAndWrap() {
         const auto path=makeImage(root("list-description"),"photo.jpg",128,64,400);
         Catalog catalog;catalog.addPaths({path});QTRY_COMPARE(catalog.rowCount(),1);QTRY_VERIFY(inspected(catalog));
         const auto index=catalog.index(0,0);
         const auto summary=index.data(Catalog::SummaryRole).toString();
         const auto details=index.data(Catalog::DetailsRole).toString();
         QCOMPARE(summary,QString("128 × 64 · JPEG · sRGB"));
-        for(const auto& field:{QString("Camera: Test Camera Body"),QString("Lens: Prime 50"),QString("ISO: 400"),QString("Aperture: f/2.8"),QString("Shutter: 1/125 s"),QString("Bit depth: 8"),QString("HDR: No"),QString("Gain map: No"),QString("RAW: No"),QString("Full path: ")+path})
+        for(const auto& field:{QString("Test Camera Body"),QString("Prime 50"),QString("400"),QString("f/2.8"),QString("1/125 s"),QString("8-bit"),QString("128 × 64"),QString("50 mm")})
             QVERIFY2(details.contains(field),qPrintable(details));
+        QVERIFY(details.startsWith("128 × 64 · JPEG · sRGB · "+QLocale().formattedDataSize(QFileInfo(path).size(),2,QLocale::DataSizeSIFormat)+" · 8-bit"));
+        for(const auto& hidden:{QString("Camera:"),QString("Lens:"),QString("Bit depth:")})
+            QVERIFY2(!details.contains(hidden),qPrintable(details));
+        QVERIFY(!details.contains(path));QVERIFY(!details.contains(" px"));
+        const auto values=details.split(" · ");
+        QVERIFY(!details.contains(" MP"));QVERIFY(!values.contains("128 px"));QVERIFY(!values.contains("2:1"));
+        for(const auto& hidden:{QString("HDR"),QString("Gain map"),QString("RAW"),QString("Yes"),QString("No")})
+            QVERIFY2(!values.contains(hidden),qPrintable(details));
+        jxrc::Options hdr;hdr.mode=jxrc::Mode::process;hdr.target=jxrc::Target::avif_gainmap;
+        const auto gain=root("list-description")+"/gain.avif";
+        jxrc::convert(std::filesystem::u8path(path.toStdString()),std::filesystem::u8path(gain.toStdString()),hdr);
+        catalog.addPaths({gain});QTRY_COMPARE(catalog.rowCount(),2);QTRY_VERIFY(inspected(catalog));
+        const auto flags=catalog.index(1,0).data(Catalog::DetailsRole).toString().split(" · ");
+        QVERIFY(flags.contains("HDR"));QVERIFY(flags.contains("Gain map"));QVERIFY(!flags.contains("RAW"));
         catalog.setStatus(path,"Failed","Example conversion failure");
-        QVERIFY(index.data(Catalog::DetailsRole).toString().contains("Error: Example conversion failure"));
-        // Paint past a narrow item rectangle: list descriptions must use the
-        // full details text without elision or clipping it to the tile width.
+        QVERIFY(index.data(Catalog::DetailsRole).toString().contains("Example conversion failure"));
+        // A narrow list must wrap even an unbroken value and grow its row;
+        // the grid keeps its original summary and fixed geometry.
         QStandardItemModel model(1,Catalog::ColumnCount);const auto item=model.index(0,0);
         model.setData(item,"photo");model.setData(item,"",Catalog::SummaryRole);
         model.setData(item,QString(80,'W'),Catalog::DetailsRole);
-        QStyleOptionViewItem option;option.rect=QRect(0,0,180,90);
-        option.font=QFont("Sans",10);option.palette.setColor(QPalette::PlaceholderText,Qt::black);
-        auto render=[&](bool grid) {
-            QImage image(800,200,QImage::Format_RGB32);image.fill(Qt::white);
-            QPainter painter(&image);ThumbnailDelegate delegate;delegate.grid=grid;delegate.edge=32;
-            delegate.paint(&painter,option,item);return image;
-        };
-        const auto list=render(false),grid=render(true);
-        auto overflow=[&](const QImage& image) {
-            for(int y=25;y<55;++y)for(int x=190;x<500;++x)if(image.pixelColor(x,y)!=QColor(Qt::white))return true;
-            return false;
-        };
-        QVERIFY(overflow(list));QVERIFY(!overflow(grid));
+        FileListView view;auto* delegate=new ThumbnailDelegate(&view);view.setItemDelegate(delegate);
+        view.setModel(&model);view.resize(260,600);view.setPresentation(false,64);view.show();
+        QTest::qWait(30);
+        const int narrow=view.visualRect(item).height();
+        QVERIFY(narrow>80);
+        view.resize(600,600);QTest::qWait(30);
+        QVERIFY(view.visualRect(item).height()<narrow);
+        view.setPresentation(true,100);QTest::qWait(30);
+        QCOMPARE(view.visualRect(item).height(),delegate->thumbnailHeight()+94);
+    }
+    void detailsNameColumnStaysFrozen() {
+        QStandardItemModel model(30,6);
+        for(int row=0;row<30;++row)for(int column=0;column<6;++column)
+            model.setData(model.index(row,column),QString("%1,%2").arg(row).arg(column));
+        FileTableView table;table.verticalHeader()->hide();table.setModel(&model);
+        table.setColumnWidth(0,150);table.resize(420,240);table.show();QTest::qWait(30);
+        auto* frozen=table.findChild<QTableView*>("frozenNameColumn");QVERIFY(frozen);
+        QCOMPARE(frozen->selectionModel(),table.selectionModel());
+        const auto before=table.visualRect(model.index(0,0));
+        table.horizontalScrollBar()->setValue(table.horizontalScrollBar()->maximum());QTest::qWait(30);
+        QCOMPARE(table.visualRect(model.index(0,0)).left(),before.left());
+        QCOMPARE(table.indexAt(QPoint(20,10)),model.index(0,0));
+        QTest::mouseClick(frozen->viewport(),Qt::LeftButton,Qt::NoModifier,QPoint(20,10));
+        QVERIFY(table.selectionModel()->isRowSelected(0,{}));
+        table.verticalScrollBar()->setValue(80);QTest::qWait(30);
+        QCOMPARE(frozen->verticalScrollBar()->value(),table.verticalScrollBar()->value());
+        QCOMPARE(frozen->visualRect(model.index(5,0)).top(),table.visualRect(model.index(5,1)).top());
+        table.setColumnWidth(0,180);QCOMPARE(frozen->width(),180);
+    }
+    void detailColumnsFollowAvailableMetadata() {
+        appSettings().clear();MainWindow window;
+        auto* table=window.findChild<FileTableView*>();QVERIFY(table);
+        QVERIFY(!table->isColumnHidden(Catalog::Name));
+        for(int column=1;column<Catalog::ColumnCount;++column)QVERIFY(table->isColumnHidden(column));
+        const auto directory=root("detail-columns");QDir().mkpath(directory);
+        const auto plain=directory+"/plain.png";
+        QImage raster(32,24,QImage::Format_RGB32);raster.fill(Qt::red);QVERIFY(raster.save(plain));
+        window.catalog()->setBackgroundMetadata(true);window.addPaths({plain});
+        QTRY_COMPARE(window.catalog()->rowCount(),1);QTRY_VERIFY(inspected(*window.catalog()));
+        QTRY_VERIFY(!table->isColumnHidden(Catalog::Dimensions));
+        QTRY_VERIFY(!table->isColumnHidden(Catalog::Size));
+        QVERIFY(table->isColumnHidden(Catalog::Camera));QVERIFY(table->isColumnHidden(Catalog::Iso));QVERIFY(table->isColumnHidden(Catalog::Error));
+        const auto photo=makeImage(directory,"photo.jpg",64,48,400);
+        window.addPaths({photo});QTRY_COMPARE(window.catalog()->rowCount(),2);QTRY_VERIFY(inspected(*window.catalog()));
+        QTRY_VERIFY(!table->isColumnHidden(Catalog::Camera));QTRY_VERIFY(!table->isColumnHidden(Catalog::Iso));
+        window.catalog()->setStatus(plain,"Failed","Example failure");QTRY_VERIFY(!table->isColumnHidden(Catalog::Error));
+        window.catalog()->setStatus(plain,"Ready");QTRY_VERIFY(table->isColumnHidden(Catalog::Error));
+        window.catalog()->removePaths({photo});QTRY_VERIFY(table->isColumnHidden(Catalog::Camera));QTRY_VERIFY(table->isColumnHidden(Catalog::Iso));
+        window.catalog()->clear();
+        for(int column=1;column<Catalog::ColumnCount;++column)QTRY_VERIFY(table->isColumnHidden(column));
     }
     void gainMapReconstructionControls() {
         appSettings().clear();

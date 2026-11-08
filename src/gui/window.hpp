@@ -97,6 +97,7 @@ private:
     void updateCounts();
     void showLibraryMessage(const QString& message, int timeout = 0);
     void showMetadata();
+    void updateDetailColumns();
     void convertFiles(bool selected);
     struct SourceRouting { bool hdr = false, gainmap = false; QString error; };
     using Routing = QHash<QString, SourceRouting>;
@@ -134,6 +135,7 @@ private:
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit *inspector_, *outputLog_;
     QTimer* updateTimer_;
+    QTimer* detailColumnsTimer_;
     QTimer* libraryMessageTimer_;
     QString libraryMessage_;
     QTimer* jobSaveTimer_;
