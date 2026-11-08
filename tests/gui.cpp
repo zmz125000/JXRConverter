@@ -579,6 +579,16 @@ private slots:
         const auto input=makeImage(root("log"),"input.jpg",64,48,100);window.addPaths({input});QTRY_COMPARE(window.catalog()->rowCount(),1);
         QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);jxrc::Options invalid;invalid.target=jxrc::Target(999);
         window.queue()->start({{input,root("log/bad-output"),invalid}},1,1);QTRY_COMPARE(finished.count(),1);QCOMPARE(finished[0][1].toInt(),1);QVERIFY(output->toPlainText().contains("Failed: "+input));
+        auto* progress=window.findChild<QProgressBar*>("conversionProgress");
+        QVERIFY(progress->text().contains("(1/1/0/1)"));
+        const auto existing=root("log/existing.avif");{QFile file(existing);QVERIFY(file.open(QIODevice::WriteOnly));file.write("existing");}
+        window.queue()->start({{input,existing,invalid},{input,root("log/bad-output-2"),invalid}},1,1);
+        QTRY_COMPARE(finished.count(),2);QVERIFY(progress->text().contains("(2/2/1/1)"));
+        window.queue()->start({{input,existing,invalid}},1,1);QTRY_COMPARE(finished.count(),3);
+        QVERIFY(progress->text().contains("(1/1/1/0)"));
+        jxrc::Options valid;
+        window.queue()->start({{input,root("log/good-output.avif"),valid}},1,1);QTRY_COMPARE(finished.count(),4);
+        QCOMPARE(finished[3][1].toInt(),0);QVERIFY(progress->text().contains("(1/1)"));
     }
     void silentUpdateChecks() {
         auto* network=new ReleaseNetwork;Updater updater(nullptr,network);QSignalSpy status(&updater,&Updater::statusChanged),messages(&updater,&Updater::message);
@@ -695,6 +705,8 @@ private slots:
         footer->findChild<QPushButton*>("selectAllImages")->click();QCOMPARE(view->selectionModel()->selectedRows().size(),3);
         footer->findChild<QPushButton*>("deselectImages")->click();QVERIFY(view->selectionModel()->selectedRows().isEmpty());
         window.catalog()->setStatus(b,"Done");window.catalog()->setStatus(c,"Failed","failure");
+        QCOMPARE(window.catalog()->index(2,Catalog::Status).data().toString(),QString("Failed · failure"));
+        QCOMPARE(window.catalog()->record(2).status,QString("Failed"));
         footer->findChild<QPushButton*>("statusFinished")->click();QCOMPARE(window.filterModel()->rowCount(),1);
         window.catalog()->setStatus(b,"Skipped");QCOMPARE(window.filterModel()->rowCount(),1);
         footer->findChild<QPushButton*>("statusFailed")->click();QCOMPARE(window.filterModel()->rowCount(),1);QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),c);

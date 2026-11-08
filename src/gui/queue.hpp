@@ -48,6 +48,7 @@ public:
     bool hasPendingFor(const QStringList& inputs) const;
     bool busy() const { return active_ > 0 || next_ < jobs_.size(); }
     int skipped() const { return skipped_; }
+    int failed() const { return failed_; }
     int total() const { return jobs_.size(); }
 signals:
     void statusChanged(const QString& path, const QString& state, const QString& detail);

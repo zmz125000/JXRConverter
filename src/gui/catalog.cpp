@@ -203,7 +203,7 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     case Gainmap:return r.inspected?QString(r.gainmap?"Yes":"No"):QString{};
     case Raw:return r.inspected?QString(r.raw?"Yes":"No"):QString{};
     case Path:return r.path;case Error:return r.error;case MetadataWarning:return r.metadataWarning;
-    case Status:return r.status; default:return {};
+    case Status:return r.status=="Failed"&&!r.error.trimmed().isEmpty()?r.status+" · "+r.error.simplified():r.status; default:return {};
     }
 }
 QStringList Catalog::paths() const { QStringList out; for(const auto& r:records_)out<<r.path; return out; }

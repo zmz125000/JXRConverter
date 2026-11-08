@@ -1023,7 +1023,10 @@ void MainWindow::showLibraryMessage(const QString& message,int timeout) {
 void MainWindow::updateCounts() {
     QStringList processingNotes;
     if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));if(rawAutoExposure_->isChecked())processingNotes.append("AE");}
-    progress_->setFormat(QString("%p% (%v/%m)")+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
+    const QString progressCounts=queue_->skipped()||queue_->failed()
+        ?QString("%p% (%v/%m/%1/%2)").arg(queue_->skipped()).arg(queue_->failed())
+        :QString("%p% (%v/%m)");
+    progress_->setFormat(progressCounts+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
