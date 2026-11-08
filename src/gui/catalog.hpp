@@ -33,7 +33,7 @@ class Catalog : public QAbstractTableModel {
     Q_OBJECT
 public:
     enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, Created, Modified, ExifDate, Width, Height, MaxEdge, Megapixels, AspectRatio, Hdr, Gainmap, Raw, Path, Error, MetadataWarning, ColumnCount };
-    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole };
+    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole, DetailsRole };
     explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 128*1024);
     ~Catalog() override;
     int rowCount(const QModelIndex& parent = {}) const override;

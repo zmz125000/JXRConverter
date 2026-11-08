@@ -11,6 +11,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QImage>
+#include <QPainter>
 #include <QHeaderView>
 #include <QIcon>
 #include <cmath>
@@ -188,6 +189,36 @@ private slots:
         const QString avif=root("metadata")+"/orange.avif";jxrc::convert(std::filesystem::u8path(file.toStdString()),std::filesystem::u8path(avif.toStdString()),options);
         const auto avifRecord=readMetadata(avif);QCOMPARE(avifRecord.width,128);QCOMPARE(avifRecord.format,QString("AVIF"));
         const auto nativeThumbnail=readThumbnail(avif,40);QVERIFY(!nativeThumbnail.isNull());QCOMPARE(nativeThumbnail.width(),40);
+    }
+    void listDescriptionsIncludeMetadataAndOverflow() {
+        const auto path=makeImage(root("list-description"),"photo.jpg",128,64,400);
+        Catalog catalog;catalog.addPaths({path});QTRY_COMPARE(catalog.rowCount(),1);QTRY_VERIFY(inspected(catalog));
+        const auto index=catalog.index(0,0);
+        const auto summary=index.data(Catalog::SummaryRole).toString();
+        const auto details=index.data(Catalog::DetailsRole).toString();
+        QCOMPARE(summary,QString("128 × 64 · JPEG · sRGB"));
+        for(const auto& field:{QString("Camera: Test Camera Body"),QString("Lens: Prime 50"),QString("ISO: 400"),QString("Aperture: f/2.8"),QString("Shutter: 1/125 s"),QString("Bit depth: 8"),QString("HDR: No"),QString("Gain map: No"),QString("RAW: No"),QString("Full path: ")+path})
+            QVERIFY2(details.contains(field),qPrintable(details));
+        catalog.setStatus(path,"Failed","Example conversion failure");
+        QVERIFY(index.data(Catalog::DetailsRole).toString().contains("Error: Example conversion failure"));
+        // Paint past a narrow item rectangle: list descriptions must use the
+        // full details text without elision or clipping it to the tile width.
+        QStandardItemModel model(1,Catalog::ColumnCount);const auto item=model.index(0,0);
+        model.setData(item,"photo");model.setData(item,"",Catalog::SummaryRole);
+        model.setData(item,QString(80,'W'),Catalog::DetailsRole);
+        QStyleOptionViewItem option;option.rect=QRect(0,0,180,90);
+        option.font=QFont("Sans",10);option.palette.setColor(QPalette::PlaceholderText,Qt::black);
+        auto render=[&](bool grid) {
+            QImage image(800,200,QImage::Format_RGB32);image.fill(Qt::white);
+            QPainter painter(&image);ThumbnailDelegate delegate;delegate.grid=grid;delegate.edge=32;
+            delegate.paint(&painter,option,item);return image;
+        };
+        const auto list=render(false),grid=render(true);
+        auto overflow=[&](const QImage& image) {
+            for(int y=25;y<55;++y)for(int x=190;x<500;++x)if(image.pixelColor(x,y)!=QColor(Qt::white))return true;
+            return false;
+        };
+        QVERIFY(overflow(list));QVERIFY(!overflow(grid));
     }
     void gainMapReconstructionControls() {
         appSettings().clear();

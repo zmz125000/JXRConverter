@@ -208,7 +208,9 @@ void ThumbnailDelegate::paint(QPainter* painter,const QStyleOptionViewItem& opti
     painter->setPen(option.palette.text().color());QFont font=option.font;font.setBold(true);painter->setFont(font);
     painter->drawText(text,Qt::AlignVCenter,painter->fontMetrics().elidedText(index.data().toString(),Qt::ElideMiddle,text.width()));
     font.setBold(false);font.setPointSizeF(std::max(8.0,font.pointSizeF()-1));painter->setFont(font);painter->setPen(option.palette.color(QPalette::PlaceholderText));
-    text.translate(0,21);painter->drawText(text,Qt::AlignVCenter,painter->fontMetrics().elidedText(index.data(Catalog::SummaryRole).toString(),Qt::ElideRight,text.width()));
+    text.translate(0,21);
+    const auto description=index.data(grid?Catalog::SummaryRole:Catalog::DetailsRole).toString();
+    painter->drawText(text,grid?Qt::AlignVCenter:Qt::AlignVCenter|Qt::TextSingleLine|Qt::TextDontClip,grid?painter->fontMetrics().elidedText(description,Qt::ElideRight,text.width()):description);
     if(grid||tile.height()>75){text.translate(0,19);const QString state=index.siblingAtColumn(Catalog::Status).data().toString();painter->setPen((state=="Failed"||state.startsWith("Failed · "))?QColor("#ad3434"):state=="Done"?QColor("#26755e"):option.palette.color(QPalette::PlaceholderText));painter->drawText(text,Qt::AlignVCenter,state);}
     if(option.state&QStyle::State_HasFocus){painter->setPen(QPen(QColor("#2e8069"),1,Qt::DotLine));painter->setBrush(Qt::NoBrush);painter->drawRoundedRect(tile.adjusted(4,4,-4,-4),5,5);}
     painter->restore();

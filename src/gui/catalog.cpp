@@ -177,6 +177,14 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     if (role == PathRole) return r.path;
     if (role == RawRole) return r.raw;
     if (role == SummaryRole) return QStringList{dimensions(r), r.format, r.transfer}.filter(QRegularExpression(".+")).join(" · ");
+    if (role == DetailsRole) {
+        QStringList details{data(index,SummaryRole).toString()};
+        for(int column:{Bits,Primaries,Hdr,Gainmap,Raw,Size,Megapixels,AspectRatio,MaxEdge,Camera,Lens,Iso,Aperture,Shutter,Focal,Captured,Created,Modified,ExifDate,Path,Error,MetadataWarning}) {
+            const auto value=data(this->index(index.row(),column),Qt::DisplayRole).toString();
+            if(!value.isEmpty())details.append(headerData(column,Qt::Horizontal,Qt::DisplayRole).toString()+": "+value.simplified());
+        }
+        return details.filter(QRegularExpression(".+")).join(" · ");
+    }
     if (role == Qt::ToolTipRole) return r.path + "\n" + dimensions(r) + "\n" + r.camera + "\n" + r.imageDate().toString("yyyy-MM-dd HH:mm:ss") + "\n" + r.status + (r.error.isEmpty()?QString{}:"\n"+r.error) + (r.metadataWarning.isEmpty()?QString{}:"\nMetadata: "+r.metadataWarning);
     if ((role == Qt::DecorationRole || role == ThumbnailRole) && index.column() == Name) {
         if(role==ThumbnailRole&&thumbnailFrame_&&!visibleThumbnails_.contains(r.path))
