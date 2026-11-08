@@ -24,7 +24,7 @@ The reference is LocalViewer commit `e74a70c2811a1e6a80841ea975ba171e219cf306`.
 | Grid/list/details, sizing, multi-selection | Qt desktop added |
 | CPU-scaled parallel batch conversion | Added with per-call codec thread budgets |
 
-Preserve mode supports JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP and GIF input. Process mode adds JPEG XR and
+Preserve mode supports JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP and GIF input. Process mode adds OpenEXR, Radiance HDR, PFM, floating-point/LogLuv TIFF, JPEG XR and
 LibRaw sensor formats (including DNG and the camera formats enabled by LibRaw).
 JPEG ICC, JXL CMS, AVIF transfer/gain-map conversion, and working RGB primaries
 use the native pipeline. JPEG/AVIF orientation is applied during processing;
@@ -63,7 +63,7 @@ Finite signed and extended-range values remain available for exposure and gamut
 conversion. SDR/PQ bounds are applied at output; linear HDR JXL keeps extended
 range. These processing conversions are not promises of source-code identity. ICC profiles are retained for preservation
 and used for processing; PNG gAMA/cHRM produce an equivalent matrix/TRC profile.
-HDR PNG uses explicit cICP PQ/HLG with BT.709, BT.2020 or Display P3 primaries,
+HDR PNG uses explicit cICP PQ/HLG (linear cICP is also accepted) with BT.709, BT.2020 or Display P3 primaries,
 RGB matrix and full-range codes. cICP takes precedence over embedded ICC and older
 PNG color chunks. Integer codes and straight alpha remain intact for preservation;
 JXL can retain every 16-bit code and AVIF uses its selected 10/12-bit depth.
@@ -72,9 +72,12 @@ and HLG uses the same BT.2100 1000-nit reference-display OOTF as AVIF. Inspectio
 filter metadata and native thumbnails recognize these HDR inputs.
 PNG/WebP EXIF and raster orientation are supported. Untagged rasters assume sRGB.
 
-TIFF supports unsigned 8/16-bit RGB and black/white grayscale, contiguous or planar,
-strips or tiles, opaque or explicitly straight alpha. Associated alpha, palette,
-YCbCr/CMYK, floating samples and multipage TIFF are rejected. TIFF-based sensor files continue through LibRaw. Animated PNG/WebP/GIF
+TIFF supports unsigned 8/16-bit and IEEE floating-point 16/32/64-bit RGB or
+black/white grayscale, contiguous or planar, strips or tiles. Floating samples
+use Process pixels mode, retain extended values in F32, and support straight or
+associated alpha. LogL/LogLuv (SGILog) and PixarLog decode directly to float;
+LogLuv XYZ is converted to linear RGB. STONITS is honored when present. Palette,
+YCbCr/CMYK, integer associated alpha and multipage TIFF are rejected. TIFF-based sensor files continue through LibRaw. Animated PNG/WebP/GIF
 and unsupported PNG CICP encodings are rejected. Calibrated BMP requires an embedded
 ICC profile; external linked profiles are rejected. Thumbnails use the same native
 pipeline, with sRGB conversion only for display.
@@ -146,3 +149,21 @@ Windows/macOS were not run locally.
 
 A LocalViewer HLG inconsistency found during the port is documented in
 [the port finding](localviewer-hdr-png-note.md).
+
+## Linear HDR input codecs
+
+OpenEXR uses the BSD-3-Clause OpenEXR/Imath libraries (with bundled permissive
+libdeflate, OpenJPH and Zstandard codecs). Scanline and tiled HALF/FLOAT/UINT RGB or
+luminance images are supported, with chromaticities, offset data windows, and
+associated-alpha removal. Multipart files select the first supported ordinary
+RGB/luminance image part (or the first complete RGB layer when no unlayered
+RGB/Y channels exist). Deep and subsampled/YCA images are rejected.
+The data window is the output raster, and tiled mipmaps use level zero.
+
+Radiance RGBE/XYZE supports flat, legacy RLE and scanline RLE, both axis orders
+and signs, PRIMARIES, and CRLF headers. PFM supports color/grayscale, either
+endianness, bottom-up storage, and non-unit scale. These decoders are original
+MIT code. All of these inputs use F32 processing, including thumbnails; the
+thumbnail alone is subsequently reduced to the existing display representation.
+Linear inputs route to HDR by encoding, with no brightness scan; mixed JPEG,
+AVIF, HEIC, PNG, JXL and TIFF route using gain-map/transfer/sample metadata.

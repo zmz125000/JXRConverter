@@ -84,7 +84,7 @@ int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
         png_set_iCCP(png,info,name,PNG_COMPRESSION_TYPE_BASE,color.icc,static_cast<png_uint_32>(color.icc_size));
     }
     if(hdr||!color.icc_size||matching_cicp) {
-        const bool supported=(color.primaries==1||color.primaries==9||color.primaries==12)&&(hdr||color.transfer==13);
+        const bool supported=(color.primaries==1||color.primaries==9||color.primaries==12)&&(hdr||color.transfer==13||color.transfer==8);
         if(!supported)return -105;
         png_set_cICP(png,info,static_cast<png_byte>(color.primaries),static_cast<png_byte>(color.transfer),0,1);
         if(color.primaries==1&&color.transfer==13&&!color.icc_size)png_set_sRGB(png,info,PNG_sRGB_INTENT_RELATIVE);
@@ -152,7 +152,7 @@ int encode_png_source(unsigned w,unsigned h,const void* pixels,bool sixteen,
                 put_sample(row,size_t(x)*channels+c,v,depth);
             }
         }
-    },profile&&color.transfer==13);
+    },bool(profile));
 }
 
 // F32 stays in display-linear light until the final transfer and quantization.

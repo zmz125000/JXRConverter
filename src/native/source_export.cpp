@@ -834,6 +834,7 @@ std::vector<uint8_t> source_jpeg_icc(const uint8_t* data,size_t size) { return j
 
 int convert_regular_source(const RegularImage& raster, int target, const char* path,
                            StillEncodeQuality quality, bool keep_exif, int* info) {
+    if(!raster.floating_pixels.empty())return 0; // Float HDR needs the shared F32 processing path.
     if(quality.remove_alpha&&!opaque_rgba(raster.pixels.data(),size_t(raster.width)*raster.height,raster.bits))return -97;
     std::vector<uint8_t> exif=keep_exif?raster.exif:std::vector<uint8_t>{};
     if(exif.empty())exif=orientation_exif(raster.orientation);

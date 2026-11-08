@@ -38,7 +38,7 @@ It also supports PNG, JXL with scRGB, HLG and PQ outputs
 and comes with a Qt6 GUI for Windows, Linux and macOS.
 
 Features:  
-1. Convert JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL PQ HDR.
+1. Convert OpenEXR, Radiance HDR/RGBE/XYZE, PFM, floating-point/LogLuv TIFF, JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL PQ HDR.
 2. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
 3. Generic image conversion/compression.
 4. Support auto color management, keeping source wide color gamut and color tag.

@@ -62,17 +62,18 @@ QString outputDateFolder() {
 }
 bool hdrInput(const QString& path) {
     const auto extension=QFileInfo(path).suffix().toLower();
-    if(extension=="png"||extension=="jxl") {
+    static const QSet<QString> mixed={"png","jxl","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","tif","tiff"};
+    if(mixed.contains(extension)) {
         const auto info=inspect(nativePath(path));
         // Linear sources (including scRGB) are routed by encoding, without
         // scanning their pixels for values above SDR white.
         return info.hdr||info.transfer=="Linear";
     }
-    static const QSet<QString> sdrExtensions={"jpg","jpeg","jpe","avif","heic","heif","hif","webp","tif","tiff","bmp","gif"};
+    static const QSet<QString> sdrExtensions={"jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","webp","tif","tiff","bmp","gif"};
     return !sdrExtensions.contains(extension);
 }
 bool gainMapInput(const QString& path) {
-    static const QSet<QString> formats={"jpg","jpeg","jpe","avif","heic","heif","hif"};
+    static const QSet<QString> formats={"jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif"};
     return formats.contains(QFileInfo(path).suffix().toLower())&&inspect(nativePath(path)).gainmap;
 }
 int coreCount() { return std::max(1,QThread::idealThreadCount()); }

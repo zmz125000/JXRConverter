@@ -205,7 +205,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(proxy_,&QAbstractItemModel::layoutChanged,this,modelChanged);
     catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
-    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
+    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.exr *.hdr *.rgbe *.xyze *.pic *.pfm *.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.heics *.heifs *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open image folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
     auto* recent=new QToolButton;recent->setObjectName("recentFolders");recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
@@ -517,7 +517,7 @@ QWidget* MainWindow::buildControls() {
     outputFormatsLayout->addWidget(targets_);
     auto* targetActions=new QHBoxLayout;
     acceptSdr_=check("Accept SDR formats","acceptSdr",appSettings().value("conversion/acceptSdr",false).toBool());
-    acceptSdr_->setToolTip("For HDR targets, include SDR sources using the SDR output equivalent. The scRGB target converts them to scRGB. PNG and JXL are checked for HDR color metadata; linear sources, JXR and RAW are routed to HDR without scanning pixel brightness. JPEG, AVIF, HEIC, WebP, TIFF, BMP and GIF remain in the SDR format group.");
+    acceptSdr_->setToolTip("For HDR targets, include SDR sources using the SDR output equivalent. The scRGB target converts them to scRGB. PNG, JXL, JPEG, AVIF, HEIC and TIFF are checked for HDR/gain-map metadata. Linear sources (EXR, Radiance HDR, PFM, floating-point TIFF), JXR and RAW route to HDR without scanning pixel brightness.");
     connect(acceptSdr_,&QCheckBox::toggled,this,[](bool on){appSettings().setValue("conversion/acceptSdr",on);});
     targetActions->addWidget(acceptSdr_);targetActions->addStretch();
     auto* clearTargets=new QPushButton("None");clearTargets->setObjectName("clearTargets");clearTargets->setToolTip("Deselect all output formats.");targetActions->addWidget(clearTargets);

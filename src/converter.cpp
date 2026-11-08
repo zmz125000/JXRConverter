@@ -195,7 +195,7 @@ struct ConversionSession::Impl {
     std::vector<float> linear,sdr_base;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
-    bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false;
+    bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,raster_hdr=false;
     uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
     int format=-1;
     bool ready=false;
@@ -253,9 +253,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
     if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp) {
-        if(format==6) {
+        if(format==6&&!cache.raster_hdr) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
-            direct_sdr=!regular->hdr();
+            cache.raster_hdr=regular->hdr();direct_sdr=!cache.raster_hdr;
         } else direct_sdr=cache.integer_sdr;
     }
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
@@ -283,6 +283,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         } else {
             if(format==6) {
                 if(!regular)regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
+                require(regular->floating_pixels.empty(),"Floating-point HDR input requires Process pixels mode");
                 if(o.keep_exif&&regular->format=="TIFF")regular->exif=portable_source_exif(bytes.data(),bytes.size(),regular->width,regular->height,regular->orientation);
                 rc=convert_regular_source(*regular,target,path.c_str(),q,o.keep_exif,info);
             } else rc=convert_source(bytes.data(),bytes.size(),format,target,path.c_str(),q,o.keep_exif,info);
@@ -325,7 +326,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             }
             else if(format==6) {
                 const auto raster=regular?std::move(*regular):decode_regular(bytes.data(),bytes.size());
-                w=raster.width;h=raster.height;raster_orientation=raster.orientation;cache.bits=raster.bits;
+                w=raster.width;h=raster.height;raster_orientation=raster.orientation;cache.bits=raster.bits;cache.raster_hdr=raster.hdr();
                 if(o.keep_exif)exif=raster.format=="TIFF"?portable_source_exif(bytes.data(),bytes.size(),w,h,raster.orientation):raster.exif;
                 regular_to_linear(raster,linear,gamut);
             }
@@ -484,7 +485,10 @@ Preview preview_bytes(const std::vector<uint8_t>& bytes,unsigned edge,ImageInfo*
         auto raster=decode_regular(bytes.data(),bytes.size());
         if(source_info)*source_info=inspect_regular(raster);
         w=raster.width;h=raster.height;raster_orientation=raster.orientation;
-        if(raster.bits>8) {
+        if(!raster.floating_pixels.empty()) {
+            auto reduced=reduce_preview(raster.floating_pixels.data(),w,h,size_t(w)*4,4,edge);
+            if(!reduced.empty())raster.floating_pixels=std::move(reduced);
+        } else if(raster.bits>8) {
             const auto preview_pixels=reduce_preview(reinterpret_cast<const uint16_t*>(raster.pixels.data()),w,h,size_t(w)*4,4,edge);
             if(!preview_pixels.empty()){std::vector<uint8_t> reduced(preview_pixels.size()*2);std::memcpy(reduced.data(),preview_pixels.data(),reduced.size());raster.pixels=std::move(reduced);}
         } else {

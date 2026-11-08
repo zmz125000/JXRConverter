@@ -17,7 +17,9 @@ Codec libraries are downloaded or supplied separately and retain their own
 licenses and notices: libultrahdr (Apache-2.0/MIT), libjpeg-turbo (IJG/BSD/zlib),
 libjxl and skcms (BSD/Apache-2.0 and accompanying dependency notices), libavif
 (BSD), libaom (BSD and patent license), LibRaw (LGPL/CDDL), jxrlib (BSD), libpng (libpng license), zlib (zlib license), libwebp (BSD
-and patent license), libtiff (libtiff license), and stb_image (MIT/public domain).
+and patent license), libtiff (libtiff license), stb_image (MIT/public domain),
+OpenEXR/Imath (BSD-3-Clause), and OpenEXR's bundled libdeflate (MIT),
+OpenJPH (BSD-2-Clause), and Zstandard (BSD-3-Clause).
 Consult each dependency's license files when distributing binaries and source.
 
 COPYING retains GPL version 3 for distributions combined with Exiv2; it is not

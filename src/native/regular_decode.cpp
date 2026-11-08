@@ -1,5 +1,6 @@
 #include "regular_decode.h"
 #include "linear_color_profile.h"
+#include "hdr_encode.h"
 #include <png.h>
 #include <webp/decode.h>
 #include <webp/demux.h>
@@ -91,7 +92,7 @@ RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false
             // advertised HDR encoding as ordinary SDR when recovering warnings.
             check(!saw_cicp&&!saw_idat&&n==4,"Invalid PNG CICP chunk");
             const auto cp=p[8],tc=p[9];
-            check((cp==1||cp==9||cp==12)&&(tc==16||tc==18||tc==13)&&p[10]==0&&p[11]==1,
+            check((cp==1||cp==9||cp==12)&&(tc==16||tc==18||tc==13||tc==8)&&p[10]==0&&p[11]==1,
                   "Unsupported PNG CICP encoding (requires supported primaries and full-range RGB)");
             saw_cicp=true;
         }
@@ -115,7 +116,7 @@ RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false
 #ifdef PNG_cICP_SUPPORTED
     png_byte cp=0,tc=0,mc=0,full=0;
     if(png_get_cICP(png,info,&cp,&tc,&mc,&full)) {
-        check((cp==1 || cp==9 || cp==12) && (tc==16 || tc==18 || tc==13) && mc==0 && full==1,
+        check((cp==1 || cp==9 || cp==12) && (tc==16 || tc==18 || tc==13 || tc==8) && mc==0 && full==1,
               "Unsupported PNG CICP encoding (requires supported primaries and full-range RGB)");
         image.primaries=cp;image.transfer=tc;cicp=true;
     }
@@ -190,7 +191,7 @@ int tiff_close(thandle_t){return 0;}
 toff_t tiff_size(thandle_t h){return static_cast<TiffInput*>(h)->size;}
 int tiff_map(thandle_t,void**,toff_t*){return 0;}
 void tiff_unmap(thandle_t,void*,toff_t){}
-RegularImage decode_tiff(const uint8_t* data,size_t size) {
+RegularImage decode_tiff(const uint8_t* data,size_t size,bool metadata_only=false) {
     RegularImage image;image.format="TIFF";TiffInput input{data,size};
     std::unique_ptr<TIFF,decltype(&TIFFClose)> tiff(TIFFClientOpen("memory","rm",&input,tiff_read,tiff_write,tiff_seek,tiff_close,tiff_size,tiff_map,tiff_unmap),TIFFClose);
     check(bool(tiff),"Invalid TIFF");auto* tif=tiff.get();
@@ -199,22 +200,50 @@ RegularImage decode_tiff(const uint8_t* data,size_t size) {
     TIFFGetFieldDefaulted(tif,TIFFTAG_BITSPERSAMPLE,&bits);TIFFGetFieldDefaulted(tif,TIFFTAG_SAMPLESPERPIXEL,&samples);
     TIFFGetFieldDefaulted(tif,TIFFTAG_PHOTOMETRIC,&photo);TIFFGetFieldDefaulted(tif,TIFFTAG_PLANARCONFIG,&planar);
     TIFFGetFieldDefaulted(tif,TIFFTAG_SAMPLEFORMAT,&format);TIFFGetFieldDefaulted(tif,TIFFTAG_ORIENTATION,&orient);
-    check((bits==8 || bits==16) && format==SAMPLEFORMAT_UINT,"TIFF requires unsigned 8/16-bit samples");
-    const unsigned colors=photo==PHOTOMETRIC_RGB?3:1;
-    check(photo==PHOTOMETRIC_RGB || photo==PHOTOMETRIC_MINISBLACK || photo==PHOTOMETRIC_MINISWHITE,"TIFF requires RGB or grayscale photometric data");
+    const bool log=photo==PHOTOMETRIC_LOGLUV||photo==PHOTOMETRIC_LOGL;
+    uint16_t compression=0;TIFFGetFieldDefaulted(tif,TIFFTAG_COMPRESSION,&compression);
+    if(log) {
+        check(TIFFSetField(tif,TIFFTAG_SGILOGDATAFMT,SGILOGDATAFMT_FLOAT)==1,"Unsupported LogLuv TIFF compression");bits=32;format=SAMPLEFORMAT_IEEEFP;
+    } else if(compression==COMPRESSION_PIXARLOG) {
+        check(TIFFSetField(tif,TIFFTAG_PIXARLOGDATAFMT,PIXARLOGDATAFMT_FLOAT)==1,"Unsupported PixarLog TIFF");bits=32;format=SAMPLEFORMAT_IEEEFP;
+    }
+    const bool floating=format==SAMPLEFORMAT_IEEEFP;
+    check((floating&&(bits==16||bits==32||bits==64))||((bits==8||bits==16)&&format==SAMPLEFORMAT_UINT),"Unsupported TIFF sample representation");
+    const unsigned colors=photo==PHOTOMETRIC_RGB||photo==PHOTOMETRIC_LOGLUV?3:1;
+    check(log || photo==PHOTOMETRIC_RGB || photo==PHOTOMETRIC_MINISBLACK || photo==PHOTOMETRIC_MINISWHITE,"TIFF requires RGB or grayscale photometric data");
     check(planar==PLANARCONFIG_CONTIG || planar==PLANARCONFIG_SEPARATE,"Unsupported TIFF planar layout");
     check(samples==colors || samples==colors+1,"Unsupported TIFF channel count");
     TIFFGetFieldDefaulted(tif,TIFFTAG_EXTRASAMPLES,&extras,&extra_types);
-    if(samples>colors)check(extras==1 && extra_types && extra_types[0]==EXTRASAMPLE_UNASSALPHA,"TIFF alpha must be explicitly unassociated");
-    check(orient>=1 && orient<=8,"Invalid TIFF orientation");image.orientation=orient;image.bits=bits;
+    if(samples>colors)check(extras==1 && extra_types && (extra_types[0]==EXTRASAMPLE_UNASSALPHA||(floating&&extra_types[0]==EXTRASAMPLE_ASSOCALPHA)),"Unsupported TIFF alpha association");
+    check(orient>=1 && orient<=8,"Invalid TIFF orientation");image.orientation=orient;image.bits=bits;if(floating)image.transfer=8;
     uint32_t icc_size=0;void* icc=nullptr;
     if(TIFFGetField(tif,TIFFTAG_ICCPROFILE,&icc_size,&icc))copy_metadata(image.icc,static_cast<uint8_t*>(icc),icc_size);
+    if(floating&&image.icc.empty()&&!log) {
+        float* primaries=nullptr;float* white=nullptr;
+        if(TIFFGetField(tif,TIFFTAG_PRIMARYCHROMATICITIES,&primaries)&&primaries)std::copy_n(primaries,6,image.chromaticities.begin());
+        if(TIFFGetField(tif,TIFFTAG_WHITEPOINT,&white)&&white){image.chromaticities[6]=white[0];image.chromaticities[7]=white[1];}
+    }
     uint16_t *tr=nullptr,*tg=nullptr,*tb=nullptr;
     check(!image.icc.empty() || !TIFFGetField(tif,TIFFTAG_TRANSFERFUNCTION,&tr,&tg,&tb),"TIFF transfer tables require an ICC profile");
     // Multiple pages are deliberately rejected rather than exporting one silently.
     check(TIFFNumberOfDirectories(tif)==1,"Multipage TIFF is not supported for still conversion");
-    image.pixels.resize(size_t(image.width)*image.height*4*(bits/8));
+    if(metadata_only)return image;
+    if(floating) {
+        image.floating_pixels.resize(size_t(image.width)*image.height*4);
+        for(size_t i=3;i<image.floating_pixels.size();i+=4)image.floating_pixels[i]=1;
+    } else image.pixels.resize(size_t(image.width)*image.height*4*(bits/8));
     auto store=[&](unsigned x,unsigned y,unsigned c,const uint8_t* src){
+        if(floating) {
+            float value=0;
+            if(bits==16){uint16_t half;std::memcpy(&half,src,2);value=half_to_float(half);}
+            else if(bits==32)std::memcpy(&value,src,4);
+            else {double v;std::memcpy(&v,src,8);value=float(v);}
+            check(std::isfinite(value),"Non-finite TIFF sample");
+            if(photo==PHOTOMETRIC_MINISWHITE&&c==0)value=1-value;
+            auto* pixel=image.floating_pixels.data()+(size_t(y)*image.width+x)*4;
+            if(c<colors){if(colors==1)pixel[0]=pixel[1]=pixel[2]=value;else pixel[c]=value;}else pixel[3]=value;
+            return;
+        }
         uint16_t value=src[0];if(bits==16)std::memcpy(&value,src,2);
         if(photo==PHOTOMETRIC_MINISWHITE && c==0)value=uint16_t((bits==16?65535:255)-value);
         const size_t at=(size_t(y)*image.width+x)*4*(bits/8);
@@ -243,6 +272,15 @@ RegularImage decode_tiff(const uint8_t* data,size_t size) {
         for(unsigned p=0;p<planes;++p)for(unsigned y=0;y<image.height;++y) {
             check(TIFFReadScanline(tif,row.data(),y,uint16_t(p))==1,"TIFF row decode failed");
             for(unsigned x=0;x<image.width;++x)for(unsigned c=0;c<(planes==1?samples:1);++c)store(x,y,planes==1?c:p,row.data()+(size_t(x)*(planes==1?samples:1)+c)*(bits/8));
+        }
+    }
+    if(floating) {
+        double stonits=0;const bool absolute=TIFFGetField(tif,TIFFTAG_STONITS,&stonits)&&std::isfinite(stonits)&&stonits>0;
+        for(size_t i=0;i<image.floating_pixels.size();i+=4) {
+            auto* p=image.floating_pixels.data()+i;
+            if(log&&colors==3) {const float X=p[0],Y=p[1],Z=p[2];p[0]=3.2404542f*X-1.5371385f*Y-.4985314f*Z;p[1]=-.969266f*X+1.8760108f*Y+.041556f*Z;p[2]=.0556434f*X-.2040259f*Y+1.0572252f*Z;}
+            if(samples>colors&&extra_types[0]==EXTRASAMPLE_ASSOCALPHA)for(unsigned c=0;c<3;++c)p[c]=p[3]>0?p[c]/p[3]:0;
+            if(absolute)for(unsigned c=0;c<3;++c)p[c]*=float(stonits/203.);
         }
     }
     return image;
@@ -296,6 +334,7 @@ unsigned regular_orientation(const std::vector<uint8_t>& exif) {
     return 1;
 }
 bool is_regular_image(const uint8_t* data,size_t size) {
+    if(is_linear_image(data,size))return true;
     if(signature(data,size,"\x89PNG\r\n\x1a\n",8) || signature(data,size,"BM",2) || signature(data,size,"GIF87a",6) || signature(data,size,"GIF89a",6))return true;
     if(size>=12 && signature(data,size,"RIFF",4) && !std::memcmp(data+8,"WEBP",4))return true;
     if(tiff_signature(data,size)) {
@@ -308,6 +347,7 @@ bool is_regular_image(const uint8_t* data,size_t size) {
 }
 RegularImage decode_regular(const uint8_t* data,size_t size) {
     check(data && size>=2,"Truncated raster");
+    if(is_linear_image(data,size))return decode_linear_image(data,size);
     if(signature(data,size,"\x89PNG\r\n\x1a\n",8))return decode_png(data,size);
     if(size>=12 && signature(data,size,"RIFF",4) && !std::memcmp(data+8,"WEBP",4))return decode_webp(data,size);
     if(tiff_signature(data,size))return decode_tiff(data,size);
@@ -317,16 +357,28 @@ RegularImage decode_regular(const uint8_t* data,size_t size) {
 jxrc::ImageInfo inspect_regular(const uint8_t* data,size_t size) {
     // Color and dimensions are available before IDAT. Inspection must not
     // decompress a full raster just to decide whether an HDR target accepts it.
+    if(is_linear_image(data,size))return inspect_regular(decode_linear_image(data,size,true));
+    if(tiff_signature(data,size))return inspect_regular(decode_tiff(data,size,true));
     return inspect_regular(signature(data,size,"\x89PNG\r\n\x1a\n",8)?decode_png(data,size,true):decode_regular(data,size));
 }
 jxrc::ImageInfo inspect_regular(const RegularImage& image) {
     jxrc::ImageInfo out;out.width=image.width;out.height=image.height;out.bits=image.bits;out.format=image.format;out.hdr=image.hdr();
-    out.transfer=image.hdr()?(image.transfer==16?"PQ":"HLG"):image.icc.empty()?"sRGB":"ICC";
+    out.transfer=image.transfer==8?"Linear":image.hdr()?(image.transfer==16?"PQ":"HLG"):image.icc.empty()?"sRGB":"ICC";
     out.primaries=image.icc.empty()?(image.primaries==9?"BT.2020":image.primaries==12?"Display P3":"BT.709"):"ICC";
+    if(image.transfer==8&&image.icc.empty()&&(image.format=="EXR"||image.format=="Radiance"||image.format=="PFM"||image.format=="TIFF")) {
+        const auto& c=image.chromaticities;
+        if(std::abs(c[0]-.708f)<.0001f&&std::abs(c[2]-.170f)<.0001f)out.primaries="BT.2020";
+        else if(std::abs(c[0]-.64f)<.0001f&&std::abs(c[2]-.30f)<.0001f&&std::abs(c[6]-.3127f)<.0001f)out.primaries="BT.709";
+        else out.primaries="Custom RGB";
+    }
     if(image.orientation>=5)std::swap(out.width,out.height);
     return out;
 }
 void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,uhdr_color_gamut_t& gamut) {
+    if(!image.floating_pixels.empty()) {
+        std::vector<float> linear;regular_to_linear(image,linear,gamut);pixels.resize(linear.size());
+        std::transform(linear.begin(),linear.end(),pixels.begin(),[](float v){return float_to_half(v);});return;
+    }
     if(image.hdr() || (image.icc.empty() && image.primaries!=1)) {
         cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
                            image.primaries,image.transfer,pixels,gamut);return;
@@ -340,6 +392,16 @@ void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,u
     gamut=UHDR_CG_BT_2100;
 }
 void regular_to_linear(const RegularImage& image,std::vector<float>& pixels,uhdr_color_gamut_t& gamut) {
+    if(!image.floating_pixels.empty()) {
+        skcms_ICCProfile source,destination;skcms_Init(&source);skcms_SetTransferFunction(&source,skcms_Identity_TransferFunction());
+        const auto& c=image.chromaticities;skcms_Matrix3x3 matrix{};
+        check(skcms_PrimariesToXYZD50(c[0],c[1],c[2],c[3],c[4],c[5],c[6],c[7],&matrix),"Invalid linear image primaries");skcms_SetXYZD50(&source,&matrix);
+        if(!image.icc.empty())check(skcms_Parse(image.icc.data(),image.icc.size(),&source),"Invalid floating-point TIFF ICC profile");
+        check(make_linear_bt2020_profile(&destination),"Cannot build working profile");pixels.resize(image.floating_pixels.size());
+        check(skcms_Transform(image.floating_pixels.data(),skcms_PixelFormat_RGBA_ffff,skcms_AlphaFormat_Unpremul,&source,pixels.data(),skcms_PixelFormat_RGBA_ffff,skcms_AlphaFormat_Unpremul,&destination,size_t(image.width)*image.height),"Linear HDR color transform failed");
+        for(float v:pixels)check(std::isfinite(v),"Non-finite linear HDR color transform");
+        gamut=UHDR_CG_BT_2100;return;
+    }
     if(image.hdr() || (image.icc.empty() && image.primaries!=1)) {
         cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
                            image.primaries,image.transfer,pixels,gamut);return;

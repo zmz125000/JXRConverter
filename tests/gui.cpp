@@ -1152,6 +1152,14 @@ private slots:
         const auto sdrJxl=convert("sdr.jxl",jxrc::Target::jxl),linear=convert("linear.jxl",jxrc::Target::jxl_linear);
         QVERIFY(!hdrInput(sdr));QVERIFY(!hdrInput(sdrJxl));QVERIFY(hdrInput(pq));QVERIFY(hdrInput(hlg));
         QVERIFY(hdrInput(linear)); // SDR-range pixels still have a linear HDR encoding.
+        const auto sdrAvif=convert("sdr.avif",jxrc::Target::avif),pqAvif=convert("pq.avif",jxrc::Target::avif_pq),hlgAvif=convert("hlg.avif",jxrc::Target::avif_hlg);
+        const auto gainJpeg=convert("gain.jpg",jxrc::Target::jpeg_gainmap),gainAvif=convert("gain.avif",jxrc::Target::avif_gainmap);
+        QVERIFY(!hdrInput(sdrAvif));QVERIFY(hdrInput(pqAvif));QVERIFY(hdrInput(hlgAvif));QVERIFY(hdrInput(gainJpeg));QVERIFY(hdrInput(gainAvif));
+        for(const auto* extension:{"exr","hdr","rgbe","xyze","pic","pfm"}) {
+            const auto path=directory+"/unopened."+extension;QVERIFY(supportedFile(path));QVERIFY(hdrInput(path));
+        }
+        // Classification uses only the PFM header, not a scan of its values.
+        const auto pfm=directory+"/header-only.pfm";QFile pfmFile(pfm);QVERIFY(pfmFile.open(QIODevice::WriteOnly));pfmFile.write("PF\n2 2\n-1\n");pfmFile.close();QVERIFY(hdrInput(pfm));
         QVERIFY(hdrInput(directory+"/unopened.jxr"));QVERIFY(hdrInput(directory+"/unopened.dng"));
         MainWindow window;window.show();window.addPaths({sdr,pq,hlg,sdrJxl,linear});QTRY_COMPARE(window.catalog()->rowCount(),5);
         window.findChild<QLineEdit*>("outputDirectory")->setText(destination);

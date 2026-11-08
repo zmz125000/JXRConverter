@@ -161,6 +161,28 @@ foreach(flag jpeg jbig lzma zstd webp lerc libdeflate)
 endforeach()
 set(zlib ON CACHE BOOL "" FORCE)
 add_subdirectory("${libtiff_SOURCE_DIR}" "${libtiff_BINARY_DIR}" EXCLUDE_FROM_ALL)
+# OpenEXR uses permissively licensed, pinned sources, including Imath. Keep
+# codecs static and avoid system-dependent compression/backend selection.
+jxrc_source(imath https://github.com/AcademySoftwareFoundation/Imath.git v3.2.2)
+set(IMATH_INSTALL OFF CACHE BOOL "" FORCE)
+set(IMATH_INSTALL_PKG_CONFIG OFF CACHE BOOL "" FORCE)
+set(IMATH_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(IMATH_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+set(IMATH_BUILD_PYTHON OFF CACHE BOOL "" FORCE)
+add_subdirectory("${imath_SOURCE_DIR}" "${imath_BINARY_DIR}" EXCLUDE_FROM_ALL)
+jxrc_source(openexr https://github.com/AcademySoftwareFoundation/openexr.git v3.5.3)
+foreach(flag INSTALL INSTALL_PKG_CONFIG BUILD_TOOLS INSTALL_TOOLS BUILD_EXAMPLES BUILD_PYTHON TEST_LIBRARIES TEST_TOOLS)
+    set(OPENEXR_${flag} OFF CACHE BOOL "" FORCE)
+endforeach()
+set(OPENEXR_FORCE_INTERNAL_IMATH ON CACHE BOOL "" FORCE)
+set(OPENEXR_FORCE_INTERNAL_DEFLATE ON CACHE BOOL "" FORCE)
+set(OPENEXR_FORCE_INTERNAL_OPENJPH ON CACHE BOOL "" FORCE)
+set(OPENEXR_FORCE_INTERNAL_ZSTD ON CACHE BOOL "" FORCE)
+add_subdirectory("${openexr_SOURCE_DIR}" "${openexr_BINARY_DIR}" EXCLUDE_FROM_ALL)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Strict C hides glibc endian helpers without its default feature set.
+    target_compile_definitions(OpenEXRCore PRIVATE _DEFAULT_SOURCE)
+endif()
 # stb has no release tags; pin its upstream revision (stb_image 2.30).
 jxrc_source(stb https://github.com/nothings/stb.git 003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5)
 

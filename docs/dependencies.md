@@ -19,6 +19,8 @@ copy cannot override the selected release.
 | zlib | 1.3.2 | [Tag](https://github.com/madler/zlib/tree/v1.3.2) |
 | libwebp | 1.6.0 | [Tag](https://github.com/webmproject/libwebp/tree/v1.6.0) |
 | libtiff | 4.7.2 | [Tag](https://gitlab.com/libtiff/libtiff/-/tags/v4.7.2) |
+| OpenEXR | 3.5.3 | [Release](https://github.com/AcademySoftwareFoundation/openexr/releases/tag/v3.5.3) |
+| Imath | 3.2.2 | [Release](https://github.com/AcademySoftwareFoundation/Imath/releases/tag/v3.2.2) |
 | stb_image | 2.30 | [Pinned revision](https://github.com/nothings/stb/tree/003501f6d7a8668ce8b6d875e34dd97ad0d5d5b5) |
 | Exiv2 | 0.28.9 | [Release](https://github.com/Exiv2/exiv2/releases/tag/v0.28.9) |
 | Qt (current-release GUI CI) | 6.12.0 | [Official release](https://download.qt.io/official_releases/qt/6.12/6.12.0/) |
@@ -28,6 +30,10 @@ pins were already current. libjxl's Brotli, Highway and skcms submodules retain
 the revisions selected by its release. Exiv2 reuses that Brotli decoder instead
 of building another copy. Exiv2's unused video/network/XMP/INI integrations
 are disabled; EXIF, PNG, BMFF and compressed JXL metadata remain enabled.
+
+OpenEXR/Imath use BSD-3-Clause licenses. OpenEXR uses its vendored libdeflate,
+OpenJPH and Zstandard versions; their notices are included recursively in runtime packages.
+Tools, examples and tests from these dependencies are disabled.
 
 Raster codecs link statically into the native library and CLI. TIFF enables
 its built-in codecs and zlib/Deflate; optional JPEG, JBIG, LZMA, Zstd, WebP and

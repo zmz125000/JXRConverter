@@ -37,6 +37,7 @@ The codec dependencies can remain linked into the shared JXRConverter engine:
 | libjpeg-turbo | IJG, BSD and zlib notices |
 | libjxl, skcms, Brotli, Highway | BSD/Apache and their included notices/patent terms |
 | libavif, libaom, libwebp | BSD and applicable patent notices |
+| OpenEXR, Imath | BSD-3-Clause; bundled libdeflate MIT and OpenJPH BSD-2-Clause and Zstandard BSD-3-Clause notices |
 | JPEG XR | Microsoft's BSD license (`license.md`) |
 | libpng, zlib, libtiff, stb_image | Their permissive licenses, retained in the package |
 | Qt runtime | Dynamically linked; GPL/LGPL licenses and bundled third-party notices retained |

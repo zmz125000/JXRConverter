@@ -11,7 +11,7 @@ install(FILES README.md LICENSE COPYING NOTICE
 install(FILES docs/dependencies.md docs/build-warnings.md docs/release-audit.md docs/redistribution.md
     DESTINATION ${jxrc_runtime_data}/docs COMPONENT Runtime)
 # Retain dependency licenses and patents, including upstream submodules.
-foreach(source libultrahdr jpeg libjxl libaom libavif libraw jpegxr_src exiv2 libheif libde265 zlib libpng libwebp libtiff stb)
+foreach(source libultrahdr jpeg libjxl libaom libavif libraw jpegxr_src exiv2 libheif libde265 zlib libpng libwebp libtiff stb openexr imath)
     if(DEFINED ${source}_SOURCE_DIR)
         file(GLOB_RECURSE licenses LIST_DIRECTORIES FALSE
             "${${source}_SOURCE_DIR}/*LICENSE*" "${${source}_SOURCE_DIR}/*COPYING*"

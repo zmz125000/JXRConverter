@@ -132,8 +132,8 @@ float apple_gainmap_headroom(const std::vector<uint8_t>& bytes){
 jxrc::ImageInfo inspect_heif(const uint8_t* data,size_t size){
     Input input(data,size);const auto* base=input.base.get();jxrc::ImageInfo info;info.format="HEIC";info.width=heif_image_handle_get_width(base);info.height=heif_image_handle_get_height(base);info.bits=heif_image_handle_get_luma_bits_per_pixel(base);
     info.gainmap=bool(input.gain)||proxdr(data,size).jpeg;heif_color_profile_nclx* color=nullptr;
-    if(heif_image_handle_get_nclx_color_profile(base,&color).code==heif_error_Ok&&color){info.transfer=color->transfer_characteristics==16?"PQ":color->transfer_characteristics==18?"HLG":"SDR";info.primaries=color->color_primaries==9?"BT.2020":color->color_primaries==12?"Display P3":"BT.709";heif_nclx_color_profile_free(color);}else{info.transfer="SDR";info.primaries="ICC";}
-    info.hdr=info.gainmap||info.transfer=="PQ"||info.transfer=="HLG";if(info.gainmap)info.transfer="Gain map";return info;
+    if(heif_image_handle_get_nclx_color_profile(base,&color).code==heif_error_Ok&&color){info.transfer=color->transfer_characteristics==16?"PQ":color->transfer_characteristics==18?"HLG":color->transfer_characteristics==8?"Linear":"SDR";info.primaries=color->color_primaries==9?"BT.2020":color->color_primaries==12?"Display P3":"BT.709";heif_nclx_color_profile_free(color);}else{info.transfer="SDR";info.primaries="ICC";}
+    info.hdr=info.gainmap||info.transfer=="PQ"||info.transfer=="HLG"||info.transfer=="Linear";if(info.gainmap)info.transfer="Gain map";return info;
 }
 HeifSource decode_heif(const uint8_t* data,size_t size,unsigned edge){
     Input input(data,size);HeifSource source;source.base=decode(input.base.get(),false,edge);source.base.exif=input.exif;normalize_exif(source.base.exif);

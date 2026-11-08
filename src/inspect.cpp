@@ -52,7 +52,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         auto* image=dec->image;out.width=image->width;out.height=image->height;out.bits=image->depth;out.format="AVIF";
         out.gainmap=image->gainMap!=nullptr;
         out.transfer=out.gainmap?"Gain map":image->transferCharacteristics==16?"PQ":image->transferCharacteristics==18?"HLG":image->transferCharacteristics==8?"Linear":"SDR";
-        out.hdr=out.gainmap||image->transferCharacteristics==16||image->transferCharacteristics==18;
+        out.hdr=out.gainmap||image->transferCharacteristics==16||image->transferCharacteristics==18||image->transferCharacteristics==8;
         out.primaries=image->icc.size?"ICC":image->colorPrimaries==9?"BT.2020":image->colorPrimaries==12?"Display P3":"BT.709";
         int orientation=source_orientation(bytes.data(),bytes.size(),1,nullptr);if(orientation>=5)std::swap(out.width,out.height);
     } else if(is_heif_input(bytes.data(),bytes.size())) {

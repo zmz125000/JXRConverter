@@ -11,10 +11,17 @@ decode to linear-light float32 pixels, except where a direct path applies.
 |---|---|---|
 | SDR raster | JPEG, PNG, WebP, TIFF, BMP, GIF, SDR AVIF/HEIF, SDR JXL | Ordinary SDR pixels and color profile/transfer metadata. Raster layouts are subject to the decoder limits in [port status](port-status.md). |
 | Gain-map HDR | Ultra HDR JPEG, gain-map AVIF, Apple/ProXDR HEIC | SDR base plus auxiliary gain map. Plain JPEG/AVIF export can retain both directly when exposure is 0 EV and resizing is off. |
-| PQ/HLG HDR | PQ/HLG AVIF, HDR PNG, PQ/HLG JXL | HDR transfer and primaries; processing linearizes into float32. HDR PNG supports full-range cICP PQ/HLG in BT.709, BT.2020 or Display P3. |
-| Linear HDR | Linear JXL; scRGB JPEG XR (JXR); compatible linear HDR sources | Linear-light samples, including extended-range values. JXR processing is supported; source-preserving JXR export is limited to linear JXL. |
+| PQ/HLG HDR | PQ/HLG AVIF/HEIC, HDR PNG, PQ/HLG JXL | HDR transfer and primaries; processing linearizes into float32. HDR PNG supports full-range cICP PQ/HLG in BT.709, BT.2020 or Display P3. |
+| Linear HDR | OpenEXR (`.exr`), Radiance (`.hdr/.rgbe/.xyze/.pic`), PFM, floating-point/LogLuv TIFF, linear JXL/AVIF/HEIC; scRGB JPEG XR (JXR) | Linear-light samples, including extended-range values. JXR processing is supported; source-preserving JXR export is limited to linear JXL. |
 | scRGB | scRGB JXL and scRGB JXR | Linear BT.709/scRGB values, including negative and above-white channels where present. scRGB output is JXL only. |
 | Camera RAW | DNG and camera formats supported by LibRaw | Sensor data is demosaiced for conversion. RAW uses separate camera-look/white-balance/exposure and HDR rendering controls. |
+
+EXR, Radiance, PFM and floating-point TIFF use Process pixels mode and share the
+same prepared F32 render across outputs. Untagged linear RGB uses BT.709;
+EXR chromaticities and Radiance PRIMARIES override that default (Radiance without
+PRIMARIES uses its specified standard primaries). Relative linear white is 1 =
+203 nits. TIFF STONITS, when supplied, converts absolute luminance into that
+working convention. Scene-referred formats do not imply a universal exposure.
 
 Formats overlap: JPEG, AVIF, HEIF and JXL may be SDR or HDR, so transfer/gain-map
 metadata—not the extension alone—determines the input class.

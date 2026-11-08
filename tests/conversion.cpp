@@ -8,6 +8,7 @@
 #include <exiv2/exiv2.hpp>
 namespace ultrahdr { unsigned int GetCPUCoreCount(); }
 void gain_map_f32_tests(const std::filesystem::path&);
+void hdr_input_tests(const std::filesystem::path&);
 #include <jxl/decode.h>
 #include <jxl/decode_cxx.h>
 #include <algorithm>
@@ -1334,6 +1335,7 @@ int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    if(argc==2 && std::string(argv[1])=="--hdr-inputs") {hdr_input_tests(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--gainmap-f32") {gain_map_f32_tests(dir);std::cout<<"Gain-map F32 tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
