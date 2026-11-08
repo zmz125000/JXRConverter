@@ -255,8 +255,10 @@ private slots:
         QVERIFY(!table->isColumnHidden(Catalog::Name));
         for(int column=1;column<Catalog::ColumnCount;++column)QVERIFY(table->isColumnHidden(column));
         const auto directory=root("detail-columns");QDir().mkpath(directory);
-        const auto plain=directory+"/plain.png";
-        QImage raster(32,24,QImage::Format_RGB32);raster.fill(Qt::red);QVERIFY(raster.save(plain));
+        const auto plainPath=directory+"/plain.png";
+        QImage raster(32,24,QImage::Format_RGB32);raster.fill(Qt::red);QVERIFY(raster.save(plainPath));
+        // Match the catalog's canonical paths, including macOS /private/var.
+        const auto plain=QFileInfo(plainPath).canonicalFilePath();QVERIFY(!plain.isEmpty());
         window.catalog()->setBackgroundMetadata(true);window.addPaths({plain});
         QTRY_COMPARE(window.catalog()->rowCount(),1);QTRY_VERIFY(inspected(*window.catalog()));
         QTRY_VERIFY(!table->isColumnHidden(Catalog::Dimensions));
@@ -265,7 +267,8 @@ private slots:
         const auto photo=makeImage(directory,"photo.jpg",64,48,400);
         window.addPaths({photo});QTRY_COMPARE(window.catalog()->rowCount(),2);QTRY_VERIFY(inspected(*window.catalog()));
         QTRY_VERIFY(!table->isColumnHidden(Catalog::Camera));QTRY_VERIFY(!table->isColumnHidden(Catalog::Iso));
-        window.catalog()->setStatus(plain,"Failed","Example failure");QTRY_VERIFY(!table->isColumnHidden(Catalog::Error));
+        window.catalog()->setStatus(plain,"Failed","Example failure");
+        QCOMPARE(window.catalog()->record(0).error,QString("Example failure"));QTRY_VERIFY(!table->isColumnHidden(Catalog::Error));
         window.catalog()->setStatus(plain,"Ready");QTRY_VERIFY(table->isColumnHidden(Catalog::Error));
         window.catalog()->removePaths({photo});QTRY_VERIFY(table->isColumnHidden(Catalog::Camera));QTRY_VERIFY(table->isColumnHidden(Catalog::Iso));
         window.catalog()->clear();
