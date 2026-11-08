@@ -60,10 +60,13 @@ QString outputDateFolder() {
     while(name.endsWith(' ')||name.endsWith('.'))name.chop(1);
     return name;
 }
+bool needsHdrInspection(const QString& path) {
+    static const QSet<QString> mixed={"png","jxl","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","tif","tiff"};
+    return mixed.contains(QFileInfo(path).suffix().toLower());
+}
 bool hdrInput(const QString& path) {
     const auto extension=QFileInfo(path).suffix().toLower();
-    static const QSet<QString> mixed={"png","jxl","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","tif","tiff"};
-    if(mixed.contains(extension)) {
+    if(needsHdrInspection(path)) {
         const auto info=inspect(nativePath(path));
         // Linear sources (including scRGB) are routed by encoding, without
         // scanning their pixels for values above SDR white.
@@ -249,6 +252,8 @@ void ConversionQueue::pump() {
         pool_.start([this,job,session,original] {
             QString error;bool skipped=false;
             try {
+                if(!job.preparation_error.isEmpty())throw std::runtime_error(job.preparation_error.toStdString());
+                if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
                 if(original&&!original->isValid())*original=originalDate(job.input);
                 const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);skipped=result.skipped;
                 if(original&&!skipped)preserveDate(job.output,*original);
@@ -270,7 +275,7 @@ void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancel
     const auto aliases=batchAliases_.take(jobKey(job));
     emit outputFinished(job.batch,job.input,job.output,outcome);
     for(auto alias:aliases)if(alias!=job.batch)emit outputFinished(alias,job.input,job.output,outcome);
-    if(!error.isEmpty())fileErrors_[job.input]+=job.output+": "+error+"\n";
+    if(!error.isEmpty())fileErrors_[job.input]+=error+"\nOutput: "+job.output+"\n";
     if(cancelled)++fileCancelled_[job.input];
     if(skipped)++fileSkipped_[job.input];
     if(error.isEmpty()&&!cancelled&&!skipped)++fileSucceeded_[job.input];

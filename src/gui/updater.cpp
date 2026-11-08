@@ -8,7 +8,6 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QMessageBox>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -20,6 +19,7 @@
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QVersionNumber>
+#include <QWidget>
 
 namespace jxrc::gui {
 namespace {
@@ -37,7 +37,7 @@ QString architecture(QString value) {
     return value;
 }
 }
-Updater::Updater(QWidget* parent,QNetworkAccessManager* network):QObject(parent),window_(parent),network_(network?network:new QNetworkAccessManager(this)) {
+Updater::Updater(QWidget* parent,QNetworkAccessManager* network):QObject(parent),network_(network?network:new QNetworkAccessManager(this)) {
     if(network)network->setParent(this);
     root_=QCoreApplication::applicationDirPath();relativeGui_=QFileInfo(QCoreApplication::applicationFilePath()).fileName();
     helperRelative_=helperName();manifestRelative_="share/JXRConverter/package-files.txt";
@@ -55,7 +55,8 @@ Updater::Updater(QWidget* parent,QNetworkAccessManager* network):QObject(parent)
         QFile report(root_+"/.jxrc-update-error.txt");
         if(report.open(QIODevice::ReadOnly)) {
             const QString message=QString::fromUtf8(report.readAll());report.close();report.remove();
-            QMessageBox::warning(window_,"Update could not be installed",message);
+            emit statusChanged("Update could not be installed");
+            emit this->message("Update could not be installed: "+message);
         }
     });
 }
@@ -69,7 +70,6 @@ Updater::~Updater() {
 void Updater::fail(const QString& error) {
     busy_=false;emit busyChanged(false);emit statusChanged(available_?"Update available":"Update");
     emit message("Update: "+error);
-    if(!checkingOnly_)QMessageBox::warning(window_,"Update",error);
 }
 void Updater::fetch(const QUrl& url,const QString& destination,qint64 limit,std::function<void()> next) {
     if(url.scheme()!="https"){fail("The release contains an invalid download URL.");return;}

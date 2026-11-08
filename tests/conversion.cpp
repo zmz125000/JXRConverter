@@ -1154,9 +1154,10 @@ static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
     check(uhdr_dec_set_image(decoder,&compressed).error_code==UHDR_CODEC_OK&&uhdr_dec_probe(decoder).error_code==UHDR_CODEC_OK,"Gain fixture probe");
     const auto* map=uhdr_dec_get_gainmap_image(decoder);const auto* metadata=uhdr_dec_get_gainmap_metadata(decoder);check(map&&metadata,"Gain fixture metadata");
     auto proxdr=heic_sdr_fixture;proxdr.resize(proxdr.size()+84);const auto* mapBytes=static_cast<const uint8_t*>(map->data);proxdr.insert(proxdr.end(),mapBytes,mapBytes+map->data_sz);proxdr.resize(proxdr.size()+16);
-    const size_t at=proxdr.size();proxdr.resize(at+144+12);
+    const size_t at=proxdr.size();proxdr.resize(at+144);
     auto putFloat=[&](size_t offset,float value){uint32_t code;std::memcpy(&code,&value,4);for(unsigned i=0;i<4;++i)proxdr[at+offset+i]=uint8_t(code>>(8*i));};
-    putFloat(16,metadata->max_content_boost[0]);putFloat(132,metadata->hdr_capacity_max);for(const auto c:std::string("jxrslocal.hdr"))proxdr.push_back(uint8_t(c));write(oppo,proxdr);
+    putFloat(16,metadata->max_content_boost[0]);putFloat(132,metadata->hdr_capacity_max);for(const auto c:std::string("[{\"name\":\"local.hdr.linear.mask\"}]"))proxdr.push_back(uint8_t(c));
+    proxdr.push_back(0);for(const auto c:std::string("jxrs"))proxdr.push_back(uint8_t(c));proxdr.resize(proxdr.size()+4);write(oppo,proxdr);
     check(jxrc::inspect(oppo).gainmap&&jxrc::inspect(apple).gainmap,"HEIC gain-map header inspection");
     for(const auto& input:{sdr,apple,oppo})for(auto target:{jxrc::Target::jpeg,jxrc::Target::avif}){
         jxrc::Options options;options.target=target;options.quality.preset=jxrc::Preset::lossless;
@@ -1166,6 +1167,22 @@ static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
         options.mode=jxrc::Mode::process;const auto automatic=jxrc::convert(input,processed,options);
         check(automatic.gainmap==result.gainmap&&bytes(processed)==bytes(preserved),"HEIC automatic source export changed the base/map");
     }
+    // Real camera files can carry a neutral maximum gain of exactly 1.
+    putFloat(16,1.f);write(oppo,proxdr);
+    const auto neutral=decode_heif(proxdr.data(),proxdr.size());
+    check(neutral.max_boost==1.f&&!neutral.gain.pixels.empty(),"Neutral ProXDR map rejected or discarded");
+    check(jxrc::inspect(oppo).gainmap,"Neutral ProXDR inspection");
+    for(auto target:{jxrc::Target::jpeg,jxrc::Target::avif,jxrc::Target::png,jxrc::Target::jxl_linear}) {
+        jxrc::Options options;options.target=target;options.mode=jxrc::Mode::process;
+        options.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;
+        jxrc::convert(oppo,dir/("neutral-"+std::to_string(int(target))),options);
+    }
+    for(float invalid:{0.f,.5f,65.f,std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}) {
+        putFloat(16,invalid);fails([&]{inspect_heif(proxdr.data(),proxdr.size());});
+    }
+    putFloat(16,1.f);
+    auto truncated=proxdr;truncated.erase(truncated.begin()+at+140,truncated.begin()+at+144);
+    fails([&]{inspect_heif(truncated.data(),truncated.size());});
     jxrc::Options options;options.mode=jxrc::Mode::process;options.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;options.target=jxrc::Target::jxl_linear;options.exposure=1;
     jxrc::convert(apple,dir/"apple-rendered.jxl",options);check(jxrc::inspect(dir/"apple-rendered.jxl").hdr,"HEIC float32 pixel-processing path");
 }
@@ -1335,6 +1352,7 @@ int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    if(argc==2 && std::string(argv[1])=="--heif") {const auto gain=dir/"gain.jpg";encode(gain,1,true);heif_gainmaps(dir,gain);std::cout<<"HEIC tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-inputs") {hdr_input_tests(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--gainmap-f32") {gain_map_f32_tests(dir);std::cout<<"Gain-map F32 tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}

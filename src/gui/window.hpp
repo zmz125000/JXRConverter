@@ -3,6 +3,7 @@
 #include "queue.hpp"
 #include <QMainWindow>
 #include <QVariantMap>
+#include <atomic>
 class QButtonGroup;
 class QAction;
 class QActionGroup;
@@ -97,7 +98,11 @@ private:
     void showLibraryMessage(const QString& message, int timeout = 0);
     void showMetadata();
     void convertFiles(bool selected);
-    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false);
+    struct SourceRouting { bool hdr = false, gainmap = false; QString error; };
+    using Routing = QHash<QString, SourceRouting>;
+    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false, std::shared_ptr<const Routing> routing = {});
+    void reportError(const QString&, const QStringList& paths = {});
+    void stopQueue();
     void checkForUpdates();
     void logMessage(const QString&);
     QVector<Target> selectedTargets() const;
@@ -106,6 +111,8 @@ private:
     Catalog* catalog_;
     CatalogFilter* proxy_;
     ConversionQueue* queue_;
+    QThreadPool routingWorkers_;
+    std::shared_ptr<std::atomic_bool> routingToken_;
     Updater* updater_=nullptr;
     QItemSelectionModel* selection_;
     FileListView* list_;

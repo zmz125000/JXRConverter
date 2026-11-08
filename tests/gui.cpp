@@ -1151,6 +1151,68 @@ private slots:
             QVERIFY(savedJob(window,1));QVERIFY(savedJob(window,1)->text().startsWith("#1"));
         }
     }
+    void corruptImageDoesNotBlockBatch() {
+        appSettings().clear();
+        const auto directory=root("hundred-input"),destination=root("hundred-output");
+        const auto original=makeImage(directory,"000.jpg",8,6,100);QStringList paths{original};
+        for(int i=1;i<100;++i) {
+            const auto path=directory+QString("/%1.").arg(i,3,10,QChar('0'))+(i==50?"heic":"jpg");
+            if(i==50){QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));file.write("corrupt HEIC");}
+            else QVERIFY(QFile::copy(original,path));
+            paths.append(path);
+        }
+        MainWindow window;window.addPaths(paths);QTRY_COMPARE(window.catalog()->rowCount(),100);
+        window.findChild<QLineEdit*>("outputDirectory")->setText(destination);
+        window.findChild<QCheckBox*>("acceptSdr")->setChecked(true);
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==int(jxrc::Target::png_hdr)?Qt::Checked:Qt::Unchecked);
+        bool dialogShown=false;QTimer guard;guard.setInterval(5);
+        connect(&guard,&QTimer::timeout,&window,[&]{if(auto* modal=QApplication::activeModalWidget()){dialogShown=true;modal->close();}});guard.start();
+        QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
+        window.findChild<QPushButton*>("convertVisible")->click();
+        // Hidden, uncached sources must not be read on the click's UI stack.
+        QCOMPARE(window.queue()->total(),0);
+        window.findChild<QPushButton*>("cancelQueue")->click();
+        QCOMPARE(window.queue()->total(),0);
+        // A cancelled inspection must not start a batch when its callback arrives.
+        window.findChild<QPushButton*>("convertVisible")->click();
+        QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);
+        QVERIFY(!dialogShown);QCOMPARE(window.queue()->total(),100);
+        QCOMPARE(done[0][0].toInt(),99);QCOMPARE(done[0][1].toInt(),1);
+        const auto& failed=window.catalog()->record(50);QCOMPARE(failed.status,QString("Failed"));QVERIFY(!failed.error.isEmpty());
+        QVERIFY(window.catalog()->index(50,Catalog::Status).data().toString().startsWith("Failed · "));
+        QVERIFY(QFileInfo::exists(destination+"/000_sdr.png"));QVERIFY(QFileInfo::exists(destination+"/099_sdr.png"));
+        QVERIFY(window.findChild<QProgressBar*>("conversionProgress")->text().contains("(100/100/0/1)"));
+    }
+    void cachedRoutingDoesNotReopenSource() {
+        appSettings().clear();MainWindow window;
+        const auto input=makeImage(root("cached-routing"),"input.jpg",8,6,100);
+        window.catalog()->setBackgroundMetadata(true);window.addPaths({input});
+        QTRY_COMPARE(window.catalog()->rowCount(),1);QTRY_VERIFY(!window.catalog()->record(0).transfer.isEmpty());
+        window.findChild<QLineEdit*>("outputDirectory")->setText(root("cached-routing-output"));
+        window.findChild<QCheckBox*>("acceptSdr")->setChecked(true);
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==int(jxrc::Target::png_hdr)?Qt::Checked:Qt::Unchecked);
+        QVERIFY(QFile::remove(input));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
+        window.findChild<QPushButton*>("convertVisible")->click();
+        // Cached HDR/SDR metadata queues immediately, even if the file has gone.
+        QCOMPARE(window.queue()->total(),1);QTRY_COMPARE(done.count(),1);
+        QCOMPARE(done[0][1].toInt(),1);QCOMPARE(window.catalog()->record(0).status,QString("Failed"));
+        QVERIFY(!window.catalog()->record(0).error.isEmpty());
+    }
+    void conversionSetupErrorsAreInline() {
+        appSettings().clear();MainWindow window;
+        const auto input=makeImage(root("setup-error"),"input.jpg",8,6,100);
+        window.addPaths({input});QTRY_COMPARE(window.catalog()->rowCount(),1);
+        window.findChild<QCheckBox*>("saveToSourceFolder")->setChecked(false);
+        window.findChild<QLineEdit*>("outputDirectory")->clear();
+        bool dialogShown=false;QTimer guard;guard.setInterval(5);
+        connect(&guard,&QTimer::timeout,&window,[&]{if(auto* modal=QApplication::activeModalWidget()){dialogShown=true;modal->close();}});guard.start();
+        window.findChild<QPushButton*>("convertVisible")->click();
+        QVERIFY(!dialogShown);QCOMPARE(window.queue()->total(),0);
+        QCOMPARE(window.catalog()->record(0).status,QString("Failed"));
+        QVERIFY(window.catalog()->record(0).error.contains("Choose an output folder"));
+    }
     void mixedSourceHdrTargets() {
         appSettings().clear();
         const auto directory=root("mixed-hdr-input"),destination=root("mixed-hdr-output");

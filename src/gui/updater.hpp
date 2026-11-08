@@ -31,7 +31,6 @@ private:
     void downloadRelease(const QByteArray&);
     void verifyAndExtract();
     void install();
-    QWidget* window_;
     QNetworkAccessManager* network_;
     std::unique_ptr<QTemporaryDir> temp_;
     QString root_,relativeGui_,helperRelative_,manifestRelative_,assetName_,archive_,checksum_,extract_;

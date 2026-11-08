@@ -10,10 +10,11 @@
 #include <functional>
 
 namespace jxrc::gui {
-struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; };
+struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; };
 int coreCount();
 int recommendedWorkers(int cores);
 bool hdrInput(const QString& path);
+bool needsHdrInspection(const QString& path);
 bool gainMapInput(const QString& path);
 QString outputDateFolder();
 struct OutputLayout {

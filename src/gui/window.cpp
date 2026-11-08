@@ -45,7 +45,6 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
-#include <QMessageBox>
 #include <QMimeData>
 #include <QPlainTextEdit>
 #include <QProgressBar>
@@ -191,6 +190,7 @@ QStringList urlPaths(const QMimeData* mime) {QStringList out;for(const auto& url
 }
 MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog(this)),proxy_(new CatalogFilter(this)),queue_(new ConversionQueue(this)) {
     OutputCapture::instance();
+    routingWorkers_.setMaxThreadCount(1);
     setWindowTitle("JXRConverter v" + QString::fromStdString(jxrc::version()));setObjectName("converterWindow");resize(1440,920);setMinimumSize(980,640);setAcceptDrops(true);
     proxy_->setSourceModel(catalog_);proxy_->sort(Catalog::Name);
     // Register structural guards before the view selection model, whose own
@@ -321,7 +321,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
-    connect(progressStop_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,0,Qt::AlignHCenter);
+    connect(progressStop_,&QPushButton::clicked,this,&MainWindow::stopQueue);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,0,Qt::AlignHCenter);
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
@@ -329,7 +329,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* appearanceSpacer=new QWidget;appearanceSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);appearance->addWidget(appearanceSpacer);
     auto* theme=combo({"Auto","Light","Dark"},"theme");
     updater_=new Updater(this);auto* updateButton=new HeightMatchedButton("Update",theme);updateButton->setObjectName("updateApplication");appearance->addWidget(updateButton);
-    connect(updateButton,&QPushButton::clicked,this,[this]{if(!queue_->busy())updater_->start();});
+    connect(updateButton,&QPushButton::clicked,this,[this]{if(!queue_->busy()&&!routingToken_)updater_->start();});
     connect(updater_,&Updater::statusChanged,updateButton,[appearance,updateButton](const QString& text){updateButton->setText(text);appearance->setMinimumWidth(appearance->sizeHint().width());});
     connect(updater_,&Updater::message,this,&MainWindow::logMessage);
     connect(updater_,&Updater::updateAvailableChanged,this,[updateButton](bool available){updateButton->setProperty("primary",available);updateButton->style()->unpolish(updateButton);updateButton->style()->polish(updateButton);updateButton->update();});
@@ -452,6 +452,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     QTimer::singleShot(0,this,[this]{if(loadFolder_->isChecked()&&!recentFolders_.isEmpty())addPaths({recentFolders_.first()});if(loadFiles_->isChecked())addPaths(lastFiles_);});
 }
 MainWindow::~MainWindow() {
+    if(routingToken_)routingToken_->store(false);
+    routingWorkers_.waitForDone();
     saveJobs();saveSettings();
     auto settings=appSettings();settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("conversion/output",output_->text());
 }
@@ -618,7 +620,7 @@ QWidget* MainWindow::buildControls() {
     queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setObjectName("conversionProgress");progress_->setFormat("%p% (%v/%m)");progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
     connect(mode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(targets_,&QListWidget::itemChanged,this,&MainWindow::updateMode);connect(preset_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(rawMode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(wb_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
     connect(exposure_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateMode);connect(maxEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateMode);
-    connect(selected_,&QPushButton::clicked,this,[this]{convertFiles(true);});connect(visible_,&QPushButton::clicked,this,[this]{convertFiles(false);});connect(cancel_,&QPushButton::clicked,queue_,&ConversionQueue::cancelPending);
+    connect(selected_,&QPushButton::clicked,this,[this]{convertFiles(true);});connect(visible_,&QPushButton::clicked,this,[this]{convertFiles(false);});connect(cancel_,&QPushButton::clicked,this,&MainWindow::stopQueue);
     return panel;
 }
 void MainWindow::updateMode() {
@@ -883,13 +885,13 @@ void MainWindow::openOutputFolder() {
     if(statusFilter_->checkedId()==2){if(viewedJob_==0)path=temporaryJob_.folder;else for(const auto& job:savedJobs_)if(job.number==viewedJob_)path=job.folder;}
     if(path.isEmpty()){
         auto paths=selectedPaths();if(paths.isEmpty()&&proxy_->rowCount())paths.append(proxy_->index(0,0).data(Catalog::PathRole).toString());
-        if(paths.isEmpty()&&(sourceFolder_->isChecked()||(parentFolders_->isEnabled()&&parentFolders_->isChecked()))){QMessageBox::warning(this,"Cannot open output folder","Select an image to determine its output folder.");return;}
+        if(paths.isEmpty()&&(sourceFolder_->isChecked()||(parentFolders_->isEnabled()&&parentFolders_->isChecked()))){reportError("Cannot open output folder: Select an image to determine its output folder.");return;}
         const auto targets=selectedTargets();
         try {path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),outputLayout(viewedJob_));}
-        catch(const std::exception& e){QMessageBox::warning(this,"Cannot open output folder",QString::fromUtf8(e.what()));return;}
+        catch(const std::exception& e){reportError("Cannot open output folder: "+QString::fromUtf8(e.what()),selectedPaths());return;}
     }
-    if(path.isEmpty()||!QDir().mkpath(path)){QMessageBox::warning(this,"Cannot open output folder","Choose a writable output folder.");return;}
-    if(!QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(path).absolutePath())))QMessageBox::warning(this,"Cannot open output folder","The system file manager could not open this folder.");
+    if(path.isEmpty()||!QDir().mkpath(path)){reportError("Cannot open output folder: Choose a writable output folder.",selectedPaths());return;}
+    if(!QDesktopServices::openUrl(QUrl::fromLocalFile(QDir(path).absolutePath())))reportError("Cannot open output folder: The system file manager could not open this folder.",selectedPaths());
 }
 void MainWindow::applySearch() {appliedSearch_=search_->text();updateFilter();}
 void MainWindow::resetFilters() {
@@ -1027,13 +1029,13 @@ void MainWindow::updateCounts() {
         ?QString("%p% (%v/%m/%1/%2)").arg(queue_->skipped()).arg(queue_->failed())
         :QString("%p% (%v/%m)");
     progress_->setFormat(progressCounts+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
-    const int selected=imageSelection().size();const bool busy=queue_->busy()||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
+    const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
-    stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy());
-    progressStop_->setVisible(queue_->busy());
-    selected_->setEnabled(selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2||selected<5));visible_->setEnabled(proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy());remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
+    stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy()||bool(routingToken_));
+    progressStop_->setVisible(queue_->busy()||bool(routingToken_));
+    selected_->setEnabled(!routingToken_&&selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2||selected<5));visible_->setEnabled(!routingToken_&&proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
@@ -1055,18 +1057,58 @@ void MainWindow::convertFiles(bool selected) {
     const bool quick=selected&&!paths.isEmpty()&&paths.size()<5&&!reuse;
     convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
 }
-void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick) {
-    if(paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
+void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing) {
+    if(routingToken_||paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
     try {
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         QMap<int,QStringList> inputsByTarget;
         const bool needsHdr=std::any_of(targets.cbegin(),targets.cend(),[](Target target){return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png;});
-        QHash<QString,bool> knownGainMaps;
-        if(needsHdr)for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.inspected&&!record.transfer.isEmpty())knownGainMaps.insert(record.path,record.gainmap);}
+        if(needsHdr&&!routing) {
+            auto prepared=std::make_shared<Routing>();QStringList missing;
+            for(int row=0;row<catalog_->rowCount();++row) {
+                const auto& record=catalog_->record(row);
+                if(record.inspected&&!record.transfer.isEmpty())prepared->insert(record.path,{record.raw||record.format=="JXR"||record.hdr||record.transfer=="Linear",record.gainmap,{}});
+            }
+            for(const auto& path:paths)if(!prepared->contains(path)) {
+                if(needsHdrInspection(path))missing.append(path);
+                else prepared->insert(path,{hdrInput(path),false,{}});
+            }
+            if(!missing.isEmpty()) {
+                // Routing inspects headers, never pixels. Uncached sources can
+                // still involve slow file reads, so keep them off the UI thread.
+                auto token=std::make_shared<std::atomic_bool>(true);routingToken_=token;
+                queueState_->setText("Checking source HDR/SDR metadata…");updateCounts();
+                routingWorkers_.start([this,paths,targets,exactTargets,priority,append,reuseJob,quick,missing,prepared,token] {
+                    for(const auto& path:missing) {
+                        if(!token->load())break;
+                        SourceRouting info;
+                        try {
+#ifdef _WIN32
+                            const auto source=inspect(std::filesystem::path(path.toStdWString()),[token]{return !token->load();});
+#else
+                            const auto source=inspect(std::filesystem::u8path(path.toUtf8().constData()),[token]{return !token->load();});
+#endif
+                            info.hdr=source.raw||source.format=="JXR"||source.hdr||source.transfer=="Linear";info.gainmap=source.gainmap;
+                        }catch(const std::exception& e){info.error=QString::fromUtf8(e.what());}
+                        catch(...){info.error="Unknown source inspection failure";}
+                        prepared->insert(path,info);
+                    }
+                    QMetaObject::invokeMethod(this,[this,paths,targets,exactTargets,priority,append,reuseJob,quick,prepared,token] {
+                        if(routingToken_!=token)return;
+                        routingToken_.reset();
+                        if(token->load())convertPaths(paths,targets,exactTargets,priority,append,reuseJob,quick,prepared);
+                        updateCounts();
+                    },Qt::QueuedConnection);
+                });
+                return;
+            }
+            routing=prepared;
+        }
         for(const auto& path:paths) {
-            const bool gainMap=needsHdr&&(knownGainMaps.contains(path)?knownGainMaps.value(path):gainMapInput(path));
-            const bool hdrGroup=!needsHdr||exactTargets||gainMap||hdrInput(path);
+            const auto source=routing?routing->value(path):SourceRouting{};
+            const bool gainMap=needsHdr&&source.gainmap;
+            const bool hdrGroup=!needsHdr||exactTargets||source.hdr||!source.error.isEmpty();
             for(auto target:targets) {
                 const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap||target==Target::png_hdr||target==Target::png_hlg||target==Target::jxl_hlg||target==Target::avif_hlg;
                 if(hdrTarget&&gainMap&&reconstruction_->currentIndex()!=int(GainMapReconstruction::full_image)) {
@@ -1094,16 +1136,23 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
         QSet<QString> inputs;for(const auto& path:paths)inputs.insert(QFileInfo(path).absoluteFilePath().toCaseFolded());
         for(const auto& job:jobs) {
             if(inputs.contains(QFileInfo(job.output).absoluteFilePath().toCaseFolded()))throw std::invalid_argument("Output would replace an input file");
-            if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
         }
-        for(auto& job:jobs)job.batch=batch;
+        for(auto& job:jobs){job.batch=batch;if(routing)job.preparation_error=routing->value(job.input).error;}
         recordJob(jobs,priority,reuseJob||reuseQuick,quick);
         if(quick)quickJob_=batch;
         if(priority||reuseJob||quick)queue_->enqueueNext(std::move(jobs),workers_->value());
         else if(append)queue_->enqueue(std::move(jobs),workers_->value());
         else queue_->start(std::move(jobs),workers_->value());
         updateCounts();
-    } catch(const std::exception& e){logMessage("Cannot start conversion: "+QString::fromUtf8(e.what()));QMessageBox::warning(this,"Cannot start conversion",QString::fromUtf8(e.what()));}
+    } catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);}
+}
+void MainWindow::reportError(const QString& message,const QStringList& paths) {
+    for(const auto& path:paths)catalog_->setStatus(path,"Failed",message);
+    queueState_->setText(message);showLibraryMessage(message);logMessage(message);
+}
+void MainWindow::stopQueue() {
+    if(routingToken_){routingToken_->store(false);routingToken_.reset();queueState_->setText("Source metadata check cancelled");}
+    queue_->cancelPending();updateCounts();
 }
 void MainWindow::logMessage(const QString& message) {outputLog_->appendPlainText("["+QTime::currentTime().toString("HH:mm:ss")+"] "+message);}
 void MainWindow::checkForUpdates() {
@@ -1113,6 +1162,7 @@ void MainWindow::checkForUpdates() {
     const auto now=QTime::currentTime();updateTimer_->start(3600000-now.minute()*60000-now.second()*1000-now.msec());
 }
 void MainWindow::closeEvent(QCloseEvent* event) {
+    if(routingToken_){routingToken_->store(false);routingToken_.reset();}
     if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after active conversions finish…");event->ignore();return;}event->accept();
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event) {

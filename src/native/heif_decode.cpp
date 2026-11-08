@@ -48,12 +48,16 @@ Proxdr proxdr(const uint8_t* data,size_t size){
     Proxdr out;if(size<256)return out;const auto* end=data+size;const auto* tail=end-std::min<size_t>(size,768);
     const uint8_t magic[]={'j','x','r','s'},name[]={'l','o','c','a','l','.','h','d','r'};
     if(std::search(tail,end,magic,magic+4)==end||std::search(tail,end,name,name+9)==end)return out;
-    const auto* marker=std::find_end(data,end,magic,magic+4);check(marker-data>=12,"Malformed ProXDR catalog");const auto* catalog=marker-12;
+    const auto* marker=std::find_end(data,end,magic,magic+4);
+    const uint8_t json[]={'[','{'};const auto* catalog=std::find_end(data,marker,json,json+2);
+    check(catalog!=marker,"Malformed ProXDR catalog");
     const uint8_t eoi[]={255,217},soi[]={255,216,255};const auto* last=std::find_end(data,catalog,eoi,eoi+2);check(last!=catalog,"Missing ProXDR gain map");
     const auto* first=std::find_end(data,last,soi,soi+3);check(first!=last&&first-data>=84,"Malformed ProXDR JPEG");
     const size_t metadataOffset=size_t(last-data)+18,catalogOffset=size_t(catalog-data);check(metadataOffset<=catalogOffset&&catalogOffset-metadataOffset>=144,"Malformed ProXDR metadata");const auto* metadata=data+metadataOffset;
     auto f32=[&](size_t offset){uint32_t word=0;for(unsigned i=0;i<4;++i)word|=uint32_t(metadata[offset+i])<<(i*8);float f;std::memcpy(&f,&word,4);return f;};
-    out.boost=f32(16);out.display=f32(132);check(std::isfinite(out.boost)&&out.boost>1&&out.boost<=64,"Invalid ProXDR boost");
+    // A neutral gain map (maximum ratio 1) is valid too. Do not invent
+    // headroom or reject the HEIC just because the camera recorded no boost.
+    out.boost=f32(16);out.display=f32(132);check(std::isfinite(out.boost)&&out.boost>=1&&out.boost<=64,"Invalid ProXDR boost");
     if(!std::isfinite(out.display)||out.display<1.01f||out.display>64)out.display=1000.f/203;
     out.display=std::max(out.display,out.boost);out.jpeg=first;out.size=size_t(last+2-first);return out;
 }
