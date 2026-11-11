@@ -433,6 +433,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     });
     connect(catalog_,&Catalog::scanStateChanged,this,[this](bool scanning){showLibraryMessage(scanning?"Scanning folders…":"Folder scan complete",scanning?0:4000);updateCounts();});
     connect(catalog_,&Catalog::scanError,this,[this](const QString& error){showLibraryMessage(error,6000);logMessage("Scan error: "+error);});
+    connect(catalog_,&Catalog::folderDiscovered,this,[this](const QString& path){recentFolders_.removeAll(path);recentFolders_.prepend(path);while(recentFolders_.size()>30)recentFolders_.removeLast();saveHistory();});
     connect(queue_,&ConversionQueue::outputStarted,this,[this](qint64 batch,const QString& input,const QString& output){updateJobOutput(batch,input,output,"Running");});
     connect(queue_,&ConversionQueue::outputFinished,this,[this](qint64 batch,const QString& input,const QString& output,const QString& state){updateJobOutput(batch,input,output,state);});
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
@@ -926,7 +927,12 @@ void MainWindow::saveHistory() {
 }
 void MainWindow::addDroppedPaths(const QStringList& paths) {
     QStringList files;
-    for(const auto& path:paths){const QFileInfo info(path);if(info.isFile()&&supportedFile(path)){const auto canonical=info.canonicalFilePath();if(!files.contains(canonical))files.append(canonical);}}
+    for(const auto& path:paths)if(supportedFile(path)){
+        // A remote QFileInfo::isFile()/canonicalFilePath() can block the UI.
+        // The catalog verifies and canonicalizes imported paths on its scan thread.
+        const auto absolute=QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+        if(!files.contains(absolute))files.append(absolute);
+    }
     if(!files.isEmpty()) {
         lastFiles_=files;
         for(auto it=files.crbegin();it!=files.crend();++it){recentFiles_.removeAll(*it);recentFiles_.prepend(*it);}
@@ -936,9 +942,6 @@ void MainWindow::addDroppedPaths(const QStringList& paths) {
     addPaths(paths);
 }
 void MainWindow::addPaths(const QStringList& paths) {
-    bool changed=false;
-    for(const auto& path:paths){const QFileInfo info(path);if(info.isDir()){const auto canonical=info.canonicalFilePath();recentFolders_.removeAll(canonical);recentFolders_.prepend(canonical);changed=true;}}
-    if(changed){while(recentFolders_.size()>30)recentFolders_.removeLast();saveHistory();}
     if(!paths.isEmpty()){
         if(statusFilter_->checkedId()!=0){statusFilter_->button(0)->setChecked(true);updateFilter();}
         catalog_->addPaths(paths,recursive_->isChecked());

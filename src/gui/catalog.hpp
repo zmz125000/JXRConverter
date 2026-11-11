@@ -58,6 +58,7 @@ public:
 signals:
     void scanStateChanged(bool scanning);
     void scanError(const QString& error);
+    void folderDiscovered(const QString& path);
 private:
     void insertPaths(const QStringList& paths);
     void pumpThumbnails();

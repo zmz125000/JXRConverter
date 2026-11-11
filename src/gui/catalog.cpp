@@ -243,6 +243,7 @@ void Catalog::addPaths(const QStringList& paths, bool recursive) {
                 // Canonicalize the root once. NoSymLinks makes per-file
                 // canonicalFilePath()/remote stat calls unnecessary.
                 const auto root=info.canonicalFilePath();if(root.isEmpty())continue;
+                QMetaObject::invokeMethod(this,[this,root,epoch]{if(epoch->load())emit folderDiscovered(root);},Qt::QueuedConnection);
                 QDirIterator it(root,QDir::Files|QDir::Readable|QDir::NoSymLinks,recursive?QDirIterator::Subdirectories:QDirIterator::NoIteratorFlags);
                 while(epoch->load()&&it.hasNext()) {
                     const auto file=it.next();if(!epoch->load())break;
@@ -257,6 +258,7 @@ void Catalog::addPaths(const QStringList& paths, bool recursive) {
 }
 void Catalog::insertPaths(const QStringList& paths) {
     const auto epoch=epoch_;
+    QVector<Record> additions;
     for(const auto& path:paths) {
         if(!epoch->load())break;
         const auto id=key(path);if(id.isEmpty()||known_.contains(id))continue;
@@ -264,7 +266,12 @@ void Catalog::insertPaths(const QStringList& paths) {
         if(r.format=="JPG"||r.format=="JPE")r.format="JPEG";
         r.raw=!QSet<QString>{"EXR","HDR","RADIANCE","RGBE","XYZE","PIC","PFM","HEIC","HEIF","HEICS","HEIFS","HIF","PNG","WEBP","TIF","TIFF","BMP","GIF","JPEG","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
         metadataQueue_.append(path);
-        beginInsertRows({},records_.size(),records_.size());records_.append(r);endInsertRows();
+        additions.append(std::move(r));
+    }
+    if(!additions.isEmpty()){
+        beginInsertRows({},records_.size(),records_.size()+additions.size()-1);
+        records_+=additions;
+        endInsertRows();
     }
     // In browsing mode let the first paint schedule a combined thumbnail and
     // metadata read, rather than inspecting files before their thumbnails.
