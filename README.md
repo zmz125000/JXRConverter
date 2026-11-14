@@ -129,6 +129,7 @@ Those links are unrelated to the project.
 - [HDRFrame](https://apps.microsoft.com/detail/9p4ngn61cr4t)
 - [jxr2uhdr](https://github.com/tfx2001/jxr2uhdr/) jxr2uhdr is another tool that has accurate SDR output.
 - [HDR2gainmapApp](https://github.com/vastunghia/HDR2gainmapApp)
+- [Win11 HDR sRGB fix](https://github.com/HiBluey/Fuck-sRGB)
 
 ## License
 
