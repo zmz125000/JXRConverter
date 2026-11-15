@@ -122,7 +122,10 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         quality=presets[int(options.quality.preset)];
     }
     const bool png=options.target==Target::png||options.target==Target::png_hdr||options.target==Target::png_hlg;
-    QString suffix=png?suffixes[target]:quality+"_"+suffixes[target];
+    const bool sdr=options.target==Target::jpeg||options.target==Target::jxl||options.target==Target::avif||options.target==Target::png;
+    QString representation=suffixes[target];
+    if(sdr&&options.mode==Mode::process&&options.sdr_tone_map)representation.replace(0,3,"sdr_tm");
+    QString suffix=png?representation:quality+"_"+representation;
     if(options.mode==Mode::process&&options.srgb_clamp)suffix.insert(suffix.lastIndexOf('.'),"_srgb");
     static const QSet<QString> rawExtensions={"dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     auto pathKey=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};

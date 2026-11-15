@@ -28,8 +28,8 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
 Processing controls (PQ/HLG targets require process mode):
   HLG uses the BT.2100 1000-nit reference display (gamma 1.2).
   --sdr-tone-map                Map HDR highlights into SDR outputs and gain-map bases
-  --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.8)
-  --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 1000)
+  --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.64)
+  --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 2000)
   --sdr-auto-hdr-range          Use the F32 image peak instead of fixed nits
   --exposure -3..3              Non-RAW linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing

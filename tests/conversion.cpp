@@ -1532,6 +1532,8 @@ static void transparency_background(const fs::path& dir) {
 }
 
 static void sdr_tone_mapping(const fs::path& dir) {
+    const jxrc::Options defaults;
+    check(defaults.sdr_shoulder==.64f&&defaults.sdr_hdr_range_nits==2000,"SDR tone-mapping defaults changed");
     const float peak=1000.f/203.f;
     const auto mapped=tone_map_sdr_base({.5f,.25f,.125f,1.f,.8f,.4f,.2f,1.f,1.f,.5f,.25f,1.f,peak,peak/2,peak/4,1.f,8.f,4.f,2.f,1.f},.8f,1000.f);
     check(mapped[0]==.5f&&mapped[4]==.8f,"SDR shoulder changed dark pixels");
@@ -1549,7 +1551,8 @@ static void sdr_tone_mapping(const fs::path& dir) {
     jxrc::ConversionSession session(source);
     jxrc::Options o;o.mode=jxrc::Mode::process;o.quality.preset=jxrc::Preset::lossless;o.target=jxrc::Target::png;
     const auto clipped=dir/"tone-clipped.png";session.convert(clipped,o);
-    o.sdr_tone_map=true;const auto toned=dir/"tone-mapped.png";session.convert(toned,o);
+    o.sdr_tone_map=true;o.sdr_shoulder=.8f;o.sdr_hdr_range_nits=1000;
+    const auto toned=dir/"tone-mapped.png";session.convert(toned,o);
     auto decode_sdr=[](const fs::path& path) {
         const auto data=bytes(path);const auto raster=decode_regular(data.data(),data.size());
         std::vector<float> linear;uhdr_color_gamut_t gamut;regular_to_linear(raster,linear,gamut);return linear;

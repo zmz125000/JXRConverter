@@ -319,7 +319,8 @@ private slots:
             auto* rangeInput=window.findChild<QSpinBox*>("sdrHdrRangeInput");
             auto* automatic=window.findChild<QCheckBox*>("sdrAutoHdrRange");
             QVERIFY(enabled&&shoulder&&range&&shoulderInput&&rangeInput&&automatic);
-            QVERIFY(!enabled->isChecked());QCOMPARE(shoulder->value(),80);QCOMPARE(range->value(),1000);
+            QVERIFY(!enabled->isChecked());QCOMPARE(shoulder->value(),64);QCOMPARE(range->value(),2000);
+            QCOMPARE(shoulderInput->value(),64);QCOMPARE(rangeInput->value(),2000);
             enabled->setChecked(true);shoulderInput->setValue(75);rangeInput->setValue(1500);
             QCOMPARE(shoulder->value(),75);QCOMPARE(range->value(),1500);
             shoulder->setValue(76);range->setValue(1600);QCOMPARE(shoulderInput->value(),76);QCOMPARE(rangeInput->value(),1600);
@@ -1700,6 +1701,16 @@ private slots:
         QVERIFY(makeJobs({raw},root("layout/output"),options)[0].output.endsWith("_ae_q70_sdr.avif"));
         options.target=jxrc::Target::jxl_pq;
         QVERIFY(makeJobs({raw},root("layout/output"),options)[0].output.endsWith("_ae_d1.5_pq.jxl"));
+        options.sdr_tone_map=true;
+        for(const auto target:{jxrc::Target::jpeg,jxrc::Target::jxl,jxrc::Target::avif,jxrc::Target::png}) {
+            options.target=target;
+            const auto output=makeJobs({raw},root("layout/output"),options)[0].output;
+            QVERIFY2(output.contains("_sdr_tm."),qPrintable(output));
+        }
+        options.target=jxrc::Target::avif_pq;
+        QVERIFY(makeJobs({raw},root("layout/output"),options)[0].output.endsWith("_pq.avif"));
+        options.target=jxrc::Target::avif_gainmap;
+        QVERIFY(makeJobs({raw},root("layout/output"),options)[0].output.endsWith("_gainmap.avif"));
         MainWindow window;auto* rename=window.findChild<QCheckBox*>("renameConflicts");auto* overwrite=window.findChild<QCheckBox*>("overwrite");
         QVERIFY(rename && overwrite);rename->setChecked(true);QVERIFY(!overwrite->isEnabled());rename->setChecked(false);QVERIFY(overwrite->isEnabled());
     }
