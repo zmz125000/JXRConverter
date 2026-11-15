@@ -1,6 +1,7 @@
 #include "jxrc/converter.hpp"
 #include "codec_api.h"
 #include "render_analysis.h"
+#include "sdr_tone_map.h"
 #include "input_format.h"
 #include "hdr_parallel.h"
 #include "regular_decode.h"
@@ -1491,6 +1492,56 @@ static void transparency_background(const fs::path& dir) {
     fails([&]{jxrc::validate(invalid);});
 }
 
+static void sdr_tone_mapping(const fs::path& dir) {
+    const float peak=1000.f/203.f;
+    const auto mapped=tone_map_sdr_base({.5f,.25f,.125f,1.f,.8f,.4f,.2f,1.f,1.f,.5f,.25f,1.f,peak,peak/2,peak/4,1.f,8.f,4.f,2.f,1.f},.8f,1000.f);
+    check(mapped[0]==.5f&&mapped[4]==.8f,"SDR shoulder changed dark pixels");
+    check(mapped[8]>.8f&&mapped[8]<1.f,"SDR highlight shoulder did not compress");
+    check(std::abs(mapped[12]-1.f)<1e-6f&&std::abs(mapped[16]-1.f)<1e-6f,"SDR HDR endpoint or clipping failed");
+    check(std::abs(mapped[13]-.5f)<1e-6f,"SDR tone mapping changed RGB ratios");
+    std::vector<float> pixels(16*16*4);
+    for(size_t i=0;i<256;++i) {
+        const float v=i%16<4?.5f:i%16<8?1.f:i%16<12?3.f:8.f;
+        pixels[i*4]=pixels[i*4+1]=pixels[i*4+2]=v;pixels[i*4+3]=1.f;
+    }
+    StillEncodeQuality quality(0);
+    const auto source=dir/"tone-source.jxl";
+    check(encode_jxl_f32(16,16,pixels.data(),UHDR_CG_BT_709,true,source.string().c_str(),quality,false)==0,"SDR tone source fixture");
+    jxrc::ConversionSession session(source);
+    jxrc::Options o;o.mode=jxrc::Mode::process;o.quality.preset=jxrc::Preset::lossless;o.target=jxrc::Target::png;
+    const auto clipped=dir/"tone-clipped.png";session.convert(clipped,o);
+    o.sdr_tone_map=true;const auto toned=dir/"tone-mapped.png";session.convert(toned,o);
+    auto decode_sdr=[](const fs::path& path) {
+        const auto data=bytes(path);const auto raster=decode_regular(data.data(),data.size());
+        std::vector<float> linear;uhdr_color_gamut_t gamut;regular_to_linear(raster,linear,gamut);return linear;
+    };
+    const auto before=decode_sdr(clipped),after=decode_sdr(toned);
+    check(std::abs(after[0]-.5f)<.02f&&std::abs(after[0]-before[0])<.02f,"SDR tone mapping changed pixels below shoulder");
+    check(after[8*4]<before[8*4]&&after[8*4]>.8f,"SDR tone mapping did not retain highlights");
+    check(std::abs(after[12*4]-1.f)<.02f,"SDR tone range endpoint missed white");
+    for(auto target:{jxrc::Target::jpeg_gainmap,jxrc::Target::avif_gainmap}) {
+        o.target=target;const auto gain=dir/(target==jxrc::Target::jpeg_gainmap?"tone-gain.jpg":"tone-gain.avif");
+        check(session.convert(gain,o).gainmap,"Tone mapped gain-map export failed");
+        jxrc::Options base;base.target=jxrc::Target::png;base.quality.preset=jxrc::Preset::lossless;
+        const auto basePath=dir/(target==jxrc::Target::jpeg_gainmap?"tone-jpeg-base.png":"tone-avif-base.png");
+        jxrc::convert(gain,basePath,base);
+        const auto low=decode_sdr(basePath);
+        check(low[8*4]>.8f&&low[8*4]<1.f,"Gain-map SDR base did not use tone mapping");
+        check(std::abs(low[12*4]-1.f)<.08f,"Gain-map SDR base missed white endpoint");
+        jxrc::Options full;full.mode=jxrc::Mode::process;full.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;full.target=jxrc::Target::png_hdr;
+        const auto fullPath=dir/(target==jxrc::Target::jpeg_gainmap?"tone-jpeg-full.png":"tone-avif-full.png");
+        jxrc::convert(gain,fullPath,full);
+        const auto fullData=bytes(fullPath);const auto fullRaster=decode_regular(fullData.data(),fullData.size());
+        std::vector<float> fullPixels;uhdr_color_gamut_t fullGamut;regular_to_linear(fullRaster,fullPixels,fullGamut);
+        check(fullPixels[12*4]>3.f,"Tone-mapped gain-map base lost HDR reconstruction");
+    }
+    o.target=jxrc::Target::png;o.sdr_auto_hdr_range=true;
+    const auto automatic=dir/"tone-auto.png";session.convert(automatic,o);
+    const auto autoPixels=decode_sdr(automatic);
+    check(std::abs(autoPixels[12*4]-1.f)<.02f&&autoPixels[8*4]<after[8*4],"Automatic HDR range did not fit the F32 peak");
+    o.sdr_shoulder=1.f;fails([&]{jxrc::validate(o);});
+}
+
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
@@ -1504,6 +1555,7 @@ int main(int argc,char** argv) try {
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--transparency") {transparency_background(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--sdr-tone-map") {sdr_tone_mapping(dir);std::cout<<"SDR tone mapping tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--raw-auto-exposure") {raw_auto_exposure(dir);std::cout<<"RAW auto exposure tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--srgb-clamp") {srgb_clamping(dir);signed_float_jxl(dir);std::cout<<"sRGB clamp tests passed\n";return 0;}

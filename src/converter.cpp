@@ -4,6 +4,7 @@
 #include "reader_pixels.h"
 #include "codec_api.h"
 #include "render_analysis.h"
+#include "native/sdr_tone_map.h"
 #include "working_pixels.h"
 #include "input_format.h"
 #include "heif_decode.h"
@@ -159,13 +160,14 @@ void validate(const Options& o) {
     if(o.quality.png_depth!=8&&o.quality.png_depth!=16)throw std::invalid_argument("PNG depth must be 8 or 16");
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
+    range(o.sdr_shoulder,0,0.99,"SDR shoulder");range(o.sdr_hdr_range_nits,204,10000,"SDR HDR range");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
     range(r.highlight_stops,0,3,"highlight stops");range(r.shoulder,0,1,"shoulder");range(r.target_nits,1000,10000,"target nits");
     range(r.shadows,-1,1,"shadows");range(r.midtones,-1,1,"midtones");range(r.highlights,-1,1,"highlights");
     if(o.jpeg_transcoding&&(o.target!=Target::jxl||o.exposure||o.max_edge||o.srgb_clamp))throw std::invalid_argument("JPEG transcoding requires SDR JXL without exposure, resizing or sRGB clamping");
     if(o.mode==Mode::preserve) {
         const RawControls d;
-        if(o.srgb_clamp||o.exposure||o.max_edge||r.hdr_mode!=RawHdrMode::source||r.exposure||r.auto_exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
+        if(o.srgb_clamp||o.exposure||o.max_edge||o.sdr_tone_map||r.hdr_mode!=RawHdrMode::source||r.exposure||r.auto_exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
             throw std::invalid_argument("Pixel and RAW controls require --mode process");
         if(o.target==Target::jxl_pq||o.target==Target::avif_pq||o.target==Target::png_hdr||hlg_target(o.target))
             throw std::invalid_argument("An explicit transfer conversion requires --mode process; preserve uses the source transfer");
@@ -175,6 +177,8 @@ struct ConversionSession::Impl {
     std::filesystem::path input;
     std::vector<uint8_t> bytes,exif;
     std::vector<float> linear,sdr_base;
+    std::vector<float> mapped_sdr;
+    float mapped_shoulder=-1.f,mapped_range=-1.f;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
     bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,raster_hdr=false;
@@ -228,7 +232,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
     if(cache.gainmap&&!full_gainmap) {
         const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
-        require(source_target&&!o.exposure&&!o.max_edge&&!o.srgb_clamp,
+        require(source_target&&!o.exposure&&!o.max_edge&&!o.srgb_clamp&&!o.sdr_tone_map,
             "Select Full gain-map reconstruction for HDR target conversion or pixel processing of a gain-map source");
     }
     Result result;
@@ -293,7 +297,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         auto& linear=cache.linear;auto& sdr_base=cache.sdr_base;auto& exif=cache.exif;
         auto& w=cache.w;auto& h=cache.h;auto& gamut=cache.gamut;
         if(!cache.ready || processing_key(cache.previous,format)!=processing_key(o,format)) {
-            cache.ready=false;cache.scrgb=false;linear.clear();sdr_base.clear();exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
+            cache.ready=false;cache.scrgb=false;linear.clear();sdr_base.clear();cache.mapped_sdr.clear();cache.mapped_shoulder=cache.mapped_range=-1.f;exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
             if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,0,&sdr_base);
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr,&sdr_base);
@@ -395,6 +399,20 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         // either encoded plane's depth. Quantize it at the selected export depth.
         q.source_bits=full_gainmap?32:cache.bits;
         q.analysis=&cache.analysis;
+        const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png;
+        const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
+        if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
+            const float peak=cache.analysis.peak();
+            if(peak>1.f) {
+                const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:float(o.sdr_hdr_range_nits);
+                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range) {
+                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,range);
+                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;
+                }
+            }
+        }
+        const float* export_pixels=sdr_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():linear.data();
+        const float* export_base=gain_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():sdr_base.empty()?nullptr:sdr_base.data();
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
         int rc;
         if(cache.scrgb) {
@@ -421,12 +439,12 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             rc=encode_jxl_source(w,h,scrgb.data(),true,color,path.c_str(),q);
         } else if(o.target==Target::png||o.target==Target::png_hdr||o.target==Target::png_hlg) {
             const int transfer=o.target==Target::png_hlg?18:o.target==Target::png_hdr?16:13;
-            rc=encode_png_f32(w,h,linear.data(),gamut,transfer,q.png_depth(q.source_bits),path.c_str(),q);
+            rc=encode_png_f32(w,h,o.target==Target::png?export_pixels:linear.data(),gamut,transfer,q.png_depth(q.source_bits),path.c_str(),q);
         } else if(o.target==Target::jxl_hlg) {
             rc=encode_jxl_f32(w,h,linear.data(),gamut,true,path.c_str(),q,false,true);
         } else if(o.target==Target::avif_hlg) {
             rc=encode_avif_f32(w,h,linear.data(),gamut,3,path.c_str(),q);
-        } else rc=encode_still_export_f32(linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,sdr_base.empty()?nullptr:sdr_base.data());
+        } else rc=encode_still_export_f32(sdr_target?export_pixels:linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,export_base);
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
         result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         result.transfer=hlg_target(o.target)?18:o.target==Target::avif_pq||o.target==Target::jxl_pq||o.target==Target::png_hdr?16:0;

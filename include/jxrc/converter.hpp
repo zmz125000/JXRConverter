@@ -44,6 +44,10 @@ struct Options {
     Quality quality;
     RawControls raw;
     float exposure = 0; // Non-RAW process-mode linear-light exposure, in stops. RAW uses raw.exposure.
+    bool sdr_tone_map = false; // Map HDR highlights into SDR outputs and gain-map bases.
+    float sdr_shoulder = 0.8f; // Linear fraction of 203-nit SDR white left unchanged.
+    int sdr_hdr_range_nits = 1000; // HDR input white mapped to SDR white.
+    bool sdr_auto_hdr_range = false; // Use the prepared F32 image peak instead.
     unsigned max_edge = 0;
     unsigned threads = 0; // Per-conversion codec budget; 0 uses automatic defaults.
     bool jpeg_transcoding = false; // Eligible SDR JPEG coefficients to JXL, without exposure/resizing.

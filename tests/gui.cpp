@@ -308,6 +308,24 @@ private slots:
             QCOMPARE(QFileInfo::exists(output+"/ordinary_high_sdr.avif"),allow);
         }
     }
+    void sdrToneMapControls() {
+        appSettings().clear();
+        {
+            MainWindow window;window.show();
+            auto* enabled=window.findChild<QCheckBox*>("sdrToneMap");
+            auto* shoulder=window.findChild<QSlider*>("sdrShoulder");
+            auto* range=window.findChild<QSlider*>("sdrHdrRangeNits");
+            auto* automatic=window.findChild<QCheckBox*>("sdrAutoHdrRange");
+            QVERIFY(enabled&&shoulder&&range&&automatic);
+            QVERIFY(!enabled->isChecked());QCOMPARE(shoulder->value(),80);QCOMPARE(range->value(),1000);
+            enabled->setChecked(true);shoulder->setValue(75);range->setValue(1500);automatic->setChecked(true);
+            const auto options=window.options();QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
+            QCOMPARE(options.sdr_shoulder,.75f);QCOMPARE(options.sdr_hdr_range_nits,1500);
+            QVERIFY(!range->isEnabled());
+        }
+        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);}
+        appSettings().clear();
+    }
     void pngThumbnailFallback() {
         const auto path=root("preview-only.png");QImage image(96,48,QImage::Format_RGBA8888);image.fill(QColor(180,95,45));QVERIFY(image.save(path,"PNG"));
         QFile file(path);QVERIFY(file.open(QIODevice::ReadOnly));auto bytes=file.readAll();file.close();
