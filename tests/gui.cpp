@@ -302,10 +302,10 @@ private slots:
             const auto output=root("reconstruction-output")+QString("-%1-%2").arg(policy).arg(allow?"allow":"hdr");
             reconstruction->setCurrentIndex(policy);accept->setChecked(allow);window.findChild<QLineEdit*>("outputDirectory")->setText(output);
             window.findChild<QPushButton*>("convertVisible")->click();++batches;QTRY_COMPARE(done.count(),batches);QCOMPARE(done.last()[1].toInt(),0);QCOMPARE(window.queue()->total(),allow?3:2);
-            const auto gainOutput=output+(policy==2?"/gain_high_pq.avif":"/gain_high_sdr.avif");QVERIFY(QFileInfo::exists(gainOutput));
+            const auto gainOutput=output+(policy==2?"/gain_high_pq.avif":"/gain_high_sdr_tm.avif");QVERIFY(QFileInfo::exists(gainOutput));
             const auto gainInfo=jxrc::inspect(std::filesystem::u8path(gainOutput.toStdString()));QCOMPARE(gainInfo.gainmap,policy!=2);if(policy==2)QCOMPARE(gainInfo.transfer,std::string("PQ"));
             const auto nongainInfo=jxrc::inspect(std::filesystem::u8path((output+"/nongain_high_pq.avif").toStdString()));QCOMPARE(nongainInfo.transfer,std::string("PQ"));
-            QCOMPARE(QFileInfo::exists(output+"/ordinary_high_sdr.avif"),allow);
+            QCOMPARE(QFileInfo::exists(output+"/ordinary_high_sdr_tm.avif"),allow);
         }
     }
     void sdrToneMapControls() {
@@ -319,9 +319,14 @@ private slots:
             auto* rangeInput=window.findChild<QSpinBox*>("sdrHdrRangeInput");
             auto* automatic=window.findChild<QCheckBox*>("sdrAutoHdrRange");
             QVERIFY(enabled&&shoulder&&range&&shoulderInput&&rangeInput&&automatic);
-            QVERIFY(!enabled->isChecked());QCOMPARE(shoulder->value(),64);QCOMPARE(range->value(),2000);
+            QVERIFY(enabled->isChecked());QVERIFY(automatic->isChecked());QCOMPARE(automatic->text(),QString("Auto HDR range"));
+            QCOMPARE(shoulder->value(),64);QCOMPARE(range->value(),2000);
             QCOMPARE(shoulderInput->value(),64);QCOMPARE(rangeInput->value(),2000);
-            enabled->setChecked(true);shoulderInput->setValue(75);rangeInput->setValue(1500);
+            auto* form=qobject_cast<QFormLayout*>(enabled->parentWidget()->layout());QVERIFY(form);
+            int enabledRow=-1,automaticRow=-1;QFormLayout::ItemRole role;
+            form->getWidgetPosition(enabled,&enabledRow,&role);form->getWidgetPosition(automatic,&automaticRow,&role);
+            QCOMPARE(automaticRow,enabledRow+1);
+            automatic->setChecked(false);shoulderInput->setValue(75);rangeInput->setValue(1500);
             QCOMPARE(shoulder->value(),75);QCOMPARE(range->value(),1500);
             shoulder->setValue(76);range->setValue(1600);QCOMPARE(shoulderInput->value(),76);QCOMPARE(rangeInput->value(),1600);
             shoulderInput->setValue(75);rangeInput->setValue(1500);automatic->setChecked(true);
@@ -675,8 +680,10 @@ private slots:
         appSettings().clear();MainWindow window;window.show();
         auto* tabs=window.findChild<QTabWidget*>("settingsTabs");QCOMPARE(tabs->tabText(2),QString("Log"));
         auto* output=window.findChild<QPlainTextEdit*>("outputLog");QVERIFY(output->isReadOnly());QCOMPARE(output->maximumBlockCount(),5000);
-        std::fputs("Native stdout marker\n",stdout);std::fflush(stdout);std::fputs("Native stderr marker\n",stderr);std::fflush(stderr);qWarning("Qt warning marker");
-        QTRY_VERIFY(output->toPlainText().contains("Native stdout marker"));QTRY_VERIFY(output->toPlainText().contains("Native stderr marker"));QTRY_VERIFY(output->toPlainText().contains("Qt warning marker"));
+        std::fputs("Native stdout marker\n",stdout);std::fflush(stdout);std::fputs("Native stderr marker\n",stderr);std::fflush(stderr);
+        // QtTest owns the Qt message handler in test mode; only the raw
+        // streams are guaranteed to pass through OutputCapture here.
+        QTRY_VERIFY(output->toPlainText().contains("Native stdout marker"));QTRY_VERIFY(output->toPlainText().contains("Native stderr marker"));
         auto* automatic=window.findChild<QCheckBox*>("checkForUpdates");QVERIFY(automatic->isChecked());
         auto* timer=window.findChild<QTimer*>("hourlyUpdateCheck");QTRY_VERIFY(timer->isActive());QVERIFY(timer->interval()>0&&timer->interval()<=3600000);QCOMPARE(timer->timerType(),Qt::PreciseTimer);
         automatic->setChecked(false);QVERIFY(!timer->isActive());automatic->setChecked(true);QVERIFY(timer->isActive());
@@ -723,7 +730,7 @@ private slots:
         const auto index=window.filterModel()->index(1,0);QTRY_VERIFY(!view->visualRect(index).isEmpty());QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
         bool chosen=false;
         QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* action=menu->findChild<QAction*>("convertImage");chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}else menu->close();});
-        view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(chosen);QTRY_COMPARE(finished.count(),1);QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(root("context-output")+"/b_high_sdr.avif"));QVERIFY(!QFileInfo::exists(root("context-output")+"/a_high_sdr.avif"));
+        view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(chosen);QTRY_COMPARE(finished.count(),1);QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(root("context-output")+"/b_high_sdr_tm.avif"));QVERIFY(!QFileInfo::exists(root("context-output")+"/a_high_sdr_tm.avif"));
         for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==2?Qt::Checked:Qt::Unchecked);
         chosen=false;window.findChild<QPushButton*>("statusAll")->click();
         QTimer::singleShot(0,&window,[&]{auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());if(!menu)return;auto* submenu=menu->findChild<QMenu*>("convertTo");auto* action=submenu?submenu->findChild<QAction*>("convertTarget5"):nullptr;chosen=action&&action->isEnabled();if(chosen){menu->setActiveAction(submenu->menuAction());QTest::keyClick(menu,Qt::Key_Right);submenu->setActiveAction(action);QTest::keyClick(submenu,Qt::Key_Return);}else menu->close();});
@@ -732,7 +739,8 @@ private slots:
     }
     void fileDatesAreAvailableBeforeImageInspection() {
         appSettings().clear();
-        const auto directory=root("immediate-file-dates");QDir().mkpath(directory);
+        const auto temporaryDirectory=root("immediate-file-dates");QDir().mkpath(temporaryDirectory);
+        const auto directory=QFileInfo(temporaryDirectory).canonicalFilePath();QVERIFY(!directory.isEmpty());
         const auto older=directory+"/older.jpg",newer=directory+"/newer.jpg";
         const QDateTime oldDate(QDate(2020,1,2),QTime(3,4,5));
         const QDateTime newDate(QDate(2024,5,6),QTime(7,8,9));
@@ -1141,7 +1149,7 @@ private slots:
         // UI edits after submission must not move the pending output.
         window.findChild<QLineEdit*>("outputDirectory")->setText(root("different-job-output"));window.findChild<QCheckBox*>("jobSubfolders")->setChecked(false);
         QTRY_COMPARE(done.count(),1);const auto folder=output+"/"+outputDateFolder()+"/Job-1";
-        QVERIFY(QFileInfo::exists(folder+"/a_high_sdr.avif"));QVERIFY(QFileInfo::exists(folder+"/b_high_sdr.avif"));QVERIFY(!QFileInfo::exists(root("different-job-output")+"/b_high_sdr.avif"));
+        QVERIFY(QFileInfo::exists(folder+"/a_high_sdr_tm.avif"));QVERIFY(QFileInfo::exists(folder+"/b_high_sdr_tm.avif"));QVERIFY(!QFileInfo::exists(root("different-job-output")+"/b_high_sdr_tm.avif"));
         QCOMPARE(jobButton->text(),QString("#1 job-folders (2/2/0/0)"));QVERIFY(!savedJob(window,1)->text().endsWith("*"));QVERIFY(window.findChild<QPushButton*>("cancelJob")->x()<jobButton->x());QCOMPARE(savedJob(window,1)->text(),jobButton->text());
         FolderReceiver receiver;QDesktopServices::setUrlHandler("file",&receiver,"open");auto restore=qScopeGuard([]{QDesktopServices::unsetUrlHandler("file");});
         auto* icon=window.findChild<QPushButton*>("openQueueOutputFolder");QVERIFY(icon);QVERIFY(!icon->icon().isNull());icon->click();QCOMPARE(receiver.opened.toLocalFile(),folder);
@@ -1172,9 +1180,9 @@ private slots:
         window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),2);QVERIFY(savedJob(window,2)->isChecked());QCOMPARE(selection->selectedRows().size(),0);
         QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,view->visualRect(model->index(2,0)).center());QCOMPARE(selection->selectedRows().size(),1);
         QVERIFY(chooseJob(window,1));QCOMPARE(selection->selectedRows().size(),3);QVERIFY(chooseJob(window,2));QCOMPARE(selection->selectedRows().size(),1);
-        const auto jobs=window.findChild<QMenu*>("jobMenu")->actions().size();QVERIFY(QFile::remove(output+"/c_high_sdr.avif"));
+        const auto jobs=window.findChild<QMenu*>("jobMenu")->actions().size();QVERIFY(QFile::remove(output+"/c_high_sdr_tm.avif"));
         window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),3);
-        QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(output+"/c_high_sdr.avif"));QVERIFY(savedJob(window,2)->isChecked());
+        QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(output+"/c_high_sdr_tm.avif"));QVERIFY(savedJob(window,2)->isChecked());
         QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),jobs);QCOMPARE(model->rowCount(),3);QCOMPARE(selection->selectedRows().size(),1);
         QCOMPARE(savedJob(window,2)->text(),QString("#2 job-selections (1/3/2/0)"));QCOMPARE(savedJob(window,1)->text(),QString("#1 job-selections (3/3/0/0)"));
         window.findChild<QPushButton*>("statusSelected")->click();QCOMPARE(model->rowCount(),1);QCOMPARE(model->index(0,0).data(Catalog::PathRole).toString(),c);
@@ -1273,7 +1281,7 @@ private slots:
             quickCreated=savedJobJson(7).value("createdAt").toString();QVERIFY(QDateTime::fromString(quickCreated,Qt::ISODateWithMs).isValid());
             select(1);selection->select(model->index(2,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
             QVERIFY(convert->isEnabled());convert->click();QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),2);
-            QTRY_COMPARE(done.count(),1);QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/0_high_sdr.avif"));QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/2_high_sdr.avif"));
+            QTRY_COMPARE(done.count(),1);QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/0_high_sdr_tm.avif"));QVERIFY(QFileInfo::exists(destination+"/Quick-Job-7/2_high_sdr_tm.avif"));
             QCOMPARE(savedJob(window,7)->text(),QString("#7 quick-input (3/3/0/0)"));QCOMPARE(appSettings().value("jobs/nextNumber").toInt(),8);
             window.findChild<QPushButton*>("selectAllImages")->click();convert->click();QTRY_COMPARE(done.count(),2);
             QVERIFY(savedJob(window,8));QVERIFY(savedJob(window,8)->text().startsWith("#8"));
@@ -1323,7 +1331,7 @@ private slots:
         QCOMPARE(done[0][0].toInt(),99);QCOMPARE(done[0][1].toInt(),1);
         const auto& failed=window.catalog()->record(50);QCOMPARE(failed.status,QString("Failed"));QVERIFY(!failed.error.isEmpty());
         QVERIFY(window.catalog()->index(50,Catalog::Status).data().toString().startsWith("Failed · "));
-        QVERIFY(QFileInfo::exists(destination+"/000_sdr.png"));QVERIFY(QFileInfo::exists(destination+"/099_sdr.png"));
+        QVERIFY(QFileInfo::exists(destination+"/000_sdr_tm.png"));QVERIFY(QFileInfo::exists(destination+"/099_sdr_tm.png"));
         QVERIFY(window.findChild<QProgressBar*>("conversionProgress")->text().contains("(100/100/0/1)"));
     }
     void cachedRoutingDoesNotReopenSource() {
@@ -1384,7 +1392,7 @@ private slots:
         auto* accept=window.findChild<QCheckBox*>("acceptSdr");QVERIFY(!accept->isChecked());
         QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),1);
         QCOMPARE(window.queue()->total(),8);QCOMPARE(done[0][1].toInt(),0);
-        QVERIFY(QFileInfo::exists(destination+"/sdr_sdr.png"));QVERIFY(!QFileInfo::exists(destination+"/sdr_hdr.png"));
+        QVERIFY(QFileInfo::exists(destination+"/sdr_sdr_tm.png"));QVERIFY(!QFileInfo::exists(destination+"/sdr_hdr.png"));
         QVERIFY(QFileInfo::exists(destination+"/pq_hdr.png"));QVERIFY(QFileInfo::exists(destination+"/hlg_hdr.png"));QVERIFY(QFileInfo::exists(destination+"/linear_hdr.png"));
         // Enabling the existing fallback alone still produces SDR equivalents
         // for SDR inputs, deduplicated against the explicit SDR target.

@@ -232,7 +232,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
     if(cache.gainmap&&!full_gainmap) {
         const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
-        require(source_target&&!o.exposure&&!o.max_edge&&!o.srgb_clamp&&!o.sdr_tone_map,
+        // Off/Auto transfer the encoded SDR base. The tone-map preference is
+        // relevant only when Full reconstructs an HDR F32 render.
+        require(source_target&&!o.exposure&&!o.max_edge&&!o.srgb_clamp,
             "Select Full gain-map reconstruction for HDR target conversion or pixel processing of a gain-map source");
     }
     Result result;

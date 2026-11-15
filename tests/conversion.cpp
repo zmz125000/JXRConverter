@@ -1570,6 +1570,10 @@ static void sdr_tone_mapping(const fs::path& dir) {
         const auto low=decode_sdr(basePath);
         check(low[8*4]>.8f&&low[8*4]<1.f,"Gain-map SDR base did not use tone mapping");
         check(std::abs(low[12*4]-1.f)<.08f,"Gain-map SDR base missed white endpoint");
+        base.mode=jxrc::Mode::process;base.sdr_tone_map=true;base.sdr_auto_hdr_range=true;
+        const auto passthrough=dir/(target==jxrc::Target::jpeg_gainmap?"tone-jpeg-base-passthrough.png":"tone-avif-base-passthrough.png");
+        jxrc::convert(gain,passthrough,base);
+        check(bytes(passthrough)==bytes(basePath),"Tone-map preference changed a transferred gain-map SDR base");
         jxrc::Options full;full.mode=jxrc::Mode::process;full.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;full.target=jxrc::Target::png_hdr;
         const auto fullPath=dir/(target==jxrc::Target::jpeg_gainmap?"tone-jpeg-full.png":"tone-avif-full.png");
         jxrc::convert(gain,fullPath,full);
@@ -1590,6 +1594,16 @@ static void sdr_tone_mapping(const fs::path& dir) {
     const auto cappedBelowPeak=dir/"tone-cap-below-peak.png";session.convert(cappedBelowPeak,o);
     const auto belowPixels=decode_sdr(cappedBelowPeak);
     check(belowPixels[8*4]>cappedPixels[8*4],"HDR range cap below image peak did not clip the upper range");
+    for(const auto target:{jxrc::Target::jxl_linear,jxrc::Target::jxl_scrgb,
+                           jxrc::Target::jxl_pq,jxrc::Target::avif_pq,jxrc::Target::png_hdr,
+                           jxrc::Target::jxl_hlg,jxrc::Target::avif_hlg,jxrc::Target::png_hlg}) {
+        jxrc::Options hdr=o;hdr.target=target;hdr.sdr_tone_map=false;hdr.sdr_auto_hdr_range=false;
+        const auto plain=dir/("tone-hdr-off-"+std::to_string(int(target)));
+        const auto untouched=dir/("tone-hdr-on-"+std::to_string(int(target)));
+        session.convert(plain,hdr);
+        hdr.sdr_tone_map=true;hdr.sdr_auto_hdr_range=true;session.convert(untouched,hdr);
+        check(bytes(plain)==bytes(untouched),"SDR tone controls changed a linear, scRGB, PQ, or HLG output");
+    }
     o.sdr_shoulder=1.f;fails([&]{jxrc::validate(o);});
 }
 
