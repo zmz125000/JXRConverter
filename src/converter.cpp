@@ -404,7 +404,10 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
             if(peak>1.f) {
-                const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:float(o.sdr_hdr_range_nits);
+                // The manual range is a ceiling. Fit a dimmer source to its
+                // actual peak; only values above the ceiling are clipped.
+                const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
+                    std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
                 if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range) {
                     cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,range);
                     cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;

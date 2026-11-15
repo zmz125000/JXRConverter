@@ -501,6 +501,8 @@ void MainWindow::restoreSettings() {
     sortOrder_=settings.value("browser/descending",false).toBool()?Qt::DescendingOrder:Qt::AscendingOrder;
     findChild<QSlider*>("rawTargetNitsSlider")->setValue(nits_->value());
     findChild<QSlider*>("rawShoulderSlider")->setValue(qRound(shoulder_->value()*100));
+    sdrShoulderInput_->setValue(sdrShoulder_->value());
+    sdrRangeInput_->setValue(sdrRange_->value());
 }
 void MainWindow::saveSettings() const {
     auto settings=appSettings();
@@ -554,8 +556,11 @@ QWidget* MainWindow::buildControls() {
     autoBitDepth_->setToolTip("PNG uses 8 bits for 8-bit sources and 16 bits for deeper sources. Disable to choose PNG depth directly. Independent of quality presets.");
     toneMap_=new QGroupBox("SDR tone mapping");auto* toneForm=new QFormLayout(toneMap_);
     sdrToneMap_=check("Tone map HDR to SDR","sdrToneMap");sdrToneMap_->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(sdrToneMap_);
-    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(80);sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
-    sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(1000);sdrRangeValue_=new QLabel;auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeValue_);toneForm->addRow("HDR range",rangeRow);
+    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(80);sdrShoulderInput_=spin(0,95,80,"sdrShoulderInput");sdrShoulderInput_->setSuffix("%");sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderInput_);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
+    connect(sdrShoulder_,&QSlider::valueChanged,sdrShoulderInput_,&QSpinBox::setValue);connect(sdrShoulderInput_,&QSpinBox::valueChanged,sdrShoulder_,&QSlider::setValue);
+    sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(1000);sdrRangeInput_=spin(204,10000,1000,"sdrHdrRangeInput");sdrRangeInput_->setSingleStep(50);sdrRangeInput_->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeInput_);toneForm->addRow("HDR range cap",rangeRow);
+    connect(sdrRange_,&QSlider::valueChanged,sdrRangeInput_,&QSpinBox::setValue);connect(sdrRangeInput_,&QSpinBox::valueChanged,sdrRange_,&QSlider::setValue);
+    sdrRangeInput_->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
     sdrAutoRange_=check("Auto HDR range from image peak","sdrAutoHdrRange");sdrAutoRange_->setToolTip("Fit the brightest finite F32 pixel to SDR white. Uses the same prepared F32 image shared by all selected outputs.");toneForm->addRow(sdrAutoRange_);
     connect(sdrToneMap_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrAutoRange_,&QCheckBox::toggled,this,&MainWindow::updateMode);
     connect(sdrShoulder_,&QSlider::valueChanged,this,&MainWindow::updateMode);connect(sdrRange_,&QSlider::valueChanged,this,&MainWindow::updateMode);
@@ -650,9 +655,8 @@ void MainWindow::updateMode() {
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
-    toneMap_->setEnabled(process);sdrShoulder_->setEnabled(sdrToneMap_->isChecked());sdrRange_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrAutoRange_->setEnabled(sdrToneMap_->isChecked());
-    sdrShoulderValue_->setText(QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
-    sdrRangeValue_->setText(QString("%1 nits").arg(sdrRange_->value()));
+    toneMap_->setEnabled(process);sdrShoulder_->setEnabled(sdrToneMap_->isChecked());sdrShoulderInput_->setEnabled(sdrToneMap_->isChecked());sdrRange_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrAutoRange_->setEnabled(sdrToneMap_->isChecked());
+    sdrShoulderValue_->setText(QString("(%1 nits)").arg(qRound(sdrShoulder_->value()*2.03)));
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);cameraLook_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     rawProtectHighlights_->setEnabled(process&&rawAutoExposure_->isChecked());

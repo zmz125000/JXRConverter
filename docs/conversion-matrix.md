@@ -41,7 +41,7 @@ option to use the native CMYK sample path.
 
 | Output representation | File targets | Encoding and caveats |
 |---|---|---|
-| SDR | JPEG (`jpeg`), JXL (`jxl`), AVIF (`avif`) | Processed SDR output is clipped to SDR. JPEG is 8-bit and lossy; AVIF supports up to 12-bit; JXL supports integer and floating-point encodings depending on target/path. No general HDR-to-SDR tone mapper is selectable. |
+| SDR | JPEG (`jpeg`), PNG (`png`), JXL (`jxl`), AVIF (`avif`) | Processed HDR sources clip above 203 nits by default or use optional SDR tone mapping. The manual HDR range is a cap; a lower image peak maps to SDR white. JPEG is 8-bit and lossy; PNG supports 8/16-bit; AVIF supports up to 12-bit; JXL supports integer and floating-point encodings depending on target/path. |
 | SDR base + HDR gain map | Ultra HDR JPEG (`jpeg-gainmap`), gain-map AVIF (`avif-gainmap`) | ISO/Ultra HDR gain-map output. A gain map can be transferred directly from compatible JPEG/AVIF/HEIF sources at 0 EV without resizing. Otherwise the app renders HDR and builds a new map; SDR inputs do not gain real highlight detail. |
 | Linear HDR | Linear JXL (`jxl-linear`) | Float32 linear-light processing output; preserves extended-range values. JXL may encode float samples as float32 or half-float according to encoder settings. No AVIF linear target. |
 | scRGB | scRGB JXL (`jxl-scrgb`) | Linear BT.709/scRGB with 1.0 representing 80-nit scRGB reference white in JXL signaling. Existing scRGB JXL can take a direct path when no pixel edits are requested. |

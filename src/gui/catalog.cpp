@@ -203,7 +203,6 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
         details.removeDuplicates();
         return details.filter(QRegularExpression(".+")).join(" · ");
     }
-    if (role == Qt::ToolTipRole) return r.path + "\n" + dimensions(r) + "\n" + r.camera + "\n" + r.imageDate().toString("yyyy-MM-dd HH:mm:ss") + "\n" + r.status + (r.error.isEmpty()?QString{}:"\n"+r.error) + (r.metadataWarning.isEmpty()?QString{}:"\nMetadata: "+r.metadataWarning);
     if ((role == Qt::DecorationRole || role == ThumbnailRole) && index.column() == Name) {
         if(role==ThumbnailRole&&thumbnailFrame_&&!visibleThumbnails_.contains(r.path))
             const_cast<Catalog*>(this)->visibleThumbnails_.append(r.path);
@@ -434,7 +433,7 @@ void Catalog::pumpThumbnails() {
                         }
                         else if(r.metadataWarning.isEmpty())r.metadataWarning="Thumbnail: "+error;
                         if(updated)emit dataChanged(index(row,0),index(row,ColumnCount-1));
-                        else emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole,Qt::ToolTipRole});
+                        else emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole});
                     }
                 }
                 pumpThumbnails();pumpMetadata();
@@ -458,7 +457,7 @@ void Catalog::removePaths(const QStringList& paths) {
 }
 void Catalog::setStatus(const QString& path,const QString& status,const QString& error) {
     const int row=find(path);if(row<0)return;records_[row].status=status;records_[row].error=error;
-    emit dataChanged(index(row,0),index(row,ColumnCount-1),{Qt::DisplayRole,Qt::ToolTipRole});
+    emit dataChanged(index(row,0),index(row,ColumnCount-1),{Qt::DisplayRole});
 }
 CatalogFilter::CatalogFilter(QObject* parent):QSortFilterProxyModel(parent) {setDynamicSortFilter(true);setSortCaseSensitivity(Qt::CaseInsensitive);}
 void CatalogFilter::setFilter(const Filter& filter) {

@@ -1578,6 +1578,15 @@ static void sdr_tone_mapping(const fs::path& dir) {
     const auto automatic=dir/"tone-auto.png";session.convert(automatic,o);
     const auto autoPixels=decode_sdr(automatic);
     check(std::abs(autoPixels[12*4]-1.f)<.02f&&autoPixels[8*4]<after[8*4],"Automatic HDR range did not fit the F32 peak");
+    o.sdr_auto_hdr_range=false;o.sdr_hdr_range_nits=2000;
+    const auto cappedAbovePeak=dir/"tone-cap-above-peak.png";session.convert(cappedAbovePeak,o);
+    const auto cappedPixels=decode_sdr(cappedAbovePeak);
+    for(size_t i=0;i<autoPixels.size();++i)
+        check(std::abs(cappedPixels[i]-autoPixels[i])<.001f,"HDR range cap above image peak differed from Auto");
+    o.sdr_hdr_range_nits=1000;
+    const auto cappedBelowPeak=dir/"tone-cap-below-peak.png";session.convert(cappedBelowPeak,o);
+    const auto belowPixels=decode_sdr(cappedBelowPeak);
+    check(belowPixels[8*4]>cappedPixels[8*4],"HDR range cap below image peak did not clip the upper range");
     o.sdr_shoulder=1.f;fails([&]{jxrc::validate(o);});
 }
 
