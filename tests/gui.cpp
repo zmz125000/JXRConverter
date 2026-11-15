@@ -724,6 +724,39 @@ private slots:
         view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(chosen);QTRY_COMPARE(finished.count(),2);QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(root("context-output")+"/b_high_pq.avif"));QCOMPARE(jxrc::inspect(std::filesystem::u8path((root("context-output")+"/b_high_pq.avif").toStdString())).transfer,std::string("PQ"));
         QCOMPARE(window.options().target,jxrc::Target::jxl);
     }
+    void fileDatesAreAvailableBeforeImageInspection() {
+        appSettings().clear();
+        const auto directory=root("immediate-file-dates");QDir().mkpath(directory);
+        const auto older=directory+"/older.jpg",newer=directory+"/newer.jpg";
+        const QDateTime oldDate(QDate(2020,1,2),QTime(3,4,5));
+        const QDateTime newDate(QDate(2024,5,6),QTime(7,8,9));
+        for(const auto& entry:{std::pair{older,oldDate},std::pair{newer,newDate}}) {
+            QFile file(entry.first);QVERIFY(file.open(QIODevice::WriteOnly));QCOMPARE(file.write("x",1),qint64(1));file.close();
+            QVERIFY(file.open(QIODevice::ReadWrite));QVERIFY(file.setFileTime(entry.second,QFileDevice::FileModificationTime));file.close();
+        }
+        MainWindow window;window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
+        window.findChild<QComboBox*>("sortField")->setCurrentIndex(Catalog::Modified);
+        window.addPaths({newer,older});QTRY_COMPARE(window.catalog()->rowCount(),2);
+        QTRY_VERIFY(!window.catalog()->scanning());
+        for(const auto& path:{older,newer}) {
+            const int row=window.catalog()->paths().indexOf(path);QVERIFY(row>=0);
+            const auto& record=window.catalog()->record(row);
+            QCOMPARE(record.bytes,qint64(1));QCOMPARE(record.modified.toSecsSinceEpoch(),QFileInfo(path).lastModified().toSecsSinceEpoch());
+            QCOMPARE(record.created,QFileInfo(path).birthTime());QVERIFY(!record.inspected);
+            QCOMPARE(window.catalog()->index(row,Catalog::Modified).data().toString(),record.modified.toString("yyyy-MM-dd HH:mm:ss"));
+        }
+        QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),older);
+        QTest::qWait(100);QCOMPARE(window.catalog()->metadataJobCount(),0);
+        for(int row=0;row<2;++row)QVERIFY(!window.catalog()->record(row).inspected);
+        window.catalog()->setBackgroundMetadata(true);
+        QTRY_VERIFY(window.catalog()->record(0).inspected&&window.catalog()->record(1).inspected);
+        for(const auto& path:{older,newer}) {
+            const int row=window.catalog()->paths().indexOf(path);QVERIFY(row>=0);
+            const auto& record=window.catalog()->record(row);
+            QCOMPARE(record.bytes,qint64(1));QCOMPARE(record.modified.toSecsSinceEpoch(),QFileInfo(path).lastModified().toSecsSinceEpoch());
+            QCOMPARE(record.created,QFileInfo(path).birthTime());
+        }
+    }
     void imageDateFallbackAndSingleDayMenu() {
         appSettings().clear();
         const auto directory=root("file-dates");QDir().mkpath(directory);

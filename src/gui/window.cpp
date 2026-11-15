@@ -986,7 +986,8 @@ void MainWindow::updateFilter() {
 }
 void MainWindow::updateBackgroundMetadata() {
     const int sort=sort_->currentData().toInt();
-    const bool metadataSort=sort!=Catalog::Name&&sort!=Catalog::Format&&sort!=Catalog::Status;
+    const bool basicSort=sort==Catalog::Name||sort==Catalog::Format||sort==Catalog::Size||sort==Catalog::Created||sort==Catalog::Modified||sort==Catalog::Status||sort==Catalog::Path||sort==Catalog::Error;
+    const bool metadataSort=!basicSort;
     const bool metadataFilter=metadataFilters_->isChecked()&&(!format_->text().trimmed().isEmpty()||range_->currentIndex()!=0||minImageEdge_->value()>0||megapixels_->value()>0||dateEnabled_->isChecked());
     catalog_->setBackgroundMetadata(metadataSort||metadataFilter||today_->isChecked()||!appliedSearch_.trimmed().isEmpty()||!instant_->text().trimmed().isEmpty());
 }

@@ -40,6 +40,14 @@ double exifNumber(const Exiv2::ExifData& data, const char* name) {
 QString dimensions(const Record& r) {
     return r.width > 0 ? QString("%1 × %2").arg(r.width).arg(r.height) : QString{};
 }
+void keepBasicFileMetadata(Record& updated,const Record& original) {
+    if(updated.path.isEmpty())updated.path=original.path;
+    if(updated.name.isEmpty())updated.name=original.name;
+    if(updated.format.isEmpty())updated.format=original.format;
+    if(updated.bytes<=0)updated.bytes=original.bytes;
+    if(!updated.created.isValid())updated.created=original.created;
+    if(!updated.modified.isValid())updated.modified=original.modified;
+}
 }
 bool supportedFile(const QString& path) {
     static const QSet<QString> extensions = {"exr","hdr","rgbe","xyze","pic","pfm","png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
@@ -230,11 +238,17 @@ void Catalog::addPaths(const QStringList& paths, bool recursive) {
     const auto epoch=epoch_;
     ++scanning_;emit scanStateChanged(true);
     scans_.start([this,paths,recursive,epoch] {
-        QStringList batch;
+        QVector<Record> batch;
         auto send=[&] {
             if(batch.isEmpty()||!epoch->load())return;
-            const auto ready=batch;batch.clear();
+            auto ready=std::move(batch);batch.clear();
             QMetaObject::invokeMethod(this,[this,ready,epoch]{if(epoch->load())insertPaths(ready);},Qt::QueuedConnection);
+        };
+        auto add=[&](const QString& path,const QFileInfo& info) {
+            if(!supportedFile(path))return;
+            Record r;r.path=path;r.name=info.fileName();r.format=info.suffix().toUpper();
+            r.bytes=info.size();r.modified=info.lastModified().toLocalTime();r.created=info.birthTime().toLocalTime();
+            batch.append(std::move(r));
         };
         for(const auto& path:paths) {
             if(!epoch->load())break;
@@ -247,25 +261,25 @@ void Catalog::addPaths(const QStringList& paths, bool recursive) {
                 QDirIterator it(root,QDir::Files|QDir::Readable|QDir::NoSymLinks,recursive?QDirIterator::Subdirectories:QDirIterator::NoIteratorFlags);
                 while(epoch->load()&&it.hasNext()) {
                     const auto file=it.next();if(!epoch->load())break;
-                    if(supportedFile(file))batch<<file;
+                    add(file,it.fileInfo());
                     if(batch.size()>=64)send();
                 }
-            } else if(info.isFile()&&supportedFile(path))batch<<info.canonicalFilePath();
+            } else if(info.isFile()&&supportedFile(path))add(info.canonicalFilePath(),info);
             else QMetaObject::invokeMethod(this,[this,path,epoch]{if(epoch->load())emit scanError("Skipped unsupported or missing file: "+path);},Qt::QueuedConnection);
         }
         send();QMetaObject::invokeMethod(this,[this,epoch]{if(epoch->load()){--scanning_;emit scanStateChanged(scanning_>0);}},Qt::QueuedConnection);
     });
 }
-void Catalog::insertPaths(const QStringList& paths) {
+void Catalog::insertPaths(const QVector<Record>& paths) {
     const auto epoch=epoch_;
     QVector<Record> additions;
-    for(const auto& path:paths) {
+    for(auto r:paths) {
         if(!epoch->load())break;
-        const auto id=key(path);if(id.isEmpty()||known_.contains(id))continue;
-        known_.insert(id);Record r;r.path=path;r.name=QFileInfo(path).fileName();r.format=QFileInfo(path).suffix().toUpper();
+        const auto id=key(r.path);if(id.isEmpty()||known_.contains(id))continue;
+        known_.insert(id);
         if(r.format=="JPG"||r.format=="JPE")r.format="JPEG";
         r.raw=!QSet<QString>{"EXR","HDR","RADIANCE","RGBE","XYZE","PIC","PFM","HEIC","HEIF","HEICS","HEIFS","HIF","PNG","WEBP","TIF","TIFF","BMP","GIF","JPEG","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
-        metadataQueue_.append(path);
+        metadataQueue_.append(r.path);
         additions.append(std::move(r));
     }
     if(!additions.isEmpty()){
@@ -321,7 +335,7 @@ void Catalog::pumpMetadata() {
             delete metadataTask_;metadataTask_=nullptr;metadataToken_.reset();metadataPath_.clear();
             const int row=find(path);
             if(epoch->load()&&token->load()&&row>=0) {
-                auto& old=records_[row];result.status=old.status;result.error=old.error;result.thumbnailPending=old.thumbnailPending;result.thumbnailFailed=old.thumbnailFailed;
+                auto& old=records_[row];keepBasicFileMetadata(result,old);result.status=old.status;result.error=old.error;result.thumbnailPending=old.thumbnailPending;result.thumbnailFailed=old.thumbnailFailed;
                 old=std::move(result);emit dataChanged(index(row,0),index(row,ColumnCount-1));
             }
             pumpMetadata();
@@ -411,7 +425,7 @@ void Catalog::pumpThumbnails() {
                     auto& r=records_[row];r.thumbnailPending=false;
                     if(token->load()) {
                         const bool updated=metadata.inspected&&!r.inspected;
-                        if(updated){metadata.status=r.status;metadata.error=r.error;r=std::move(metadata);}
+                        if(updated){keepBasicFileMetadata(metadata,r);metadata.status=r.status;metadata.error=r.error;r=std::move(metadata);}
                         r.thumbnailFailed=image.isNull();
                         if(!image.isNull()) {
                             auto ready=image;

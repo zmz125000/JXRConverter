@@ -1331,7 +1331,46 @@ static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
     jxrc::convert(apple,dir/"apple-rendered.jxl",options);check(jxrc::inspect(dir/"apple-rendered.jxl").hdr,"HEIC float32 pixel-processing path");
 }
 
+static void non_gain_full_routes(const fs::path& dir) {
+    const auto jpeg=dir/"full-ordinary.jpg",heic=dir/"full-ordinary.heic",avif=dir/"full-ordinary.avif";
+    encode(jpeg,0,false);write(heic,heic_sdr_fixture);
+    jxrc::Options source;source.mode=jxrc::Mode::process;source.target=jxrc::Target::avif;
+    jxrc::convert(jpeg,avif,source);
+    for(const auto& input:{jpeg,heic,avif}) {
+        check(!jxrc::inspect(input).gainmap,"Non-gain-map routing fixture has a gain map");
+        jxrc::Options options;options.mode=jxrc::Mode::process;options.target=jxrc::Target::jxl;
+        options.quality.preset=jxrc::Preset::lossless;
+        const auto baseline=dir/(input.stem().string()+"-auto.jxl");
+        const auto full=dir/(input.stem().string()+"-full.jxl");
+        jxrc::convert(input,baseline,options);
+        options.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;
+        jxrc::convert(input,full,options);
+        check(bytes(full)==bytes(baseline),"Full gain-map setting changed a non-gain-map source route");
+    }
+}
+
 static void transparency_background(const fs::path& dir) {
+    // An ordinary 8-bit sRGB PNG reaches JPEG through the integer source path
+    // regardless of the background selection. Opaque RGBA is equivalent.
+    const unsigned sw=16,sh=12;std::vector<uint8_t> rgb(size_t(sw)*sh*3),rgba(size_t(sw)*sh*4);
+    for(size_t i=0;i<size_t(sw)*sh;++i) {
+        for(unsigned c=0;c<3;++c)rgb[i*3+c]=rgba[i*4+c]=uint8_t((i*37+c*61)%256);
+        rgba[i*4+3]=255;
+    }
+    StillSourceColor sdrColor;sdrColor.bits=8;sdrColor.channels=3;sdrColor.transfer=13;
+    const auto rgbPng=dir/"background-rgb8.png",rgbaPng=dir/"background-opaque-rgba8.png";
+    check(encode_png_source(sw,sh,rgb.data(),false,sdrColor,rgbPng.string().c_str(),StillEncodeQuality(0))==0,"8-bit RGB source fixture");
+    sdrColor.channels=4;
+    check(encode_png_source(sw,sh,rgba.data(),false,sdrColor,rgbaPng.string().c_str(),StillEncodeQuality(0))==0,"8-bit opaque RGBA source fixture");
+    for(const auto& source:{rgbPng,rgbaPng}) {
+        jxrc::Options o;o.mode=jxrc::Mode::process;o.target=jxrc::Target::jpeg;o.quality.preset=jxrc::Preset::lossless;
+        const auto baseline=dir/(source.stem().string()+"-black.jpg");jxrc::convert(source,baseline,o);
+        for(auto background:{jxrc::TransparencyBackground::white,jxrc::TransparencyBackground::white_remove_alpha}) {
+            o.transparency_background=background;
+            const auto output=dir/(source.stem().string()+"-"+std::to_string(int(background))+".jpg");jxrc::convert(source,output,o);
+            check(bytes(output)==bytes(baseline),"Background selection changed an opaque 8-bit PNG-to-JPEG source route");
+        }
+    }
     // Opaque inputs must retain their source codes/profile and direct routes,
     // even with Remove alpha selected. In particular, do not round-trip their
     // 16-bit colors through the F32 working gamut or disable JPEG transcoding.
@@ -1549,7 +1588,7 @@ int main(int argc,char** argv) try {
     if(argc==2 && std::string(argv[1])=="--heif") {const auto gain=dir/"gain.jpg";encode(gain,1,true);heif_gainmaps(dir,gain);std::cout<<"HEIC tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--jpeg-inputs") {jpeg_inputs(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-inputs") {hdr_input_tests(dir);return 0;}
-    if(argc==2 && std::string(argv[1])=="--gainmap-f32") {gain_map_f32_tests(dir);std::cout<<"Gain-map F32 tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--gainmap-f32") {gain_map_f32_tests(dir);non_gain_full_routes(dir);std::cout<<"Gain-map F32 tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
@@ -1618,7 +1657,7 @@ int main(int argc,char** argv) try {
         for(unsigned c=0;c<3;++c)check(std::abs(std::log2(metadata->max_content_boost[c])-double(map->gainMapMax[c].n)/map->gainMapMax[c].d)<.0001,"Per-channel gain-map range changed");
     }
     heif_gainmaps(dir,gain);
-    gain_map_f32_tests(dir);
+    gain_map_f32_tests(dir);non_gain_full_routes(dir);
     o.target=jxrc::Target::jxl;jxrc::convert(gain,dir/"source-base.jxl",o);check(!jxrc::inspect(dir/"source-base.jxl").hdr,"Auto source JXL must export the stored SDR base");
     o.target=jxrc::Target::avif;r=jxrc::convert(pq,dir/"pq.avif",o);check(r.transfer==16,"Preserved PQ transfer");
     // Linear JXL stores samples normalized to its declared intensity; process round trip restores absolute values.

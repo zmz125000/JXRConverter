@@ -60,7 +60,7 @@ signals:
     void scanError(const QString& error);
     void folderDiscovered(const QString& path);
 private:
-    void insertPaths(const QStringList& paths);
+    void insertPaths(const QVector<Record>& paths);
     void pumpThumbnails();
     void cancelThumbnail(const QString& path);
     void fitThumbnailCache();
