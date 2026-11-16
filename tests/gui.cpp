@@ -323,10 +323,13 @@ private slots:
     }
     void autoToneControlsAndReset() {
         appSettings().clear();MainWindow window;
-        auto* automatic=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(automatic);
+        auto* automatic=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(automatic);QVERIFY(automatic->isChecked());
         auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QVERIFY(mapper);mapper->setCurrentIndex(2);
         automatic->setChecked(true);QVERIFY(!mapper->isEnabled());
-        QVERIFY(!window.findChild<QSlider*>("sdrShoulder")->isEnabled());
+        auto* autoShoulder=window.findChild<QCheckBox*>("sdrAutoShoulder");QVERIFY(autoShoulder);QVERIFY(!autoShoulder->isChecked());
+        QVERIFY(window.findChild<QSlider*>("sdrShoulder")->isEnabled());
+        autoShoulder->setChecked(true);QVERIFY(!window.findChild<QSlider*>("sdrShoulder")->isEnabled());
+        QVERIFY(window.options().sdr_auto_shoulder);
         for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"}) {
             auto* input=window.findChild<QDoubleSpinBox*>(name);QVERIFY(!input->isEnabled());
             QVERIFY(!window.findChild<QSlider*>(QString(name)+"Slider")->isEnabled());
@@ -335,7 +338,8 @@ private slots:
         window.findChild<QDoubleSpinBox*>("sdrShadows")->setValue(.5);
         window.findChild<QSlider*>("sdrShoulder")->setValue(40);
         auto* reset=window.findChild<QPushButton*>("resetSdrToneMapping");QVERIFY(reset);reset->click();
-        const auto options=window.options();QVERIFY(!options.sdr_auto_tone_curve);QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
+        const auto options=window.options();QVERIFY(options.sdr_auto_tone_curve);QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
+        QVERIFY(!options.sdr_auto_shoulder);QVERIFY(window.findChild<QSlider*>("sdrShoulder")->isEnabled());
         QCOMPARE(options.sdr_shoulder,.67f);QCOMPARE(options.sdr_hdr_range_nits,2000);QCOMPARE(options.sdr_shadows,0.f);
         QCOMPARE(window.findChild<QSlider*>("sdrShadowsSlider")->value(),0);
         QCOMPARE(mapper->currentIndex(),0);
@@ -346,7 +350,8 @@ private slots:
             MainWindow window;window.show();
             auto* color=window.findChild<QComboBox*>("sdrColorMapping");
             QVERIFY(color);QCOMPARE(color->count(),3);QCOMPARE(color->currentIndex(),0);color->setCurrentIndex(1);
-            auto* autoCurve=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(autoCurve);QVERIFY(!autoCurve->isChecked());autoCurve->setChecked(true);
+            auto* autoCurve=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(autoCurve);QVERIFY(autoCurve->isChecked());
+            window.findChild<QCheckBox*>("sdrAutoShoulder")->setChecked(true);
             auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");
             QVERIFY(mapper);mapper->setCurrentIndex(1);
             auto* enabled=window.findChild<QCheckBox*>("sdrToneMap");
@@ -366,7 +371,7 @@ private slots:
             QCOMPARE(options.sdr_shoulder,.75f);QCOMPARE(options.sdr_hdr_range_nits,1500);
             QVERIFY(!range->isEnabled());QVERIFY(!rangeInput->isEnabled());
         }
-        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrAutoToneCurve")->isChecked());QCOMPARE(restored.findChild<QComboBox*>("sdrColorMapping")->currentIndex(),1);QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentIndex(),1);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
+        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrAutoShoulder")->isChecked());QVERIFY(restored.findChild<QCheckBox*>("sdrAutoToneCurve")->isChecked());QCOMPARE(restored.findChild<QComboBox*>("sdrColorMapping")->currentIndex(),1);QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentIndex(),1);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
         appSettings().clear();
     }
     void pngThumbnailFallback() {
@@ -1080,7 +1085,7 @@ private slots:
         QVERIFY(chooseJob(restored,2));QCOMPARE(restored.filterModel()->rowCount(),1);QCOMPARE(restored.filterModel()->index(0,0).data(Catalog::PathRole).toString(),a);
         QSignalSpy rerun(restored.queue(),&ConversionQueue::batchFinished);
         restored.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(rerun.count(),1);
-        QVERIFY(!savedJob(restored,2));QVERIFY(savedJob(restored,3)->isChecked());
+        QVERIFY(savedJob(restored,2)->isChecked());QVERIFY(!savedJob(restored,3));
         QCOMPARE(restored.findChild<QMenu*>("jobMenu")->actions().size(),3);QCOMPARE(restored.filterModel()->rowCount(),1);
     }
     void jobCreationMetadata() {
@@ -1214,18 +1219,19 @@ private slots:
         const auto selected=selection->selectedRows()[0].data(Catalog::PathRole).toString();
         const auto count=window.findChild<QMenu*>("jobMenu")->actions().size();
         window.findChild<QPushButton*>("convertSelected")->click();QTRY_COMPARE(done.count(),2);
-        QVERIFY(!savedJob(window,1));QVERIFY(savedJob(window,2)->isChecked());
+        QVERIFY(savedJob(window,1)->isChecked());QVERIFY(!savedJob(window,2));
         QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),count);
         QCOMPARE(window.filterModel()->rowCount(),5);QCOMPARE(selection->selectedRows().size(),1);
         QCOMPARE(selection->selectedRows()[0].data(Catalog::PathRole).toString(),selected);
-        QCOMPARE(savedJobJson(2).value("createdAt"),created);
-        QCOMPARE(savedJobJson(2).value("files").toArray().size(),5);
+        QCOMPARE(savedJobJson(1).value("createdAt"),created);
+        QCOMPARE(savedJobJson(1).value("files").toArray().size(),5);
         window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),3);
-        QVERIFY(!savedJob(window,2));QVERIFY(savedJob(window,3)->isChecked());
+        QVERIFY(savedJob(window,1)->isChecked());QVERIFY(!savedJob(window,2));
         QCOMPARE(window.findChild<QMenu*>("jobMenu")->actions().size(),count);
         QCOMPARE(window.filterModel()->rowCount(),5);QCOMPARE(selection->selectedRows().size(),1);
-        QCOMPARE(savedJobJson(3).value("createdAt"),created);
-        window.findChild<QPushButton*>("statusAll")->click();QVERIFY(chooseJob(window,3));
+        QCOMPARE(savedJobJson(1).value("createdAt"),created);
+        QCOMPARE(appSettings().value("jobs/nextNumber").toLongLong(),qint64(2));
+        window.findChild<QPushButton*>("statusAll")->click();QVERIFY(chooseJob(window,1));
         QCOMPARE(window.filterModel()->rowCount(),5);
     }
     void convertAllQuickJobBoundary() {

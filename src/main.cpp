@@ -33,7 +33,9 @@ Processing controls (PQ/HLG targets require process mode):
   --sdr-shadows -1..1 --sdr-midtones -1..1 --sdr-highlights -1..1  Default: 0
   --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.67)
   --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 2000)
-  --sdr-auto-tone-curve         Cap source before edits, then fit adjusted peak into SDR
+  --sdr-auto-tone-curve         Fit an automatic SDR curve (default on)
+  --sdr-auto-shoulder           Auto tone curve: adapt shoulder within 50–67% (default off)
+  --no-sdr-auto-tone-curve      Use the manual SDR curve and tonal controls
   --sdr-auto-hdr-range          Use the F32 image peak instead of fixed nits
   --exposure -3..3              Non-RAW linear-light exposure in stops
   --max-edge PIXELS             Resize longest edge; 0 disables resizing
@@ -102,7 +104,9 @@ int run(int argc,char** argv) {
         else if(arg=="--sdr-highlights")o.sdr_highlights=number(value());
         else if(arg=="--sdr-shoulder")o.sdr_shoulder=number(value());
         else if(arg=="--sdr-hdr-range")o.sdr_hdr_range_nits=integer(value());
+        else if(arg=="--sdr-auto-shoulder")o.sdr_auto_shoulder=true;
         else if(arg=="--sdr-auto-tone-curve")o.sdr_auto_tone_curve=true;
+        else if(arg=="--no-sdr-auto-tone-curve")o.sdr_auto_tone_curve=false;
         else if(arg=="--sdr-auto-hdr-range")o.sdr_auto_hdr_range=true;
         else if(arg=="--convert-gamut")o.convert_gamut=true;
         else if(arg=="--no-convert-gamut")o.convert_gamut=false;

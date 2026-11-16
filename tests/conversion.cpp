@@ -1538,6 +1538,12 @@ static void transparency_background(const fs::path& dir) {
 }
 
 static void sdr_tone_mapping(const fs::path& dir) {
+    check(jxrc::Options{}.sdr_auto_tone_curve,"Auto tone curve should default on");
+    // A dark median must not lower the automatic shoulder below 50%.
+    const std::vector<float> darkMedian={.1f,.1f,.1f,1.f,.4f,.4f,.4f,1.f,4.f,4.f,4.f,1.f};
+    const auto darkMapped=tone_map_sdr_base(darkMedian,.1f,812.f,jxrc::SdrToneMapper::logarithmic,
+        jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},true,true,true);
+    check(darkMapped[4]==.4f,"Auto shoulder fell below 50%");
     const std::vector<float> autoSource={8,4,2,.4f,.5f,.3f,.2f,.8f};
     for(auto mapping:{jxrc::SdrColorMapping::max_rgb,jxrc::SdrColorMapping::luminance,jxrc::SdrColorMapping::per_channel}) {
         const auto automatic=tone_map_sdr_base(autoSource,.67f,406.f,jxrc::SdrToneMapper::logarithmic,mapping,{.2126f,.7152f,.0722f},{.2f,.3f,.7f},false,true);
@@ -1546,8 +1552,14 @@ static void sdr_tone_mapping(const fs::path& dir) {
             if(i%4==3)check(automatic[i]==autoSource[i],"Auto tone curve changed alpha");
         }
     }
-    const auto autoDefault=tone_map_sdr_base(autoSource,.67f,406.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},false,true);
-    const auto autoManual=tone_map_sdr_base(autoSource,.2f,406.f,jxrc::SdrToneMapper::reinhard,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{1,-1,.7f},false,true);
+    const auto autoDefault=tone_map_sdr_base(autoSource,.67f,406.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},false,true,true);
+    const auto fixedShoulder=tone_map_sdr_base(darkMedian,.67f,812.f,jxrc::SdrToneMapper::logarithmic,
+        jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},true,true,false);
+    const auto lowerShoulder=tone_map_sdr_base(darkMedian,.3f,812.f,jxrc::SdrToneMapper::logarithmic,
+        jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},true,true,false);
+    check(fixedShoulder[4]==.4f&&lowerShoulder[4]<.4f,"Auto curve ignored manual shoulder with Auto shoulder off");
+    check(!jxrc::Options{}.sdr_auto_shoulder,"Auto shoulder should default off");
+    const auto autoManual=tone_map_sdr_base(autoSource,.2f,406.f,jxrc::SdrToneMapper::reinhard,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{1,-1,.7f},false,true,true);
     check(autoDefault==autoManual,"Auto curve used disabled manual settings");
     const auto capped=tone_map_sdr_base({8,4,2,1},.67f,406.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{0,0,.7f},false,true);
     check(capped[0]>.9999f&&std::abs(capped[1]-.5f)<1e-6f,"Auto tone curve failed to fit adjusted peak or preserve RGB ratios");
@@ -1595,7 +1607,7 @@ static void sdr_tone_mapping(const fs::path& dir) {
     jxrc::ConversionSession session(source);
     jxrc::Options o;o.mode=jxrc::Mode::process;o.quality.preset=jxrc::Preset::lossless;o.target=jxrc::Target::png;
     const auto clipped=dir/"tone-clipped.png";session.convert(clipped,o);
-    o.sdr_tone_map=true;o.sdr_shoulder=.8f;o.sdr_hdr_range_nits=1000;
+    o.sdr_tone_map=true;o.sdr_auto_tone_curve=false;o.sdr_shoulder=.8f;o.sdr_hdr_range_nits=1000;
     const auto toned=dir/"tone-mapped.png";session.convert(toned,o);
     auto decode_sdr=[](const fs::path& path) {
         const auto data=bytes(path);const auto raster=decode_regular(data.data(),data.size());

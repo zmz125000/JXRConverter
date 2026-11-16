@@ -13,11 +13,11 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                                             jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
                                             jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
                                             std::array<float,3> luma = {.2126f,.7152f,.0722f},
-                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
+                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false, bool auto_shoulder = false) {
     std::vector<float> sdr=hdr;
     if(auto_curve) {
-        // Automatic mode owns the curve and tonal controls. Manual values are
-        // retained by the UI, but cannot affect this render.
+        // Automatic mode owns the curve and tonal controls. The shoulder
+        // remains manual unless Auto shoulder is also enabled.
         mapper=jxrc::SdrToneMapper::logarithmic;
         zones={};
         // Apply the source ceiling before tonal edits. Scaling together avoids
@@ -46,7 +46,7 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
         }
         range_nits=(auto_curve||auto_range)?peak*203.f:std::min(range_nits,peak*203.f);
     }
-    if(auto_curve) {
+    if(auto_curve&&auto_shoulder) {
         // Keep the median visible pixel below the shoulder when possible.
         // Bounded bins avoid a full-frame sort or another pixel buffer. Values
         // above SDR white go in the last bin; alpha-zero RGB cannot skew it.
@@ -59,7 +59,7 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
         }
         size_t sum=0,median=0;
         for(;median+1<histogram.size();++median) {sum+=histogram[median];if(sum>count/2)break;}
-        shoulder=count?std::clamp(float(median)/1023.f,.18f,.67f):.67f;
+        shoulder=count?std::clamp(float(median)/1023.f,.5f,.67f):.67f;
     }
     const float range=std::max(1.f,range_nits/203.f);
     if(range<=1.f) {

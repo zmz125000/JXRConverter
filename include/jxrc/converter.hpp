@@ -52,7 +52,8 @@ struct Options {
     float sdr_shadows = 0, sdr_midtones = 0, sdr_highlights = 0; // SDR-only tonal adjustments, -1..1.
     float sdr_shoulder = 0.67f; // Linear fraction of 203-nit SDR white left unchanged.
     int sdr_hdr_range_nits = 2000; // Ceiling in nits; a lower image peak maps to SDR white.
-    bool sdr_auto_tone_curve = false; // Cap source first, then fit the adjusted SDR curve endpoint.
+    bool sdr_auto_tone_curve = true; // Cap source first, then fit the adjusted SDR curve endpoint.
+    bool sdr_auto_shoulder = false; // Auto tone curve: adapt the shoulder within 50–67%; otherwise use sdr_shoulder.
     bool sdr_auto_hdr_range = false; // Use the prepared F32 image peak instead.
     unsigned max_edge = 0;
     unsigned threads = 0; // Per-conversion codec budget; 0 uses automatic defaults.
