@@ -179,6 +179,7 @@ struct ConversionSession::Impl {
     std::vector<float> linear,sdr_base;
     std::vector<float> mapped_sdr;
     float mapped_shoulder=-1.f,mapped_range=-1.f;
+    SdrToneMapper mapped_mapper=SdrToneMapper::extended_reinhard;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
     bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,raster_hdr=false;
@@ -410,9 +411,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
                     std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
-                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range) {
-                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,range);
-                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;
+                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper) {
+                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,range,o.sdr_tone_mapper);
+                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;
                 }
             }
         }

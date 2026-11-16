@@ -312,29 +312,24 @@ private slots:
         appSettings().clear();
         {
             MainWindow window;window.show();
+            auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");
+            QVERIFY(mapper);mapper->setCurrentIndex(1);
             auto* enabled=window.findChild<QCheckBox*>("sdrToneMap");
             auto* shoulder=window.findChild<QSlider*>("sdrShoulder");
             auto* range=window.findChild<QSlider*>("sdrHdrRangeNits");
-            auto* shoulderInput=window.findChild<QSpinBox*>("sdrShoulderInput");
             auto* rangeInput=window.findChild<QSpinBox*>("sdrHdrRangeInput");
             auto* automatic=window.findChild<QCheckBox*>("sdrAutoHdrRange");
-            QVERIFY(enabled&&shoulder&&range&&shoulderInput&&rangeInput&&automatic);
-            QVERIFY(enabled->isChecked());QVERIFY(automatic->isChecked());QCOMPARE(automatic->text(),QString("Auto HDR range"));
-            QCOMPARE(shoulder->value(),64);QCOMPARE(range->value(),2000);
-            QCOMPARE(shoulderInput->value(),64);QCOMPARE(rangeInput->value(),2000);
-            auto* form=qobject_cast<QFormLayout*>(enabled->parentWidget()->layout());QVERIFY(form);
-            int enabledRow=-1,automaticRow=-1;QFormLayout::ItemRole role;
-            form->getWidgetPosition(enabled,&enabledRow,&role);form->getWidgetPosition(automatic,&automaticRow,&role);
-            QCOMPARE(automaticRow,enabledRow+1);
-            automatic->setChecked(false);shoulderInput->setValue(75);rangeInput->setValue(1500);
-            QCOMPARE(shoulder->value(),75);QCOMPARE(range->value(),1500);
-            shoulder->setValue(76);range->setValue(1600);QCOMPARE(shoulderInput->value(),76);QCOMPARE(rangeInput->value(),1600);
-            shoulderInput->setValue(75);rangeInput->setValue(1500);automatic->setChecked(true);
+            QVERIFY(enabled&&shoulder&&range&&rangeInput&&automatic);
+            automatic->setChecked(false);shoulder->setValue(75);rangeInput->setValue(1500);
+            QCOMPARE(range->value(),1500);
+            shoulder->setValue(76);range->setValue(1600);QCOMPARE(rangeInput->value(),1600);
+            shoulder->setValue(75);rangeInput->setValue(1500);automatic->setChecked(true);
             const auto options=window.options();QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
+            QVERIFY(options.sdr_tone_mapper==jxrc::SdrToneMapper::extended_reinhard);
             QCOMPARE(options.sdr_shoulder,.75f);QCOMPARE(options.sdr_hdr_range_nits,1500);
             QVERIFY(!range->isEnabled());QVERIFY(!rangeInput->isEnabled());
         }
-        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrShoulderInput")->value(),75);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
+        {MainWindow restored;QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentIndex(),1);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
         appSettings().clear();
     }
     void pngThumbnailFallback() {

@@ -121,11 +121,11 @@ private:
     ThumbnailDelegate* delegate_;
     QStackedWidget* views_;
     QButtonGroup *viewMode_, *statusFilter_;
-    QComboBox *transparencyBackground_, *reconstruction_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *pngDepth_, *rawMode_, *wb_;
+    QComboBox *sdrToneMapper_, *transparencyBackground_, *reconstruction_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *pngDepth_, *rawMode_, *wb_;
     QListWidget* targets_ = nullptr;
     QLineEdit *search_, *instant_, *format_, *output_;
     QSlider *size_, *sdrShoulder_, *sdrRange_;
-    QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_, *sdrShoulderInput_, *sdrRangeInput_;
+    QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_, *sdrRangeInput_;
     QDoubleSpinBox *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
     QCheckBox *autoAspect_, *portraitAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *loadJobs_, *loadFilters_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *convertedFolder_, *parentFolders_, *flattenFolders_, *dateFolders_, *jobFolders_, *jumpToJob_, *sourceFolder_, *renameConflicts_, *preserveOriginalDate_, *overwrite_, *convertGamut_, *srgbClamp_, *bt2020_, *cameraLook_, *linearHdr_, *disableRawBoost_, *rawAutoExposure_, *rawProtectHighlights_, *autoBitDepth_, *sdrToneMap_, *sdrAutoRange_;

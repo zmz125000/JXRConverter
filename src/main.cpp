@@ -28,7 +28,8 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
 Processing controls (PQ/HLG targets require process mode):
   HLG uses the BT.2100 1000-nit reference display (gamma 1.2).
   --sdr-tone-map                Map HDR highlights into SDR outputs and gain-map bases
-  --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.64)
+  --sdr-tone-mapper logarithmic|extended-reinhard|reinhard  Highlight curve (default logarithmic)
+  --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.67)
   --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 2000)
   --sdr-auto-hdr-range          Use the F32 image peak instead of fixed nits
   --exposure -3..3              Non-RAW linear-light exposure in stops
@@ -91,6 +92,7 @@ int run(int argc,char** argv) {
         else if(arg=="--overwrite")o.overwrite=true;
         else if(arg=="--srgb-clamp")o.srgb_clamp=true;
         else if(arg=="--sdr-tone-map")o.sdr_tone_map=true;
+        else if(arg=="--sdr-tone-mapper")o.sdr_tone_mapper=choice<jxrc::SdrToneMapper>(value(),{{"logarithmic",jxrc::SdrToneMapper::logarithmic},{"reinhard",jxrc::SdrToneMapper::reinhard},{"extended-reinhard",jxrc::SdrToneMapper::extended_reinhard}});
         else if(arg=="--sdr-shoulder")o.sdr_shoulder=number(value());
         else if(arg=="--sdr-hdr-range")o.sdr_hdr_range_nits=integer(value());
         else if(arg=="--sdr-auto-hdr-range")o.sdr_auto_hdr_range=true;

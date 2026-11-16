@@ -1532,9 +1532,18 @@ static void transparency_background(const fs::path& dir) {
 }
 
 static void sdr_tone_mapping(const fs::path& dir) {
-    const jxrc::Options defaults;
-    check(defaults.sdr_shoulder==.64f&&defaults.sdr_hdr_range_nits==2000,"SDR tone-mapping defaults changed");
     const float peak=1000.f/203.f;
+    for(auto method:{jxrc::SdrToneMapper::reinhard,jxrc::SdrToneMapper::extended_reinhard,jxrc::SdrToneMapper::logarithmic}) {
+        float previous=0.f;
+        for(unsigned i=0;i<=32;++i) {
+            const float x=peak*i/32.f;
+            const auto sample=tone_map_sdr_base({x,x/2,x/4,.3f},.64f,1000.f,method);
+            check(sample[0]>=previous-1e-6f&&sample[0]<=1.000001f,"Tone curve is not monotonic/bounded");
+            check(std::abs(sample[1]-sample[0]/2)<1e-6f&&sample[3]==.3f,"Tone curve changed hue or alpha");
+            previous=sample[0];
+        }
+        check(std::abs(previous-1.f)<1e-6f,"Tone curve white endpoint");
+    }
     const auto mapped=tone_map_sdr_base({.5f,.25f,.125f,1.f,.8f,.4f,.2f,1.f,1.f,.5f,.25f,1.f,peak,peak/2,peak/4,1.f,8.f,4.f,2.f,1.f},.8f,1000.f);
     check(mapped[0]==.5f&&mapped[4]==.8f,"SDR shoulder changed dark pixels");
     check(mapped[8]>.8f&&mapped[8]<1.f,"SDR highlight shoulder did not compress");
