@@ -388,7 +388,7 @@ template<class Sample>
 int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
                               unsigned& w, unsigned& h, int* out_has_gainmap,
                               int* out_transfer /* 16=PQ, 18=HLG, else other */,
-                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr,std::vector<float>* sdr=nullptr) {
+                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr,std::vector<float>* sdr=nullptr,bool base_only=false) {
     if (out_exif) out_exif->clear();
     if (out_has_gainmap) *out_has_gainmap = 0;
     if (out_transfer) *out_transfer = 0;
@@ -402,7 +402,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     dec->ignoreExif = out_exif ? AVIF_FALSE : AVIF_TRUE;
     dec->ignoreXMP = AVIF_TRUE;
     // Default decode skips the gain-map item. ISO 21496-1 AVIF needs those pixels.
-    dec->imageContentToDecode = AVIF_IMAGE_CONTENT_ALL;
+    dec->imageContentToDecode = base_only?AVIF_IMAGE_CONTENT_COLOR_AND_ALPHA:AVIF_IMAGE_CONTENT_ALL;
     // dav1d API 7 uses this as the tile-thread pool (one still, so frame delay stays 1).
     dec->maxThreads = avif_decode_threads();
     avifResult r = avifDecoderSetIOMemory(dec, data, len);
@@ -437,6 +437,7 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
         return -5;
     }
 
+    if(base_only&&dec->image->gainMap) {avifGainMapDestroy(dec->image->gainMap);dec->image->gainMap=nullptr;}
     const int result=linearize_avif_image(dec->image,out_rgba,w,h,out_has_gainmap,out_transfer,out_cg,max_edge,sdr);
     if(result==0 && max_edge && std::max(w,h)>max_edge) {
         if constexpr(std::is_same_v<Sample,float>)scale_rgba_f32_max_edge(out_rgba,w,h,max_edge);
@@ -502,4 +503,15 @@ void cicp_rgb_to_linear(const uint8_t* codes,size_t count,unsigned bits,unsigned
 void cicp_rgb_to_linear(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,
                         std::vector<uint16_t>& rgba,uhdr_color_gamut_t& gamut) {
     cicp_rgb_to_linear_impl(codes,count,bits,primaries,transfer,rgba,gamut);
+}
+
+int decode_gain_map_base_f32(const uint8_t* data,size_t size,int kind,std::vector<float>& rgba,unsigned& w,unsigned& h,
+                            uhdr_color_gamut_t* gamut,std::vector<uint8_t>* exif) {
+    int gain=0,transfer=0;
+    if(kind==1)return decode_avif_impl(data,size,rgba,w,h,&gain,&transfer,gamut,0,exif,nullptr,true);
+    auto image=kind==0?decode_jpeg_gain_map(data,size):decode_heif_avif(data,size,0);
+    if(!image)return -6;
+    if(exif){exif->clear();if(image->exif.size)exif->assign(image->exif.data,image->exif.data+image->exif.size);}
+    avifGainMapDestroy(image->gainMap);image->gainMap=nullptr;
+    return linearize_avif_image(image.get(),rgba,w,h,&gain,&transfer,gamut,0);
 }

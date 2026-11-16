@@ -1311,6 +1311,12 @@ static void heif_gainmaps(const fs::path& dir,const fs::path& jpeg_gain) {
         options.mode=jxrc::Mode::process;const auto automatic=jxrc::convert(input,processed,options);
         check(automatic.gainmap==result.gainmap&&bytes(processed)==bytes(preserved),"HEIC automatic source export changed the base/map");
     }
+    for(const auto& input:{apple,oppo})for(auto policy:{jxrc::GainMapReconstruction::off,jxrc::GainMapReconstruction::automatic}) {
+        jxrc::Options edit;edit.mode=jxrc::Mode::process;edit.target=jxrc::Target::png;
+        edit.gain_map_reconstruction=policy;edit.exposure=-1;edit.srgb_clamp=true;edit.max_edge=1;
+        const auto result=jxrc::convert(input,dir/(input.stem().string()+"-edited-base-"+std::to_string(int(policy))+".png"),edit);
+        check(!result.gainmap&&result.width==1&&result.height==1,"HEIC Off/Auto SDR base editing blocked");
+    }
     // Real camera files can carry a neutral maximum gain of exactly 1.
     putFloat(16,1.f);write(oppo,proxdr);
     const auto neutral=decode_heif(proxdr.data(),proxdr.size());
@@ -1612,6 +1618,21 @@ static void sdr_tone_mapping(const fs::path& dir) {
         const auto passthrough=dir/(target==jxrc::Target::jpeg_gainmap?"tone-jpeg-base-passthrough.png":"tone-avif-base-passthrough.png");
         jxrc::convert(gain,passthrough,base);
         check(bytes(passthrough)==bytes(basePath),"Tone-map preference changed a transferred gain-map SDR base");
+        for(auto policy:{jxrc::GainMapReconstruction::off,jxrc::GainMapReconstruction::automatic}) {
+            jxrc::ConversionSession baseSession(gain);
+            for(auto target:{jxrc::Target::png,jxrc::Target::jpeg,jxrc::Target::avif,jxrc::Target::jxl}) {
+                auto edit=base;edit.target=target;edit.gain_map_reconstruction=policy;
+                edit.exposure=-1.f;edit.max_edge=8;edit.srgb_clamp=true;
+                const auto edited=dir/(gain.filename().string()+"-base-edit-"+std::to_string(int(policy))+"-"+std::to_string(int(target)));
+                const auto result=baseSession.convert(edited,edit);
+                check(!result.gainmap&&result.width==8&&result.height==8,"Off/Auto blocked SDR base processing or retained a stale map");
+                if(target==jxrc::Target::png) {
+                    const auto values=decode_sdr(edited);
+                    float peak=0;for(size_t i=0;i<values.size();i+=4)for(unsigned c=0;c<3;++c)peak=std::max(peak,values[i+c]);
+                    check(peak>.4f&&peak<.6f,"Off/Auto processed reconstructed HDR instead of the stored SDR base");
+                }
+            }
+        }
         jxrc::Options full;full.mode=jxrc::Mode::process;full.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;full.target=jxrc::Target::png_hdr;
         const auto fullPath=dir/(target==jxrc::Target::jpeg_gainmap?"tone-jpeg-full.png":"tone-avif-full.png");
         jxrc::convert(gain,fullPath,full);

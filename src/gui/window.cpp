@@ -553,10 +553,10 @@ QWidget* MainWindow::buildControls() {
     transcode_->setToolTip("Store eligible SDR JPEG coefficients directly in JXL without RGB decoding or additional image loss. Ignores the quality preset for these JPEGs; other inputs use their normal conversion path. Exposure or resizing disables transcoding. Enable Keep EXIF to allow original JPEG byte reconstruction.");
     outputFormatsLayout->addWidget(exif_);outputFormatsLayout->addWidget(transcode_);
     reconstruction_=combo({"Off","Auto","Full"},"gainMapReconstruction");reconstruction_->setCurrentIndex(1);
-    reconstruction_->setToolTip("For gain-map inputs: Off transfers the source base/map; Auto repairs the gain map for SDR/source outputs; Full reconstructs the complete image in F32 for any output target. Non-gain-map inputs are unaffected. Full requires Process pixels mode.");
+    reconstruction_->setToolTip("For gain-map inputs: Off transfers the source base/map; Auto repairs the gain map for SDR/source outputs; SDR pixel edits use the stored base without HDR reconstruction. Full reconstructs the complete image in F32 for any output target. Non-gain-map inputs are unaffected. Full requires Process pixels mode.");
     auto* reconstructionForm=new QFormLayout;reconstructionForm->addRow("Gain map reconstruction",reconstruction_);
     transparencyBackground_=combo({"White","Black","White (remove alpha)","Black (remove alpha)"},"transparencyBackground");transparencyBackground_->setCurrentIndex(1);
-    transparencyBackground_->setToolTip("White / Black fill transparent areas in JPEG exports and retain alpha in other formats. Remove alpha fills transparent areas in every output format. Transparent gain-map sources require Full reconstruction to remove alpha.");
+    transparencyBackground_->setToolTip("White / Black fill transparent areas in JPEG exports and retain alpha in other formats. Remove alpha fills transparent areas in every output format. Removing alpha while retaining a gain map requires Full reconstruction.");
     reconstructionForm->addRow("Transparency background color",transparencyBackground_);outputFormatsLayout->addLayout(reconstructionForm);
     layout->addWidget(outputFormats);
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);

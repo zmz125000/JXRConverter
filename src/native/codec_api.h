@@ -42,3 +42,6 @@ bool is_integer_jxl(const uint8_t*,size_t);
 
 int decode_heif_to_linear_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*,std::vector<uint8_t>*,std::vector<float>* sdr = nullptr);
 int decode_heif_to_linear_f16(const uint8_t*,size_t,std::vector<uint16_t>&,unsigned&,unsigned&,uhdr_color_gamut_t*,unsigned);
+
+// Decode only the stored base of gain-map sources (kind: JPEG=0, AVIF=1, HEIF=7).
+int decode_gain_map_base_f32(const uint8_t*,size_t,int,std::vector<float>&,unsigned&,unsigned&,uhdr_color_gamut_t*,std::vector<uint8_t>*);

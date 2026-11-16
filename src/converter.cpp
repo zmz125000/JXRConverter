@@ -201,7 +201,7 @@ bool convert_gamut(const Options& o) {return o.convert_gamut && !o.srgb_clamp &&
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
-    return std::make_tuple(remove_alpha(o),remove_alpha(o)&&white_background(o),o.mode,format==5?0.f:o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
+    return std::make_tuple(o.gain_map_reconstruction==GainMapReconstruction::full_image,remove_alpha(o),remove_alpha(o)&&white_background(o),o.mode,format==5?0.f:o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
         format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
         r.shadows,r.midtones,r.highlights,r.camera_look,r.linear_hdr,r.auto_exposure,r.auto_exposure_protect_highlights);
@@ -236,12 +236,14 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     q.gain_map_reconstruction=static_cast<int>(o.gain_map_reconstruction);
     const bool full_gainmap=cache.gainmap&&o.gain_map_reconstruction==GainMapReconstruction::full_image;
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
+    const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png;
+    const bool base_only=cache.gainmap&&!full_gainmap&&sdr_target;
     if(cache.gainmap&&!full_gainmap) {
         const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
-        // Off/Auto transfer the encoded SDR base. The tone-map preference is
-        // relevant only when Full reconstructs an HDR F32 render.
-        require(source_target&&!o.exposure&&!o.max_edge&&!o.srgb_clamp,
-            "Select Full gain-map reconstruction for HDR target conversion or pixel processing of a gain-map source");
+        // Off/Auto can edit the stored SDR base, but rebuilding a gain map
+        // or producing an HDR target requires the complete reconstruction.
+        require(source_target&&(base_only||(!o.exposure&&!o.max_edge&&!o.srgb_clamp)),
+            "Select Full gain-map reconstruction for HDR output or pixel processing that retains the gain map");
     }
     Result result;
     std::unique_ptr<RegularImage> regular;
@@ -255,7 +257,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
     // Off/Auto export the stored base to SDR/source targets, retaining an
     // existing map in JPEG/AVIF. Full renders HDR before encoding any target.
-    const bool direct_gainmap=cache.gainmap && !full_gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp;
+    const bool direct_gainmap=cache.gainmap && !full_gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp &&
+        !(base_only&&o.sdr_tone_map&&!o.sdr_auto_tone_curve&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights));
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
@@ -283,7 +286,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             // Try the integer/source path first: opaque images need no color
             // processing. Only actual transparency requires linear compositing.
             const bool flatten=rc==-97&&q.remove_alpha;
-            if(flatten&&cache.gainmap)throw std::runtime_error("Select Full gain-map reconstruction to remove alpha from a transparent gain-map source");
+            if(flatten&&cache.gainmap&&!base_only)throw std::runtime_error("Select Full gain-map reconstruction to remove alpha from a transparent gain-map source");
             require(rc>0 || (rc==0&&direct_sdr) || flatten,"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
         }
         if(rc>0) {
@@ -307,7 +310,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         if(!cache.ready || processing_key(cache.previous,format)!=processing_key(o,format)) {
             cache.ready=false;cache.scrgb=false;linear.clear();sdr_base.clear();cache.mapped_sdr.clear();cache.mapped_shoulder=cache.mapped_range=-1.f;exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
-            if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,0,&sdr_base);
+            if(base_only)rc=decode_gain_map_base_f32(bytes.data(),bytes.size(),format,linear,w,h,&gamut,o.keep_exif?&exif:nullptr);
+            else if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,0,&sdr_base);
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr,&sdr_base);
             else if(format==7)rc=decode_heif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.keep_exif?&exif:nullptr,&sdr_base);
             else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):(o.extended_bt2020&&!o.srgb_clamp)),o.keep_exif?&exif:nullptr);
@@ -407,7 +411,6 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         // either encoded plane's depth. Quantize it at the selected export depth.
         q.source_bits=full_gainmap?32:cache.bits;
         q.analysis=&cache.analysis;
-        const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png;
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
