@@ -1,14 +1,17 @@
 #pragma once
 #include "jxrc/converter.hpp"
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <vector>
 
 // Working RGB is linear display light with 1.0 = 203 nits. Preserve every
-// channel below the shoulder, and scale RGB together above it to retain hue.
+// pixel below the selected metric shoulder; alpha is preserved.
 inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                                             float shoulder, float range_nits,
-                                            jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic) {
+                                            jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
+                                            jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
+                                            std::array<float,3> luma = {.2126f,.7152f,.0722f}) {
     std::vector<float> sdr=hdr;
     const float range=std::max(1.f,range_nits/203.f);
     if(range<=1.f) {
@@ -31,10 +34,7 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
         }
         log_scale=(lo+hi)*.5;
     }
-    for(size_t i=0;i<sdr.size();i+=4) {
-        const float peak=std::max({std::isfinite(hdr[i])?hdr[i]:0.f,
-                                   std::isfinite(hdr[i+1])?hdr[i+1]:0.f,
-                                   std::isfinite(hdr[i+2])?hdr[i+2]:0.f,0.f});
+    const auto curve=[&](float peak) {
         float mapped=peak;
         if(peak>shoulder) {
             const float above=std::min(peak,range)-shoulder;
@@ -49,8 +49,19 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                 mapped=shoulder+headroom*(above/(above+knee))*((span+knee)/span);
             }
         }
-        const float scale=peak>0.f?mapped/peak:0.f;
-        for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp((std::isfinite(hdr[i+c])?hdr[i+c]:0.f)*scale,0.f,1.f);
+        return mapped;
+    };
+    for(size_t i=0;i<sdr.size();i+=4) {
+        std::array<float,3> rgb;
+        for(unsigned c=0;c<3;++c)rgb[c]=std::max(std::isfinite(hdr[i+c])?hdr[i+c]:0.f,0.f);
+        if(mapping==jxrc::SdrColorMapping::per_channel) {
+            for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(curve(rgb[c]),0.f,1.f);
+        } else {
+            const float metric=mapping==jxrc::SdrColorMapping::luminance?
+                rgb[0]*luma[0]+rgb[1]*luma[1]+rgb[2]*luma[2]:std::max({rgb[0],rgb[1],rgb[2]});
+            const float scale=metric>0.f?curve(metric)/metric:0.f;
+            for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(rgb[c]*scale,0.f,1.f);
+        }
     }
     return sdr;
 }

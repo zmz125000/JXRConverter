@@ -1533,6 +1533,16 @@ static void transparency_background(const fs::path& dir) {
 
 static void sdr_tone_mapping(const fs::path& dir) {
     const float peak=1000.f/203.f;
+    const std::vector<float> color={3.f,1.5f,.5f,.4f};
+    const auto maxRgb=tone_map_sdr_base(color,.67f,1000.f);
+    const auto lum=tone_map_sdr_base(color,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::luminance);
+    const auto channel=tone_map_sdr_base(color,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::per_channel);
+    check(std::abs(maxRgb[1]/maxRgb[0]-.5f)<1e-6f,"Max RGB changed ratios");
+    check(lum[1]>maxRgb[1],"Luminance did not use weighted brightness");
+    check(channel[2]==color[2]&&channel[1]>maxRgb[1],"Per-channel shoulder was not independent");
+    for(const auto* mapped:{&maxRgb,&lum,&channel})check((*mapped)[3]==color[3],"Color mapping changed alpha");
+    const auto wide=tone_map_sdr_base(color,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::luminance,{.2627f,.6780f,.0593f});
+    check(std::abs(wide[1]-lum[1])>1e-4f,"Luminance ignored working primaries");
     for(auto method:{jxrc::SdrToneMapper::reinhard,jxrc::SdrToneMapper::extended_reinhard,jxrc::SdrToneMapper::logarithmic}) {
         float previous=0.f;
         for(unsigned i=0;i<=32;++i) {

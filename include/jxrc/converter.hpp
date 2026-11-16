@@ -13,6 +13,7 @@ enum class TransparencyBackground { white, black, white_remove_alpha, black_remo
 enum class GainMapReconstruction { off, automatic, full_image };
 // Append targets to retain saved GUI target identifiers.
 enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg };
+enum class SdrColorMapping { max_rgb, luminance, per_channel };
 enum class SdrToneMapper { reinhard, extended_reinhard, logarithmic };
 enum class Preset { lossless, high, medium, low, custom };
 struct Quality {
@@ -47,6 +48,7 @@ struct Options {
     float exposure = 0; // Non-RAW process-mode linear-light exposure, in stops. RAW uses raw.exposure.
     bool sdr_tone_map = false; // Map HDR highlights into SDR outputs and gain-map bases.
     SdrToneMapper sdr_tone_mapper = SdrToneMapper::logarithmic;
+    SdrColorMapping sdr_color_mapping = SdrColorMapping::max_rgb;
     float sdr_shoulder = 0.67f; // Linear fraction of 203-nit SDR white left unchanged.
     int sdr_hdr_range_nits = 2000; // Ceiling in nits; a lower image peak maps to SDR white.
     bool sdr_auto_hdr_range = false; // Use the prepared F32 image peak instead.

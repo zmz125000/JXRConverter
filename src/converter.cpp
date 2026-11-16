@@ -180,6 +180,7 @@ struct ConversionSession::Impl {
     std::vector<float> mapped_sdr;
     float mapped_shoulder=-1.f,mapped_range=-1.f;
     SdrToneMapper mapped_mapper=SdrToneMapper::extended_reinhard;
+    SdrColorMapping mapped_color_mapping=SdrColorMapping::max_rgb;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
     bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,raster_hdr=false;
@@ -411,9 +412,11 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
                     std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
-                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper) {
-                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,range,o.sdr_tone_mapper);
-                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;
+                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping) {
+                    const std::array<float,3> luma=gamut==UHDR_CG_BT_2100?std::array<float,3>{.2627f,.6780f,.0593f}:
+                        gamut==UHDR_CG_DISPLAY_P3?std::array<float,3>{.2289746f,.6917385f,.0792869f}:std::array<float,3>{.2126f,.7152f,.0722f};
+                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,range,o.sdr_tone_mapper,o.sdr_color_mapping,luma);
+                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;
                 }
             }
         }
