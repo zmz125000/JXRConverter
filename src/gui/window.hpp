@@ -101,7 +101,7 @@ private:
     void convertFiles(bool selected);
     struct SourceRouting { bool hdr = false, gainmap = false; QString error; };
     using Routing = QHash<QString, SourceRouting>;
-    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false, std::shared_ptr<const Routing> routing = {});
+    void convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false, std::shared_ptr<const Routing> routing = {}, qint64 contextJob = -1);
     void reportError(const QString&, const QStringList& paths = {});
     void stopQueue();
     void checkForUpdates();

@@ -183,6 +183,7 @@ protected:
 };
 QComboBox* combo(const QStringList& values,const char* name,QWidget* parent=nullptr) {auto* w=new QComboBox(parent);w->addItems(values);w->setObjectName(name);return w;}
 QSpinBox* spin(int low,int high,int initial,const char* name) {auto* w=new QSpinBox;w->setRange(low,high);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
+constexpr int quickJobLimit=5;
 QDoubleSpinBox* real(double low,double high,double initial,double step,const char* name) {auto* w=new QDoubleSpinBox;w->setRange(low,high);w->setDecimals(2);w->setSingleStep(step);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
 QWidget* sliderInput(QDoubleSpinBox* input,const char* name) {
     auto* row=new QWidget;auto* layout=new QHBoxLayout(row);layout->setContentsMargins(0,0,0,0);
@@ -662,7 +663,7 @@ QWidget* MainWindow::buildControls() {
     const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
     selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue · finish active files");cancel_->setObjectName("cancelQueue");
-    visible_->setToolTip("Convert all visible files");selected_->setToolTip("Selections of 1–4 images share this session’s Quick job. Inside Jobs, convert within the current job.");
+    visible_->setToolTip("Convert all visible files. Fewer than 5 images share this session’s Quick job. Inside Jobs, rerun the current job.");selected_->setToolTip("Selections of 1–4 images share this session’s Quick job. Inside Jobs, rerun the current job.");
     // Start actions are placed outside the collapsible output settings.
     queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setObjectName("conversionProgress");progress_->setFormat("%p% (%v/%m)");progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
     connect(mode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(targets_,&QListWidget::itemChanged,this,&MainWindow::updateMode);connect(preset_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(rawMode_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);connect(wb_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
@@ -860,7 +861,8 @@ QString MainWindow::jobText(qint64 number) const {
 void MainWindow::refreshJobs() {
     QVector<qint64> ids{0};for(auto it=savedJobs_.crbegin();it!=savedJobs_.crend();++it)ids.append(it->number);
     for(int i=0;i<ids.size();++i){const auto number=ids[i];QAction* action=nullptr;for(auto* candidate:jobMenu_->actions())if(candidate->data().toLongLong()==number){action=candidate;break;}
-        if(!action){action=new QAction(jobMenu_);action->setData(number);action->setCheckable(true);jobActions_->addAction(action);jobMenu_->insertAction(jobMenu_->actions().value(i),action);connect(action,&QAction::triggered,this,[this,number]{showJob(number);});}
+        if(!action){action=new QAction(jobMenu_);action->setData(number);action->setCheckable(true);jobActions_->addAction(action);jobMenu_->insertAction(jobMenu_->actions().value(i),action);connect(action,&QAction::triggered,this,[this,action]{showJob(action->data().toLongLong());});}
+        if(jobMenu_->actions().value(i)!=action)jobMenu_->insertAction(jobMenu_->actions().value(i),action);
         action->setText(jobText(number));action->setChecked(number==viewedJob_);
     }
     jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
@@ -1089,7 +1091,7 @@ void MainWindow::updateCounts() {
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy()||bool(routingToken_));
     progressStop_->setVisible(queue_->busy()||bool(routingToken_));
-    selected_->setEnabled(!routingToken_&&selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2||selected<5));visible_->setEnabled(!routingToken_&&proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||(statusFilter_->checkedId()==2&&isDraftJob(viewedJob_))));cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
+    selected_->setEnabled(!routingToken_&&selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2||selected<quickJobLimit));visible_->setEnabled(!routingToken_&&proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2||proxy_->rowCount()<quickJobLimit));cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(queue_->hasPendingBatch(viewedJob_));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
@@ -1118,11 +1120,12 @@ void MainWindow::showMetadata() {
 }
 void MainWindow::convertFiles(bool selected) {
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
-    const bool reuse=statusFilter_->checkedId()==2&&(selected||isDraftJob(viewedJob_));
-    const bool quick=selected&&!paths.isEmpty()&&paths.size()<5&&!reuse;
+    const bool reuse=statusFilter_->checkedId()==2;
+    const bool quick=!paths.isEmpty()&&paths.size()<quickJobLimit&&!reuse;
     convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
 }
-void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing) {
+void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing,qint64 contextJob) {
+    if(reuseJob&&contextJob<0)contextJob=viewedJob_;
     if(routingToken_||paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
     try {
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
@@ -1144,7 +1147,7 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
                 // still involve slow file reads, so keep them off the UI thread.
                 auto token=std::make_shared<std::atomic_bool>(true);routingToken_=token;
                 queueState_->setText("Checking source HDR/SDR metadata…");updateCounts();
-                routingWorkers_.start([this,paths,targets,exactTargets,priority,append,reuseJob,quick,missing,prepared,token] {
+                routingWorkers_.start([this,paths,targets,exactTargets,priority,append,reuseJob,quick,contextJob,missing,prepared,token] {
                     for(const auto& path:missing) {
                         if(!token->load())break;
                         SourceRouting info;
@@ -1159,10 +1162,10 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
                         catch(...){info.error="Unknown source inspection failure";}
                         prepared->insert(path,info);
                     }
-                    QMetaObject::invokeMethod(this,[this,paths,targets,exactTargets,priority,append,reuseJob,quick,prepared,token] {
+                    QMetaObject::invokeMethod(this,[this,paths,targets,exactTargets,priority,append,reuseJob,quick,contextJob,prepared,token] {
                         if(routingToken_!=token)return;
                         routingToken_.reset();
-                        if(token->load())convertPaths(paths,targets,exactTargets,priority,append,reuseJob,quick,prepared);
+                        if(token->load())convertPaths(paths,targets,exactTargets,priority,append,reuseJob,quick,prepared,contextJob);
                         updateCounts();
                     },Qt::QueuedConnection);
                 });
@@ -1192,15 +1195,41 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
                 auto& inputs=inputsByTarget[int(target)];if(!inputs.contains(path))inputs.append(path);
             }
         }
+        if(reuseJob&&contextJob>0&&std::none_of(savedJobs_.cbegin(),savedJobs_.cend(),[contextJob](const SavedJob& saved){return saved.number==contextJob;}))
+            throw std::invalid_argument("The selected job no longer exists");
         const bool reuseQuick=quick&&quickJob_>=0;
-        const qint64 batch=reuseJob?viewedJob_:reuseQuick?quickJob_:priority?0:nextJob_;
+        // Rerun a completed saved job in place. Draft/running jobs retain their
+        // identity so already queued outputs and cancellation remain attached.
+        const bool renumber=reuseJob&&contextJob>0&&!isDraftJob(contextJob)&&
+            !queue_->hasRunningBatch(contextJob)&&!queue_->hasPendingBatch(contextJob);
+        const qint64 batch=renumber?nextJob_:reuseJob?contextJob:reuseQuick?quickJob_:priority?0:nextJob_;
         auto layout=outputLayout(batch,quick);
+        if(renumber)for(const auto& saved:savedJobs_)if(saved.number==contextJob&&saved.quick&&jobFolders_->isChecked())layout.job_subfolder="Quick-Job-"+QString::number(batch);
         for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.raw)layout.raw_inputs.insert(record.path);}
         QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())),layout);
         if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");
         QSet<QString> inputs;for(const auto& path:paths)inputs.insert(QFileInfo(path).absoluteFilePath().toCaseFolded());
         for(const auto& job:jobs) {
             if(inputs.contains(QFileInfo(job.output).absoluteFilePath().toCaseFolded()))throw std::invalid_argument("Output would replace an input file");
+        }
+        if(renumber) {
+            // Commit the identity change only after job/output validation.
+            for(int i=0;i<savedJobs_.size();++i)if(savedJobs_[i].number==contextJob) {
+                auto saved=savedJobs_.takeAt(i);saved.number=batch;
+                QSet<QString> rerun;for(const auto& job:jobs)rerun.insert(job.input);
+                for(auto it=saved.outputs.begin();it!=saved.outputs.end();)if(rerun.contains(it->input))it=saved.outputs.erase(it);else ++it;
+                savedJobs_.append(std::move(saved));break;
+            }
+            ++nextJob_;
+            if(viewedJob_==contextJob)viewedJob_=batch;
+            if(quickJob_==contextJob)quickJob_=batch;
+            if(jobSelections_.contains(contextJob))jobSelections_.insert(batch,jobSelections_.take(contextJob));
+            const QString oldKey="2:"+QString::number(contextJob),newKey="2:"+QString::number(batch);
+            if(browserStates_.contains(oldKey))browserStates_.insert(newKey,browserStates_.take(oldKey));
+            if(browserTabKey_==oldKey)browserTabKey_=newKey;
+            const auto keys=scrollPositions_.keys();for(const auto& key:keys)if(key.startsWith(oldKey+":"))scrollPositions_.insert(newKey+key.mid(oldKey.size()),scrollPositions_.take(key));
+            if(scrollKey_.startsWith(oldKey+":"))scrollKey_=newKey+scrollKey_.mid(oldKey.size());
+            for(auto* action:jobMenu_->actions())if(action->data().toLongLong()==contextJob)action->setData(batch);
         }
         for(auto& job:jobs){job.batch=batch;if(routing)job.preparation_error=routing->value(job.input).error;}
         recordJob(jobs,priority,reuseJob||reuseQuick,quick);
