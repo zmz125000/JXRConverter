@@ -1532,6 +1532,16 @@ static void transparency_background(const fs::path& dir) {
 }
 
 static void sdr_tone_mapping(const fs::path& dir) {
+    const std::vector<float> autoSource={8,4,2,.4f,.5f,.3f,.2f,.8f};
+    for(auto mapping:{jxrc::SdrColorMapping::max_rgb,jxrc::SdrColorMapping::luminance,jxrc::SdrColorMapping::per_channel}) {
+        const auto automatic=tone_map_sdr_base(autoSource,.67f,406.f,jxrc::SdrToneMapper::logarithmic,mapping,{.2126f,.7152f,.0722f},{.2f,.3f,.7f},false,true);
+        for(size_t i=0;i<automatic.size();++i) {
+            check(std::isfinite(automatic[i])&&automatic[i]>=0&&automatic[i]<=1,"Auto tone curve exceeded SDR range");
+            if(i%4==3)check(automatic[i]==autoSource[i],"Auto tone curve changed alpha");
+        }
+    }
+    const auto capped=tone_map_sdr_base({8,4,2,1},.67f,406.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{0,0,.7f},false,true);
+    check(capped[0]>.9999f&&std::abs(capped[1]-.5f)<1e-6f,"Auto tone curve failed to fit adjusted peak or preserve RGB ratios");
     const std::vector<float> zoneInput={.03f,.02f,.01f,.4f,.4f,.3f,.2f,.8f,4.f,3.f,2.f,1.f};
     const auto neutralZones=tone_map_sdr_base(zoneInput,.67f,1000.f);
     const auto shadowZones=tone_map_sdr_base(zoneInput,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{.5f,0,0},true);

@@ -183,7 +183,7 @@ struct ConversionSession::Impl {
     SdrToneMapper mapped_mapper=SdrToneMapper::extended_reinhard;
     SdrColorMapping mapped_color_mapping=SdrColorMapping::max_rgb;
     std::array<float,3> mapped_zones{};
-    bool mapped_auto_range=false;
+    bool mapped_auto_range=false,mapped_auto_curve=false;
     int mapped_cap=0;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
@@ -411,16 +411,22 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
-            if(peak>1.f||o.sdr_shadows||o.sdr_midtones||o.sdr_highlights) {
+            const std::array<float,3> zones={o.sdr_shadows,o.sdr_midtones,o.sdr_highlights};
+            const bool adjust_zones=zones!=std::array<float,3>{};
+            if(peak>1.f||adjust_zones) {
                 // The manual range is a ceiling. Fit a dimmer source to its
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
                     std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
-                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping||cache.mapped_zones!=std::array<float,3>{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights}||cache.mapped_auto_range!=o.sdr_auto_hdr_range||cache.mapped_cap!=o.sdr_hdr_range_nits) {
+                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping||cache.mapped_zones!=zones||cache.mapped_auto_range!=o.sdr_auto_hdr_range||cache.mapped_cap!=o.sdr_hdr_range_nits||cache.mapped_auto_curve!=o.sdr_auto_tone_curve) {
                     const std::array<float,3> luma=gamut==UHDR_CG_BT_2100?std::array<float,3>{.2627f,.6780f,.0593f}:
                         gamut==UHDR_CG_DISPLAY_P3?std::array<float,3>{.2289746f,.6917385f,.0792869f}:std::array<float,3>{.2126f,.7152f,.0722f};
-                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights)?(o.sdr_auto_hdr_range?range:float(o.sdr_hdr_range_nits)):range,o.sdr_tone_mapper,o.sdr_color_mapping,luma,{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights},o.sdr_auto_hdr_range);
-                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;cache.mapped_zones={o.sdr_shadows,o.sdr_midtones,o.sdr_highlights};cache.mapped_auto_range=o.sdr_auto_hdr_range;cache.mapped_cap=o.sdr_hdr_range_nits;
+                    // An adjusted render needs the selected ceiling, rather
+                    // than the pre-adjustment content peak, as its manual cap.
+                    const float curve_range=(o.sdr_auto_tone_curve||adjust_zones)&&!o.sdr_auto_hdr_range?
+                        float(o.sdr_hdr_range_nits):range;
+                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,curve_range,o.sdr_tone_mapper,o.sdr_color_mapping,luma,zones,o.sdr_auto_hdr_range,o.sdr_auto_tone_curve);
+                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;cache.mapped_zones=zones;cache.mapped_auto_range=o.sdr_auto_hdr_range;cache.mapped_cap=o.sdr_hdr_range_nits;cache.mapped_auto_curve=o.sdr_auto_tone_curve;
                 }
             } else cache.mapped_sdr.clear();
         }

@@ -13,16 +13,31 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                                             jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
                                             jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
                                             std::array<float,3> luma = {.2126f,.7152f,.0722f},
-                                            std::array<float,3> zones = {}, bool auto_range = false) {
+                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
     std::vector<float> sdr=hdr;
-    if(zones!=std::array<float,3>{}) {
+    if(auto_curve) {
+        // Apply the source ceiling before tonal edits. Scaling together avoids
+        // changing RGB ratios at the cap; Per channel retains its own semantics.
+        const float cap=std::max(1.f,range_nits/203.f);
+        for(size_t i=0;i<sdr.size();i+=4) {
+            float peak=0.f;
+            for(unsigned c=0;c<3;++c) {
+                sdr[i+c]=std::max(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f);
+                peak=std::max(peak,sdr[i+c]);
+            }
+            const float scale=peak>cap?cap/peak:1.f;
+            for(unsigned c=0;c<3;++c)sdr[i+c]=mapping==jxrc::SdrColorMapping::per_channel?
+                std::min(sdr[i+c],cap):sdr[i+c]*scale;
+        }
+    }
+    if(auto_curve||zones!=std::array<float,3>{}) {
         float peak=0.f;
         for(size_t i=0;i<sdr.size();i+=4) {
             for(unsigned c=0;c<3;++c)if(!std::isfinite(sdr[i+c]))sdr[i+c]=0.f;
             apply_tonal_zones(sdr[i],sdr[i+1],sdr[i+2],zones[0],zones[1],zones[2],luma);
             peak=std::max({peak,sdr[i],sdr[i+1],sdr[i+2]});
         }
-        range_nits=auto_range?peak*203.f:std::min(range_nits,peak*203.f);
+        range_nits=(auto_curve||auto_range)?peak*203.f:std::min(range_nits,peak*203.f);
     }
     const float range=std::max(1.f,range_nits/203.f);
     if(range<=1.f) {
@@ -71,7 +86,18 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
             const float metric=mapping==jxrc::SdrColorMapping::luminance?
                 rgb[0]*luma[0]+rgb[1]*luma[1]+rgb[2]*luma[2]:std::max({rgb[0],rgb[1],rgb[2]});
             const float scale=metric>0.f?curve(metric)/metric:0.f;
-            for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(rgb[c]*scale,0.f,1.f);
+            for(unsigned c=0;c<3;++c)rgb[c]*=scale;
+            if(auto_curve&&mapping==jxrc::SdrColorMapping::luminance) {
+                // Preserve mapped luminance while bringing out-of-gamut RGB
+                // toward neutral, instead of discarding channel highlight detail.
+                const float y=std::clamp(curve(metric),0.f,1.f);
+                const float maximum=std::max({rgb[0],rgb[1],rgb[2]});
+                if(maximum>1.f) {
+                    const float chroma=(1.f-y)/(maximum-y);
+                    for(float& value:rgb)value=y+(value-y)*chroma;
+                }
+            }
+            for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(rgb[c],0.f,1.f);
         }
     }
     return sdr;
