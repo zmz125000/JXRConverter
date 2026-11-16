@@ -641,6 +641,26 @@ private slots:
         window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
     }
+    void instantFilenameFilterWithMetadataFilters() {
+        appSettings().clear();MainWindow window;window.show();
+        window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
+        const auto directory=root("shared08-folder");
+        QStringList files;for(const auto* name:{"photo08_a.jpg","photo08b.jpg","photo09.jpg"})files.append(makeImage(directory,name,32,24,108));
+        window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),3);
+        auto* instant=window.findChild<QLineEdit*>("instantFilter");auto* filters=window.findChild<QCheckBox*>("metadataFilters");
+        const auto placeholder=instant->placeholderText();
+        for(bool enabled:{false,true}) {
+            filters->setChecked(enabled);QVERIFY(instant->isVisible());QCOMPARE(instant->placeholderText(),placeholder);
+            instant->clear();QTest::keyClicks(instant,"08");QCOMPARE(window.filterModel()->rowCount(),2);
+            QTest::keyClicks(instant,"_");QCOMPARE(window.filterModel()->rowCount(),1);
+            QTest::keyClick(instant,Qt::Key_Backspace);QCOMPARE(window.filterModel()->rowCount(),2);
+            instant->setText("PHOTO08");QCOMPARE(window.filterModel()->rowCount(),2);
+        }
+        auto* search=window.findChild<QLineEdit*>("search");search->setText("name:\"photo08b.jpg\"");QTest::keyClick(search,Qt::Key_Return);
+        QCOMPARE(window.filterModel()->rowCount(),1);QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),files[1]);
+        filters->setChecked(false);QCOMPARE(window.filterModel()->rowCount(),1);
+        instant->clear();QCOMPARE(window.filterModel()->rowCount(),1);
+    }
     void logClearAndPanelWidths() {
         appSettings().clear();MainWindow window;window.show();
         auto* tabs=window.findChild<QTabWidget*>("settingsTabs");auto* conversion=window.findChild<QScrollArea*>("conversionScroll");auto* output=window.findChild<QScrollArea*>("outputQueueScroll");

@@ -236,7 +236,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* searchRow=new QHBoxLayout;search_=new QLineEdit;search_->setObjectName("search");search_->setPlaceholderText("Search files and metadata · press Enter");search_->setClearButtonEnabled(true);auto* searchButton=new QPushButton("Search");searchRow->addWidget(search_,1);searchRow->addWidget(searchButton);layout->addLayout(searchRow);
     connect(search_,&QLineEdit::returnPressed,this,&MainWindow::applySearch);connect(searchButton,&QPushButton::clicked,this,&MainWindow::applySearch);
     connect(search_,&QLineEdit::textChanged,this,[this](const QString& text){if(text.isEmpty())applySearch();});
-    auto* filters=new QHBoxLayout;instant_=new QLineEdit;instant_->setObjectName("instantFilter");instant_->setPlaceholderText("Instant filter within search results…");instant_->setClearButtonEnabled(true);filters->addWidget(instant_,1);
+    auto* filters=new QHBoxLayout;instant_=new QLineEdit;instant_->setObjectName("instantFilter");instant_->setPlaceholderText("Instant filename filter…");instant_->setClearButtonEnabled(true);filters->addWidget(instant_,1);
     metadataFilters_=check("Filters","metadataFilters");filters->addWidget(metadataFilters_);
     today_=check("Today","todayFilter");today_->setToolTip("Image date is today: EXIF date, falling back to file modification date, then creation date.");filters->addWidget(today_);
     format_=new QLineEdit;format_->setObjectName("formatFilter");format_->setPlaceholderText("e.g. jpg, avif, raw");format_->setClearButtonEnabled(true);
@@ -414,7 +414,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(dateEnabled_,&QCheckBox::toggled,this,[this](bool on){dateFrom_->setEnabled(on);dateTo_->setEnabled(on);updateFilter();});
     for(auto* d:{dateFrom_,dateTo_})connect(d,&QDateEdit::dateChanged,this,&MainWindow::updateFilter);
     connect(today_,&QCheckBox::toggled,this,&MainWindow::updateFilter);
-    connect(metadataFilters_,&QCheckBox::toggled,this,[this,filterScroll](bool on){filterScroll->setVisible(on);instant_->setPlaceholderText(on?"Search filenames, camera, lens, EXIF tags or values…":"Instant filter · e.g. sunset");updateFilter();});
+    connect(metadataFilters_,&QCheckBox::toggled,this,[this,filterScroll](bool on){filterScroll->setVisible(on);updateFilter();});
     connect(reset,&QPushButton::clicked,this,&MainWindow::resetFilters);
     // Refresh Today across local midnight, including when the application stays open.
     auto* dateRefresh=new QTimer(this);dateRefresh->setInterval(30000);connect(dateRefresh,&QTimer::timeout,this,[this]{if(today_->isChecked())updateFilter();});dateRefresh->start();
@@ -1008,7 +1008,7 @@ void MainWindow::updateFilter() {
     if(tab==1)f.paths=selectedImages_;
     else if(tab==5)f.paths=rememberedImages_;
     else if(tab==2){const QStringList* files=&temporaryJob_.files;for(const auto& job:savedJobs_)if(job.number==viewedJob_)files=&job.files;f.paths=QSet<QString>(files->cbegin(),files->cend());}
-    f.search=appliedSearch_;f.text=instant_->text();f.literalText=!metadataFilters_->isChecked();f.today=today_->isChecked();
+    f.search=appliedSearch_;f.text=instant_->text();f.filenameOnly=true;f.today=today_->isChecked();
     if(metadataFilters_->isChecked()) {
         f.format=format_->text().trimmed();if(range_->currentIndex())f.range=range_->currentText();
         f.minMaxEdge=minImageEdge_->value();f.minMegapixels=megapixels_->value();
@@ -1027,7 +1027,7 @@ void MainWindow::updateBackgroundMetadata() {
     const bool basicSort=sort==Catalog::Name||sort==Catalog::Format||sort==Catalog::Size||sort==Catalog::Created||sort==Catalog::Modified||sort==Catalog::Status||sort==Catalog::Path||sort==Catalog::Error;
     const bool metadataSort=!basicSort;
     const bool metadataFilter=metadataFilters_->isChecked()&&(!format_->text().trimmed().isEmpty()||range_->currentIndex()!=0||minImageEdge_->value()>0||megapixels_->value()>0||dateEnabled_->isChecked());
-    catalog_->setBackgroundMetadata(metadataSort||metadataFilter||today_->isChecked()||!appliedSearch_.trimmed().isEmpty()||!instant_->text().trimmed().isEmpty());
+    catalog_->setBackgroundMetadata(metadataSort||metadataFilter||today_->isChecked()||!appliedSearch_.trimmed().isEmpty());
 }
 void MainWindow::updatePresentation() {
     saveBrowserScroll();

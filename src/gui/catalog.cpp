@@ -479,7 +479,9 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     if(f.restrictPaths&&!f.paths.contains(r.path))return false;
     if(f.status==3&&!r.status.startsWith("Done")&&r.status!="Skipped")return false;
     if(f.status==4&&r.status!="Failed")return false;
-    const QString haystack=r.path+" "+r.format+" "+dimensions(r)+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+QString::number(r.bits)+" bit "+r.exif.keys().join(' ')+" "+r.exif.values().join(' ');
+    if(f.filenameOnly&&!QFileInfo(r.path).fileName().contains(f.text.trimmed(),Qt::CaseInsensitive))return false;
+    const bool needHaystack=!f.search.trimmed().isEmpty()||(!f.filenameOnly&&!f.text.trimmed().isEmpty());
+    const QString haystack=needHaystack?r.path+" "+r.format+" "+dimensions(r)+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+QString::number(r.bits)+" bit "+r.exif.keys().join(' ')+" "+r.exif.values().join(' '):QString{};
     static const QRegularExpression terms(R"((?:(name|format|dimensions|size|date|camera|lens|iso|aperture|shutter|focal|transfer|primaries|bits|status|created|modified|exifdate|width|height|maxedge|megapixels|aspect|hdr|gainmap|raw|path|error|metadatawarning):)?("(?:\\.|[^"\\])*"|[^\s]+))");
     auto matches=terms.globalMatch(f.search);
     while(matches.hasNext()) {
@@ -513,6 +515,7 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     if(f.from.isValid()&&(!imageDate.isValid()||imageDate<f.from))return false;
     if(f.to.isValid()&&(!imageDate.isValid()||imageDate>f.to))return false;
     if(f.today&&imageDate!=QDate::currentDate())return false;
+    if(f.filenameOnly)return true;
     if(f.literalText)return haystack.contains(f.text.trimmed(),Qt::CaseInsensitive);
     for(const auto& word:f.text.split(' ',Qt::SkipEmptyParts))if(!haystack.contains(word,Qt::CaseInsensitive))return false;
     return true;
