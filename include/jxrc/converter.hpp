@@ -49,6 +49,7 @@ struct Options {
     bool sdr_tone_map = false; // Map HDR highlights into SDR outputs and gain-map bases.
     SdrToneMapper sdr_tone_mapper = SdrToneMapper::logarithmic;
     SdrColorMapping sdr_color_mapping = SdrColorMapping::max_rgb;
+    float sdr_shadows = 0, sdr_midtones = 0, sdr_highlights = 0; // SDR-only tonal adjustments, -1..1.
     float sdr_shoulder = 0.67f; // Linear fraction of 203-nit SDR white left unchanged.
     int sdr_hdr_range_nits = 2000; // Ceiling in nits; a lower image peak maps to SDR white.
     bool sdr_auto_hdr_range = false; // Use the prepared F32 image peak instead.

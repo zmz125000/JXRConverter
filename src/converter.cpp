@@ -161,6 +161,7 @@ void validate(const Options& o) {
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
     range(o.sdr_shoulder,0,0.99,"SDR shoulder");range(o.sdr_hdr_range_nits,204,10000,"SDR HDR range");
+    range(o.sdr_shadows,-1,1,"SDR shadows");range(o.sdr_midtones,-1,1,"SDR midtones");range(o.sdr_highlights,-1,1,"SDR highlights");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
     range(r.highlight_stops,0,3,"highlight stops");range(r.shoulder,0,1,"shoulder");range(r.target_nits,1000,10000,"target nits");
     range(r.shadows,-1,1,"shadows");range(r.midtones,-1,1,"midtones");range(r.highlights,-1,1,"highlights");
@@ -181,6 +182,9 @@ struct ConversionSession::Impl {
     float mapped_shoulder=-1.f,mapped_range=-1.f;
     SdrToneMapper mapped_mapper=SdrToneMapper::extended_reinhard;
     SdrColorMapping mapped_color_mapping=SdrColorMapping::max_rgb;
+    std::array<float,3> mapped_zones{};
+    bool mapped_auto_range=false;
+    int mapped_cap=0;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
     bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,raster_hdr=false;
@@ -242,7 +246,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp) {
+    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp && !(o.sdr_tone_map&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights))) {
         if(format==6&&!cache.raster_hdr) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
             cache.raster_hdr=regular->hdr();direct_sdr=!cache.raster_hdr;
@@ -407,18 +411,18 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
-            if(peak>1.f) {
+            if(peak>1.f||o.sdr_shadows||o.sdr_midtones||o.sdr_highlights) {
                 // The manual range is a ceiling. Fit a dimmer source to its
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
                     std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
-                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping) {
+                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping||cache.mapped_zones!=std::array<float,3>{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights}||cache.mapped_auto_range!=o.sdr_auto_hdr_range||cache.mapped_cap!=o.sdr_hdr_range_nits) {
                     const std::array<float,3> luma=gamut==UHDR_CG_BT_2100?std::array<float,3>{.2627f,.6780f,.0593f}:
                         gamut==UHDR_CG_DISPLAY_P3?std::array<float,3>{.2289746f,.6917385f,.0792869f}:std::array<float,3>{.2126f,.7152f,.0722f};
-                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,range,o.sdr_tone_mapper,o.sdr_color_mapping,luma);
-                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;
+                    cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights)?(o.sdr_auto_hdr_range?range:float(o.sdr_hdr_range_nits)):range,o.sdr_tone_mapper,o.sdr_color_mapping,luma,{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights},o.sdr_auto_hdr_range);
+                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;cache.mapped_zones={o.sdr_shadows,o.sdr_midtones,o.sdr_highlights};cache.mapped_auto_range=o.sdr_auto_hdr_range;cache.mapped_cap=o.sdr_hdr_range_nits;
                 }
-            }
+            } else cache.mapped_sdr.clear();
         }
         const float* export_pixels=sdr_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():linear.data();
         const float* export_base=gain_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():sdr_base.empty()?nullptr:sdr_base.data();

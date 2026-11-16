@@ -1532,6 +1532,12 @@ static void transparency_background(const fs::path& dir) {
 }
 
 static void sdr_tone_mapping(const fs::path& dir) {
+    const std::vector<float> zoneInput={.03f,.02f,.01f,.4f,.4f,.3f,.2f,.8f,4.f,3.f,2.f,1.f};
+    const auto neutralZones=tone_map_sdr_base(zoneInput,.67f,1000.f);
+    const auto shadowZones=tone_map_sdr_base(zoneInput,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{.5f,0,0},true);
+    check(shadowZones[0]>neutralZones[0]&&shadowZones[3]==zoneInput[3],"SDR shadow adjustment or alpha failed");
+    const auto midZones=tone_map_sdr_base(zoneInput,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{0,-.5f,0},true);
+    check(midZones[4]<neutralZones[4],"SDR midtone adjustment failed");
     const float peak=1000.f/203.f;
     const std::vector<float> color={3.f,1.5f,.5f,.4f};
     const auto maxRgb=tone_map_sdr_base(color,.67f,1000.f);

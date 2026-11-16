@@ -308,6 +308,19 @@ private slots:
             QCOMPARE(QFileInfo::exists(output+"/ordinary_high_sdr_tm.avif"),allow);
         }
     }
+    void tonalSliderInputs() {
+        appSettings().clear();
+        MainWindow window;
+        for(const auto* name:{"rawHighlightStops","rawShadows","rawMidtones","rawHighlights","sdrShadows","sdrMidtones","sdrHighlights"}) {
+            auto* input=window.findChild<QDoubleSpinBox*>(name);
+            auto* slider=window.findChild<QSlider*>(QString(name)+"Slider");
+            QVERIFY(input&&slider);QCOMPARE(input->value(),0.);QCOMPARE(slider->value(),0);
+            input->setValue(.35);QCOMPARE(slider->value(),35);
+            slider->setValue(70);QCOMPARE(input->value(),.7);
+        }
+        const auto options=window.options();
+        QCOMPARE(options.sdr_shadows,.7f);QCOMPARE(options.sdr_midtones,.7f);QCOMPARE(options.sdr_highlights,.7f);
+    }
     void sdrToneMapControls() {
         appSettings().clear();
         {
