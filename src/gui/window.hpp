@@ -150,7 +150,7 @@ private:
     QPushButton* running_;
     QProgressBar* progress_;
     QStringList recentFolders_, recentFiles_, lastFiles_;
-    QString appliedSearch_;
+    QString appliedSearch_, lastOutputFolder_;
     QSet<QString> loggedWarnings_, selectedImages_, selectedTabImages_, rememberedImages_;
     QHash<qint64,QSet<QString>> jobSelections_;
     struct OutputProgress {QString input, state;};

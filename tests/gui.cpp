@@ -1202,6 +1202,31 @@ private slots:
         QTest::mouseMove(jobButton,jobButton->rect().center());QTest::qWait(450);QVERIFY(!window.findChild<QMenu*>("jobMenu")->isVisible());
         QSignalSpy opened(jobButton->menu(),&QMenu::aboutToShow);QTimer::singleShot(100,jobButton->menu(),&QMenu::close);QTest::mouseClick(jobButton,Qt::LeftButton);QTRY_COMPARE(opened.count(),1);QTRY_VERIFY(!jobButton->menu()->isVisible());
     }
+    void openCompletedOutputSubfolders() {
+        appSettings().clear();MainWindow window;window.show();
+        QStringList files;for(int i=0;i<5;++i)files.append(makeImage(root("open-completed/input"),QString::number(i)+".jpg",32,24,100));
+        window.addPaths(files);QTRY_COMPARE(window.catalog()->rowCount(),5);
+        window.findChild<QCheckBox*>("jumpToJobTab")->setChecked(false);
+        const auto destination=root("open-completed/output");
+        for(const auto* name:{"parentSubfolders","dateSubfolders","jobSubfolders","formatSubfolders","convertedSubfolder"})window.findChild<QCheckBox*>(name)->setChecked(true);
+        FolderReceiver receiver;QDesktopServices::setUrlHandler("file",&receiver,"open");auto restore=qScopeGuard([]{QDesktopServices::unsetUrlHandler("file");});
+        QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);int batch=0;
+        for(bool original:{false,true})for(bool flatten:{false,true}) {
+            window.findChild<QPushButton*>("statusAll")->click();
+            window.findChild<QLineEdit*>("outputDirectory")->setText(destination);
+            window.findChild<QCheckBox*>("saveToSourceFolder")->setChecked(original);
+            window.findChild<QCheckBox*>("flattenSubfolders")->setChecked(flatten);
+            OutputLayout layout;layout.parent_subfolders=!original;layout.date_subfolders=true;layout.format_subfolders=true;
+            layout.job_subfolder="Job-"+QString::number(++batch);layout.flatten_subfolders=flatten;layout.source_folder=original;
+            const auto expected=outputFolder(files.first(),destination,jxrc::Target::avif,layout);
+            window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),batch);QCOMPARE(done.last()[1].toInt(),0);
+            QVERIFY(QFileInfo::exists(expected+"/0_high_sdr_tm.avif"));
+            // Later edits cannot redirect Open folder away from completed output.
+            window.findChild<QLineEdit*>("outputDirectory")->setText(root("open-completed/changed"));
+            window.findChild<QPushButton*>("openQueueOutputFolder")->click();QCOMPARE(receiver.opened.toLocalFile(),expected);
+            QVERIFY(chooseJob(window,batch));window.findChild<QPushButton*>("openQueueOutputFolder")->click();QCOMPARE(receiver.opened.toLocalFile(),expected);
+        }
+    }
     void independentJobSelectionsAndConvertSelected() {
         appSettings().clear();MainWindow window;window.show();
         const auto directory=root("job-selections"),output=root("job-selection-output");

@@ -879,7 +879,7 @@ void MainWindow::showJob(qint64 number) {
 }
 void MainWindow::clearJobs() {
     if(queue_->busy())return;
-    savedJobs_.clear();temporaryJob_={0,{},{},{},false,{},{}};jobSelections_.clear();viewedJob_=0;nextJob_=1;quickJob_=-1;
+    savedJobs_.clear();temporaryJob_={0,{},{},{},false,{},{}};jobSelections_.clear();viewedJob_=0;nextJob_=1;quickJob_=-1;lastOutputFolder_.clear();
     jobHistoryLoaded_=true;jobHistoryDirty_=true;jobMenu_->clear();
     if(statusFilter_->checkedId()==2)statusFilter_->button(0)->setChecked(true);
     refreshJobs();saveJobs();updateFilter();
@@ -905,12 +905,14 @@ void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse,bo
     if(quick)saved->quick=true;
     for(const auto& job:jobs){if(!saved->files.contains(job.input))saved->files.append(job.input);saved->outputs.insert(job.output,{job.input,"Queued"});}
     if(creating)saved->name=jobParentName(saved->files);
-    if(!jobs.isEmpty())saved->folder=QFileInfo(jobs.first().output).absolutePath();
+    if(!jobs.isEmpty())lastOutputFolder_=saved->folder=QFileInfo(jobs.first().output).absolutePath();
     if(jumpToJob_->isChecked())showJob(saved->number);
     else{refreshJobs();saveJobs();updateFilter();}
 }
 void MainWindow::updateJobOutput(qint64 batch,const QString& input,const QString& output,const QString& state) {
-    auto update=[&](SavedJob& job){auto it=job.outputs.find(output);if(it!=job.outputs.end()&&it->input==input&&(it->state=="Queued"||it->state=="Running"))it->state=state;};
+    const bool completed=state=="Finished"||state=="Skipped";
+    if(completed)lastOutputFolder_=QFileInfo(output).absolutePath();
+    auto update=[&](SavedJob& job){auto it=job.outputs.find(output);if(it!=job.outputs.end()&&it->input==input&&(it->state=="Queued"||it->state=="Running")){it->state=state;if(completed)job.folder=lastOutputFolder_;}};
     for(auto& job:savedJobs_)if(job.number==batch)update(job);
     // A single-image request may promote an already queued output belonging
     // to a numbered job; the temporary job observes that output's result too.
@@ -938,6 +940,7 @@ OutputLayout MainWindow::outputLayout(qint64 batch,bool quick) const {
 void MainWindow::openOutputFolder() {
     QString path;
     if(statusFilter_->checkedId()==2){if(viewedJob_==0)path=temporaryJob_.folder;else for(const auto& job:savedJobs_)if(job.number==viewedJob_)path=job.folder;}
+    else path=lastOutputFolder_;
     if(path.isEmpty()){
         auto paths=selectedPaths();if(paths.isEmpty()&&proxy_->rowCount())paths.append(proxy_->index(0,0).data(Catalog::PathRole).toString());
         if(paths.isEmpty()&&(sourceFolder_->isChecked()||(parentFolders_->isEnabled()&&parentFolders_->isChecked()))){reportError("Cannot open output folder: Select an image to determine its output folder.");return;}
@@ -1230,7 +1233,7 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
 }
 void MainWindow::reportError(const QString& message,const QStringList& paths) {
     for(const auto& path:paths)catalog_->setStatus(path,"Failed",message);
-    queueState_->setText(message);showLibraryMessage(message);logMessage(message);
+    queueState_->setText(message);logMessage(message);
 }
 void MainWindow::stopQueue() {
     if(routingToken_){routingToken_->store(false);routingToken_.reset();queueState_->setText("Source metadata check cancelled");}
