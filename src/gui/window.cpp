@@ -569,7 +569,7 @@ QWidget* MainWindow::buildControls() {
     sdrToneMap_=check("Tone map HDR to SDR","sdrToneMap",true);sdrToneMap_->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(sdrToneMap_);
     sdrAutoRange_=check("Auto HDR range","sdrAutoHdrRange",true);sdrAutoRange_->setToolTip("Fit the brightest finite F32 pixel to SDR white. Uses the same prepared F32 image shared by all selected outputs.");toneForm->addRow(sdrAutoRange_);
     sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve");
-    sdrAutoCurve_->setToolTip("Clip the source at the selected HDR range before tonal adjustments, then fit the adjusted peak into 203-nit SDR white using the chosen curve and shoulder. Auto HDR range uses the source peak as the ceiling. Luminance mapping compresses out-of-gamut colors instead of clipping individual channels.");toneForm->addRow(sdrAutoCurve_);
+    sdrAutoCurve_->setToolTip("Automatically use a logarithmic curve with a shoulder based on the median visible pixel, bounded to 18–67%. Manual curve, shoulder, shadows, midtones and highlights are ignored while enabled. The HDR range cap is applied first; Auto HDR range uses the full source range. Luminance mode compresses out-of-gamut colors.");toneForm->addRow(sdrAutoCurve_);
     sdrToneMapper_=combo({"Logarithmic · highlight detail","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");toneForm->addRow("Tone mapper",sdrToneMapper_);
     sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. The color mapping option controls how each curve is applied to RGB.");
     sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");toneForm->addRow("Color mapping",sdrColorMapping_);
@@ -578,11 +578,18 @@ QWidget* MainWindow::buildControls() {
     sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(2000);sdrRangeInput_=spin(204,10000,2000,"sdrHdrRangeInput");sdrRangeInput_->setSingleStep(50);sdrRangeInput_->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeInput_);toneForm->addRow("HDR range cap",rangeRow);
     connect(sdrRange_,&QSlider::valueChanged,sdrRangeInput_,&QSpinBox::setValue);connect(sdrRangeInput_,&QSpinBox::valueChanged,sdrRange_,&QSlider::setValue);
     sdrRangeInput_->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
-    connect(sdrToneMap_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrAutoRange_,&QCheckBox::toggled,this,&MainWindow::updateMode);
+    connect(sdrAutoCurve_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrToneMap_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrAutoRange_,&QCheckBox::toggled,this,&MainWindow::updateMode);
     connect(sdrShoulder_,&QSlider::valueChanged,this,&MainWindow::updateMode);connect(sdrRange_,&QSlider::valueChanged,this,&MainWindow::updateMode);
     sdrShadows_=real(-1,1,0,.05,"sdrShadows");sdrMidtones_=real(-1,1,0,.05,"sdrMidtones");sdrHighlights_=real(-1,1,0,.05,"sdrHighlights");
     toneForm->addRow("Shadows",sliderInput(sdrShadows_,"sdrShadowsSlider"));toneForm->addRow("Midtones",sliderInput(sdrMidtones_,"sdrMidtonesSlider"));toneForm->addRow("Highlights",sliderInput(sdrHighlights_,"sdrHighlightsSlider"));
     for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setToolTip("Adjust tonal exposure before SDR highlight compression. Zero is neutral. Applies only to SDR outputs and new gain-map SDR bases.");
+    auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
+    connect(resetTone,&QPushButton::clicked,this,[this]{
+        sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(false);
+        sdrToneMapper_->setCurrentIndex(0);sdrColorMapping_->setCurrentIndex(0);sdrShoulder_->setValue(67);sdrRange_->setValue(2000);
+        for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setValue(0.);
+        updateMode();
+    });
     layout->addWidget(toneMap_);
     processing_=new QGroupBox("Pixel processing");auto* processingForm=new QFormLayout(processing_);exposure_=real(-3,3,0,0.1,"exposure");exposure_->setSuffix(" EV");
     exposure_->setToolTip("0 EV leaves exposure unchanged. −3 EV multiplies linear RGB by 1/8; +3 EV multiplies it by 8. For RAW gain-map output, use Custom RAW exposure instead.");
@@ -674,8 +681,8 @@ void MainWindow::updateMode() {
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
-    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(sdrToneMap_->isChecked());sdrColorMapping_->setEnabled(sdrToneMap_->isChecked());for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->parentWidget()->setEnabled(sdrToneMap_->isChecked());sdrShoulder_->setEnabled(sdrToneMap_->isChecked());sdrRange_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrAutoRange_->setEnabled(sdrToneMap_->isChecked());sdrAutoCurve_->setEnabled(sdrToneMap_->isChecked());
-    sdrShoulderValue_->setText(QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
+    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoCurve_->isChecked());sdrColorMapping_->setEnabled(sdrToneMap_->isChecked());for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->parentWidget()->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoCurve_->isChecked());sdrShoulder_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoCurve_->isChecked());sdrRange_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrAutoRange_->setEnabled(sdrToneMap_->isChecked());sdrAutoCurve_->setEnabled(sdrToneMap_->isChecked());
+    sdrShoulderValue_->setText(sdrAutoCurve_->isChecked()?QString("Auto"):QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);cameraLook_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     rawProtectHighlights_->setEnabled(process&&rawAutoExposure_->isChecked());

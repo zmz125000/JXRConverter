@@ -246,7 +246,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp && !(o.sdr_tone_map&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights))) {
+    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp && !(o.sdr_tone_map&&!o.sdr_auto_tone_curve&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights))) {
         if(format==6&&!cache.raster_hdr) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
             cache.raster_hdr=regular->hdr();direct_sdr=!cache.raster_hdr;
@@ -411,7 +411,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
-            const std::array<float,3> zones={o.sdr_shadows,o.sdr_midtones,o.sdr_highlights};
+            const std::array<float,3> zones=o.sdr_auto_tone_curve?std::array<float,3>{}:std::array<float,3>{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights};
             const bool adjust_zones=zones!=std::array<float,3>{};
             if(peak>1.f||adjust_zones) {
                 // The manual range is a ceiling. Fit a dimmer source to its

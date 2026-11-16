@@ -321,6 +321,25 @@ private slots:
         const auto options=window.options();
         QCOMPARE(options.sdr_shadows,.7f);QCOMPARE(options.sdr_midtones,.7f);QCOMPARE(options.sdr_highlights,.7f);
     }
+    void autoToneControlsAndReset() {
+        appSettings().clear();MainWindow window;
+        auto* automatic=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(automatic);
+        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QVERIFY(mapper);mapper->setCurrentIndex(2);
+        automatic->setChecked(true);QVERIFY(!mapper->isEnabled());
+        QVERIFY(!window.findChild<QSlider*>("sdrShoulder")->isEnabled());
+        for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"}) {
+            auto* input=window.findChild<QDoubleSpinBox*>(name);QVERIFY(!input->isEnabled());
+            QVERIFY(!window.findChild<QSlider*>(QString(name)+"Slider")->isEnabled());
+        }
+        automatic->setChecked(false);QVERIFY(mapper->isEnabled());QCOMPARE(mapper->currentIndex(),2);
+        window.findChild<QDoubleSpinBox*>("sdrShadows")->setValue(.5);
+        window.findChild<QSlider*>("sdrShoulder")->setValue(40);
+        auto* reset=window.findChild<QPushButton*>("resetSdrToneMapping");QVERIFY(reset);reset->click();
+        const auto options=window.options();QVERIFY(!options.sdr_auto_tone_curve);QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
+        QCOMPARE(options.sdr_shoulder,.67f);QCOMPARE(options.sdr_hdr_range_nits,2000);QCOMPARE(options.sdr_shadows,0.f);
+        QCOMPARE(window.findChild<QSlider*>("sdrShadowsSlider")->value(),0);
+        QCOMPARE(mapper->currentIndex(),0);
+    }
     void sdrToneMapControls() {
         appSettings().clear();
         {
