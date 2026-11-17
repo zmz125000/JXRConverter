@@ -29,25 +29,30 @@ A C++17 image conversion library and CLI extracted from LocalViewer.
 
 https://github.com/zmz125000/LocalViewer  
 
-JXRConverter is a RAW/JXR converter that  
+JXRConverter is a HDR image converter that  
 renders accurate SDR base images,  
 while preserving wide color gamut,  
-then outputs to JPG/AVIF Gain Map HDR.   
+then outputs to JPG/AVIF Gain Map Ultra HDR and more.   
 
-It also supports PNG, JXL with scRGB, HLG and PQ outputs  
+Supported HDR formats: JPG, PNG, JXR, JXL, HEIF, AVIF, OpenEXR, Radiance HDR, PFM, TIFF and RAW.  
+
+It also supports outputting 16-bit PNG, JXL and AVIF with Linear, scRGB, HLG and PQ transfers   
 and comes with a Qt6 GUI for Windows, Linux and macOS.
+
+special thanks to [SKIV](https://github.com/SpecialKO/SKIV) for the best HDR to SDR tone mapper.
 
 Features:  
 1. Convert OpenEXR, Radiance HDR/RGBE/XYZE, PFM, floating-point/LogLuv TIFF, JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL scRGB, HLG and PQ HDR.
-2. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
-3. Generic image conversion/compression.
-4. Support auto color management, keeping source wide color gamut and color tag.
-5. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for UHDR SDR base image.
-6. RAW images are processed and output as scRGB, Linear HDR or PQ HDR with BT.2020 color.
-7. Gain map reconstruction mode, reverse gain map to F32 for Linear and PQ outputs.
-8. Float32 high quality image processing.
-9. File listing with ultra fast thumbnails.
-10. HDR boost rendering for RAW images.
+2. Creates accurate SDR JPGs from HDR sources by preserving the "untouched" SDR range (0-203 nits) from HDR sources to sRGB SDR.
+3. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
+4. Generic image conversion/compression.
+5. Support auto color management, keeping source wide color gamut and color tag.
+6. JXR HDR images with scRGB 80 nits SDR white are rebased to 203 nits for UHDR SDR base image.
+7. RAW images are processed and output as scRGB, Linear HDR or PQ HDR with BT.2020 color.
+8. Gain map reconstruction mode, reverse gain map to F32 for Linear and PQ outputs.
+9. Float32 high quality image processing.
+10. File listing with ultra fast thumbnails.
+11. HDR boost rendering for RAW images.
 
 See [port status](docs/port-status.md) for the supported scope and remaining work.
 See the [conversion matrix](docs/conversion-matrix.md) for input classes, output formats and processing paths.
@@ -127,7 +132,7 @@ Those links are unrelated to the project.
 - [Pictureflect Photo Viewer](https://pictureflect.com/)
 - [Special K Image Viewer](https://github.com/SpecialKO/SKIV)
 - [HDRFrame](https://apps.microsoft.com/detail/9p4ngn61cr4t)
-- [jxr2uhdr](https://github.com/tfx2001/jxr2uhdr/) jxr2uhdr is another tool that has accurate SDR output.
+- [jxr2uhdr](https://github.com/tfx2001/jxr2uhdr/)
 - [HDR2gainmapApp](https://github.com/vastunghia/HDR2gainmapApp)
 - [Win11 HDR sRGB fix](https://github.com/HiBluey/Fuck-sRGB)
 
