@@ -501,7 +501,9 @@ void MainWindow::restoreSettings() {
     for(auto* widget:persistentControls()) {
         if(!widget||(!loadFilters_->isChecked()&&filters.contains(widget)))continue;
         const auto key="controls/"+widget->objectName();
-        if(settings.contains(key)){const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),settings.value(key));}
+        if(settings.contains(key)){const QSignalBlocker blocker(widget);
+            if(widget==sdrToneMapper_){const int index=sdrToneMapper_->findData(settings.value(key).toInt());sdrToneMapper_->setCurrentIndex(index<0?1:index);}
+            else widget->setProperty(settingProperty(widget),settings.value(key));}
     }
     if(settings.contains("conversion/targets")) {
         const auto saved=settings.value("conversion/targets").toStringList();const QSignalBlocker blocker(targets_);
@@ -518,7 +520,7 @@ void MainWindow::restoreSettings() {
 }
 void MainWindow::saveSettings() const {
     auto settings=appSettings();
-    for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget->property(settingProperty(widget)));
+    for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget==sdrToneMapper_?sdrToneMapper_->currentData():widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
     settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
 }
@@ -568,20 +570,24 @@ QWidget* MainWindow::buildControls() {
     autoBitDepth_->setToolTip("PNG uses 8 bits for 8-bit sources and 16 bits for deeper sources. Disable to choose PNG depth directly. Independent of quality presets.");
     toneMap_=new QGroupBox("SDR tone mapping");auto* toneForm=new QFormLayout(toneMap_);
     sdrToneMap_=check("Tone map HDR to SDR","sdrToneMap",true);sdrToneMap_->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(sdrToneMap_);
-    sdrAutoRange_=check("Auto HDR range","sdrAutoHdrRange",true);sdrAutoRange_->setToolTip("Fit the brightest finite F32 pixel to SDR white. Uses the same prepared F32 image shared by all selected outputs.");toneForm->addRow(sdrAutoRange_);
-    sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve",true);
+    sdrAutoRange_=check("Auto HDR range","sdrAutoHdrRange",true);sdrAutoRange_->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(sdrAutoRange_);
+    sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve");
     sdrAutoCurve_->setToolTip("Automatically use a logarithmic curve. Uses the SDR shoulder slider unless Auto shoulder is enabled. Manual curve, shadows, midtones and highlights are ignored while enabled. The HDR range cap is applied first; Auto HDR range uses the full source range. Luminance mode compresses out-of-gamut colors.");toneForm->addRow(sdrAutoCurve_);
     sdrAutoShoulder_=check("Auto shoulder","sdrAutoShoulder");
     sdrAutoShoulder_->setToolTip("With Auto tone curve, choose a shoulder from the median visible pixel, bounded to 50–67%. Off uses the SDR shoulder slider.");toneForm->addRow(sdrAutoShoulder_);
     connect(sdrAutoShoulder_,&QCheckBox::toggled,this,&MainWindow::updateMode);
-    sdrToneMapper_=combo({"Logarithmic · highlight detail","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");toneForm->addRow("Tone mapper",sdrToneMapper_);
-    sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. The color mapping option controls how each curve is applied to RGB.");
+    sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
+    // Stable IDs retain selections saved before the visual list was reordered.
+    const int mapperIds[]={3,4,0,1,2};for(int i=0;i<5;++i)sdrToneMapper_->setItemData(i,mapperIds[i]);
+    sdrToneMapper_->setCurrentIndex(1);toneForm->addRow("Tone mapper",sdrToneMapper_);
+    sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls.");
     sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");toneForm->addRow("Color mapping",sdrColorMapping_);
     sdrColorMapping_->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation.");
     sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(67);sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
     sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(2000);sdrRangeInput_=spin(204,10000,2000,"sdrHdrRangeInput");sdrRangeInput_->setSingleStep(50);sdrRangeInput_->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeInput_);toneForm->addRow("HDR range cap",rangeRow);
     connect(sdrRange_,&QSlider::valueChanged,sdrRangeInput_,&QSpinBox::setValue);connect(sdrRangeInput_,&QSpinBox::valueChanged,sdrRange_,&QSlider::setValue);
     sdrRangeInput_->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
+    connect(sdrToneMapper_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
     connect(sdrAutoCurve_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrToneMap_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrAutoRange_,&QCheckBox::toggled,this,&MainWindow::updateMode);
     connect(sdrShoulder_,&QSlider::valueChanged,this,&MainWindow::updateMode);connect(sdrRange_,&QSlider::valueChanged,this,&MainWindow::updateMode);
     sdrShadows_=real(-1,1,0,.05,"sdrShadows");sdrMidtones_=real(-1,1,0,.05,"sdrMidtones");sdrHighlights_=real(-1,1,0,.05,"sdrHighlights");
@@ -589,8 +595,8 @@ QWidget* MainWindow::buildControls() {
     for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setToolTip("Adjust tonal exposure before SDR highlight compression. Zero is neutral. Applies only to SDR outputs and new gain-map SDR bases.");
     auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
     connect(resetTone,&QPushButton::clicked,this,[this]{
-        sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(true);sdrAutoShoulder_->setChecked(false);
-        sdrToneMapper_->setCurrentIndex(0);sdrColorMapping_->setCurrentIndex(0);sdrShoulder_->setValue(67);sdrRange_->setValue(2000);
+        sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(false);sdrAutoShoulder_->setChecked(false);
+        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(0);sdrShoulder_->setValue(67);sdrRange_->setValue(2000);
         for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setValue(0.);
         updateMode();
     });
@@ -685,8 +691,15 @@ void MainWindow::updateMode() {
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
-    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoCurve_->isChecked());sdrColorMapping_->setEnabled(sdrToneMap_->isChecked());for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->parentWidget()->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoCurve_->isChecked());sdrAutoShoulder_->setEnabled(sdrToneMap_->isChecked()&&sdrAutoCurve_->isChecked());sdrShoulder_->setEnabled(sdrToneMap_->isChecked()&&!(sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked()));sdrRange_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrToneMap_->isChecked()&&!sdrAutoRange_->isChecked());sdrAutoRange_->setEnabled(sdrToneMap_->isChecked());sdrAutoCurve_->setEnabled(sdrToneMap_->isChecked());
-    sdrShoulderValue_->setText((sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked())?QString("Auto"):QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
+    const bool tone=sdrToneMap_->isChecked(),skiv=sdrToneMapper_->currentData().toInt()>=3,customSkiv=sdrToneMapper_->currentData().toInt()==4;
+    const bool manual=tone&&!skiv&&!sdrAutoCurve_->isChecked();
+    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(tone);sdrColorMapping_->setEnabled(tone&&!skiv);
+    for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->parentWidget()->setEnabled(manual);
+    sdrAutoShoulder_->setEnabled(tone&&!skiv&&sdrAutoCurve_->isChecked());
+    sdrShoulder_->setEnabled(tone&&(customSkiv||(!skiv&&!(sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked()))));
+    sdrRange_->setEnabled(tone&&(!skiv||customSkiv)&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrRange_->isEnabled());
+    sdrAutoRange_->setEnabled(tone&&(!skiv||customSkiv));sdrAutoCurve_->setEnabled(tone&&!skiv);
+    sdrShoulderValue_->setText((!skiv&&sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked())?QString("Auto"):QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);cameraLook_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     rawProtectHighlights_->setEnabled(process&&rawAutoExposure_->isChecked());
@@ -717,7 +730,7 @@ Options MainWindow::optionsForTarget(Target target) const {
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()==0?10:avifDepth_->currentIndex()==1?12:8;o.quality.downsize_gainmap=downsize_->isChecked();o.quality.auto_bit_depth=autoBitDepth_->isChecked();o.quality.png_depth=pngDepth_->currentIndex()?16:8;
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isChecked()&&target==Target::jxl&&(o.mode==Mode::preserve||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     if(o.mode==Mode::process) {
-        o.sdr_shadows=float(sdrShadows_->value());o.sdr_midtones=float(sdrMidtones_->value());o.sdr_highlights=float(sdrHighlights_->value());o.sdr_color_mapping=static_cast<SdrColorMapping>(sdrColorMapping_->currentIndex());o.sdr_tone_mapper=sdrToneMapper_->currentIndex()==0?SdrToneMapper::logarithmic:sdrToneMapper_->currentIndex()==1?SdrToneMapper::extended_reinhard:SdrToneMapper::reinhard;o.sdr_tone_map=sdrToneMap_->isChecked();o.sdr_shoulder=sdrShoulder_->value()/100.f;o.sdr_hdr_range_nits=sdrRange_->value();o.sdr_auto_hdr_range=sdrAutoRange_->isChecked();o.sdr_auto_tone_curve=sdrAutoCurve_->isChecked();o.sdr_auto_shoulder=sdrAutoShoulder_->isChecked();
+        o.sdr_shadows=float(sdrShadows_->value());o.sdr_midtones=float(sdrMidtones_->value());o.sdr_highlights=float(sdrHighlights_->value());o.sdr_color_mapping=static_cast<SdrColorMapping>(sdrColorMapping_->currentIndex());const SdrToneMapper mappers[]={SdrToneMapper::logarithmic,SdrToneMapper::extended_reinhard,SdrToneMapper::reinhard,SdrToneMapper::skiv,SdrToneMapper::skiv_custom};o.sdr_tone_mapper=mappers[std::clamp(sdrToneMapper_->currentData().toInt(),0,4)];o.sdr_tone_map=sdrToneMap_->isChecked();o.sdr_shoulder=sdrShoulder_->value()/100.f;o.sdr_hdr_range_nits=sdrRange_->value();o.sdr_auto_hdr_range=sdrAutoRange_->isChecked();o.sdr_auto_tone_curve=sdrAutoCurve_->isChecked();o.sdr_auto_shoulder=sdrAutoShoulder_->isChecked();
         o.srgb_clamp=srgbClamp_->isChecked();o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.convert_gamut=convertGamut_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.auto_exposure=rawAutoExposure_->isChecked();o.raw.auto_exposure_protect_highlights=rawProtectHighlights_->isChecked();o.raw.shoulder=static_cast<float>(shoulder_->value());
         if(o.raw.hdr_mode!=RawHdrMode::source)o.raw.target_nits=static_cast<float>(nits_->value());
         if(o.raw.hdr_mode==RawHdrMode::custom){o.raw.exposure=static_cast<float>(rawExposure_->value());o.raw.white_balance=wb_->currentIndex();o.raw.kelvin=kelvin_->value();o.raw.highlight_stops=static_cast<float>(highlight_->value());o.raw.shoulder=static_cast<float>(shoulder_->value());o.raw.target_nits=static_cast<float>(nits_->value());o.raw.shadows=static_cast<float>(shadows_->value());o.raw.midtones=static_cast<float>(midtones_->value());o.raw.highlights=static_cast<float>(highlights_->value());o.raw.camera_look=cameraLook_->isChecked();o.raw.linear_hdr=linearHdr_->isChecked();if(disableRawBoost_->isChecked())o.raw.shoulder=0.f;}

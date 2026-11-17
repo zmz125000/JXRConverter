@@ -43,3 +43,10 @@ libaom; decoding code is unchanged.
 Ultra HDR's generated build-tree appendGainMap implementation emits ISO-only
 metadata when a map cannot be represented by its XMP writer (per-channel values
 or alternate application space); compatible maps still receive both packets.
+
+The SKIV SDR tone mapper is adapted from samples/SKIV/src/utility/image.cpp,
+include/utility/image.h, and resources/shaders/tone_mapping.hlsli. Copyright
+(c) 2024 Aemony; Copyright 2024 Andon "Kaldaien" Coleman. MIT permission and
+warranty notices are retained in src/native/skiv_tone_map.h. The portable
+implementation handles 203-nit working pixels and non-BT.709 source gamuts;
+SKIV (custom) anchors the ICtCp curve at the SDR shoulder and white point.

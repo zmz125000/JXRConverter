@@ -2,6 +2,7 @@
 #include "codec_api.h"
 #include "render_analysis.h"
 #include "sdr_tone_map.h"
+#include "skiv_tone_map.h"
 #include "input_format.h"
 #include "hdr_parallel.h"
 #include "regular_decode.h"
@@ -1538,7 +1539,7 @@ static void transparency_background(const fs::path& dir) {
 }
 
 static void sdr_tone_mapping(const fs::path& dir) {
-    check(jxrc::Options{}.sdr_auto_tone_curve,"Auto tone curve should default on");
+    check(!jxrc::Options{}.sdr_auto_tone_curve&&jxrc::Options{}.sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom,"Default SDR mapper should be SKIV custom");
     // A dark median must not lower the automatic shoulder below 50%.
     const std::vector<float> darkMedian={.1f,.1f,.1f,1.f,.4f,.4f,.4f,1.f,4.f,4.f,4.f,1.f};
     const auto darkMapped=tone_map_sdr_base(darkMedian,.1f,812.f,jxrc::SdrToneMapper::logarithmic,
@@ -1607,7 +1608,7 @@ static void sdr_tone_mapping(const fs::path& dir) {
     jxrc::ConversionSession session(source);
     jxrc::Options o;o.mode=jxrc::Mode::process;o.quality.preset=jxrc::Preset::lossless;o.target=jxrc::Target::png;
     const auto clipped=dir/"tone-clipped.png";session.convert(clipped,o);
-    o.sdr_tone_map=true;o.sdr_auto_tone_curve=false;o.sdr_shoulder=.8f;o.sdr_hdr_range_nits=1000;
+    o.sdr_tone_map=true;o.sdr_tone_mapper=jxrc::SdrToneMapper::logarithmic;o.sdr_auto_tone_curve=false;o.sdr_shoulder=.8f;o.sdr_hdr_range_nits=1000;
     const auto toned=dir/"tone-mapped.png";session.convert(toned,o);
     auto decode_sdr=[](const fs::path& path) {
         const auto data=bytes(path);const auto raster=decode_regular(data.data(),data.size());
@@ -1678,6 +1679,61 @@ static void sdr_tone_mapping(const fs::path& dir) {
     o.sdr_shoulder=1.f;fails([&]{jxrc::validate(o);});
 }
 
+static void skiv_tone_mapping(const fs::path& dir) {
+    check(jxrc::Options{}.sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom&&!jxrc::Options{}.sdr_auto_tone_curve,"Default SDR mapper is not SKIV custom");
+    const std::vector<float> input={.18f,.18f,.18f,1,1,1,1,1,4,2,1,1,12,4,.5f,1};
+    // Independent scalar reference from SKIV's SDR export, including PQ,
+    // ICtCp chroma scaling and the 65536-bin luminance histogram.
+    const float expected[]={.0845401745f,.0845422251f,.0845412521f,1,.3320557723f,.3320840335f,.3320705568f,1,
+        .9869743055f,.5618272624f,.3216860239f,1,1,.9583687725f,.2359747904f,1};
+    const auto stock=tone_map_skiv_base(input,0,false,.67f,2000.f);
+    for(size_t i=0;i<stock.size();++i)check(std::abs(stock[i]-expected[i])<.00001f,"SKIV stock differs from upstream reference");
+    check(stock==tone_map_skiv_base(input,0,false,.1f,204.f),"Stock SKIV used disabled shoulder/cap controls");
+    auto hidden=input;hidden.insert(hidden.end(),{1000000,1000000,1000000,0});
+    const auto invisible=tone_map_skiv_base(hidden,0,false,.67f,2000.f);
+    check(std::equal(stock.begin(),stock.end(),invisible.begin())&&invisible.back()==0,"Invisible RGB changed SKIV peak or alpha");
+    const auto custom=tone_map_skiv_base(input,0,true,.67f,2000.f);
+    for(unsigned c=0;c<3;++c)check(custom[c]==input[c],"SKIV custom changed pixels below shoulder");
+    check(custom!=stock&&custom!=tone_map_skiv_base(input,0,true,.3f,2000.f),"SKIV custom ignored shoulder");
+    check(custom!=tone_map_skiv_base(input,0,true,.67f,500.f),"SKIV custom ignored HDR cap");
+    auto translucent=input;for(size_t i=3;i<translucent.size();i+=4)translucent[i]=.4f;
+    const auto alpha=tone_map_skiv_base(translucent,0,true,.67f,2000.f);
+    for(size_t i=3;i<alpha.size();i+=4)check(alpha[i]==.4f,"SKIV changed alpha");
+    std::vector<float> ramp;for(unsigned n=0;n<=100;++n) {const float v=n*.12f;ramp.insert(ramp.end(),{v,v,v,1});}
+    const auto mapped=tone_map_skiv_base(ramp,0,true,.67f,2000.f);float previous=0;
+    for(size_t i=0;i<mapped.size();i+=4) {check(mapped[i]>=previous-.0001f&&mapped[i]<=1.f,"SKIV custom neutral curve is not monotonic/bounded");previous=mapped[i];}
+    for(int gamut:{1,2}) {
+        const auto& space=gamut==1?skiv::rgbp3_xyz:skiv::rgb2020_xyz;
+        const auto inverse=skiv::inverse(space);auto wide=input;
+        for(size_t i=0;i<wide.size();i+=4) {const auto rgb=skiv::transform(inverse,skiv::transform(skiv::rgb709_xyz,{input[i],input[i+1],input[i+2]}));for(unsigned c=0;c<3;++c)wide[i+c]=float(rgb[c]);}
+        const auto result=tone_map_skiv_base(wide,gamut,false,.67f,2000.f);
+        for(size_t i=0;i<result.size();i+=4) {const auto rgb=skiv::transform(skiv::xyz709,skiv::transform(space,{result[i],result[i+1],result[i+2]}));for(unsigned c=0;c<3;++c)check(std::abs(rgb[c]-stock[i+c])<.0001,"SKIV rematrix changed output colors");}
+    }
+    std::vector<float> pixels(16*16*4);
+    for(size_t i=0;i<256;++i) {const float v=i%16<4?.2f:i%16<8?1.f:i%16<12?3.f:8.f;for(unsigned c=0;c<3;++c)pixels[i*4+c]=v;pixels[i*4+3]=1;}
+    const auto source=dir/"skiv-source.jxl";
+    check(encode_jxl_f32(16,16,pixels.data(),UHDR_CG_BT_709,true,source.string().c_str(),StillEncodeQuality(0),false)==0,"SKIV source fixture");
+    jxrc::ConversionSession session(source);jxrc::Options o;o.mode=jxrc::Mode::process;o.sdr_tone_map=true;o.sdr_auto_hdr_range=false;o.sdr_hdr_range_nits=1000;o.target=jxrc::Target::png;o.quality.preset=jxrc::Preset::lossless;
+    const auto customPath=dir/"skiv-custom.png";session.convert(customPath,o);o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv;
+    const auto stockPath=dir/"skiv-stock.png";session.convert(stockPath,o);check(bytes(customPath)!=bytes(stockPath),"SKIV mode change reused stale SDR render");
+    o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;o.sdr_auto_tone_curve=true;o.sdr_auto_shoulder=true;o.sdr_shadows=1;o.sdr_midtones=-1;o.sdr_highlights=.5;o.sdr_shoulder=.1;o.sdr_hdr_range_nits=204;
+    const auto ignored=dir/"skiv-stock-ignored.png";session.convert(ignored,o);check(bytes(ignored)==bytes(stockPath),"Stock SKIV used disabled controls");
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_custom;o.sdr_shoulder=.67;o.sdr_hdr_range_nits=1000;
+    const auto customIgnored=dir/"skiv-custom-ignored.png";session.convert(customIgnored,o);check(bytes(customIgnored)==bytes(customPath),"SKIV custom used disabled color/auto/tonal controls");
+    auto decode_sdr=[](const fs::path& path) {const auto data=bytes(path);const auto raster=decode_regular(data.data(),data.size());std::vector<float> out;uhdr_color_gamut_t gamut;regular_to_linear(raster,out,gamut);return out;};
+    const auto expectedBase=decode_sdr(customPath);
+    for(auto target:{jxrc::Target::jpeg_gainmap,jxrc::Target::avif_gainmap}) {
+        o.target=target;const auto gain=dir/("skiv-gain-"+std::to_string(int(target)));check(session.convert(gain,o).gainmap,"SKIV gain-map export");
+        jxrc::Options base;base.target=jxrc::Target::png;const auto basePath=dir/("skiv-base-"+std::to_string(int(target))+".png");jxrc::convert(gain,basePath,base);
+        const auto actualBase=decode_sdr(basePath);
+        for(unsigned x:{2u,6u,10u,14u})check(std::abs(actualBase[x*4]-expectedBase[x*4])<.04,"SKIV gain-map base differs from SDR output");
+    }
+    for(auto target:{jxrc::Target::png_hdr,jxrc::Target::jxl_linear,jxrc::Target::avif_hlg}) {
+        o.target=target;const auto enabled=dir/("skiv-hdr-on-"+std::to_string(int(target))),disabled=dir/("skiv-hdr-off-"+std::to_string(int(target)));
+        o.sdr_tone_map=true;session.convert(enabled,o);o.sdr_tone_map=false;session.convert(disabled,o);check(bytes(enabled)==bytes(disabled),"SKIV changed HDR output");
+    }
+}
+
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
@@ -1691,6 +1747,7 @@ int main(int argc,char** argv) try {
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--transparency") {transparency_background(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--skiv") {skiv_tone_mapping(dir);std::cout<<"SKIV tone mapping tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--sdr-tone-map") {sdr_tone_mapping(dir);std::cout<<"SDR tone mapping tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--raw-auto-exposure") {raw_auto_exposure(dir);std::cout<<"RAW auto exposure tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}
