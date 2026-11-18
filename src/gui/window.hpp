@@ -140,6 +140,9 @@ private:
     QTimer* libraryMessageTimer_;
     QString libraryMessage_;
     QTimer* jobSaveTimer_;
+    QTimer* jobRefreshTimer_;
+    int queueStatusBatchDepth_ = 0;
+    QStringList queueStatusLogs_;
     QAction* clearJobs_;
     QActionGroup* jobActions_;
     double jobWheelSteps_=0;

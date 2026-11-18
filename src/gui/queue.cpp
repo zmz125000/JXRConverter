@@ -18,6 +18,13 @@ std::filesystem::path nativePath(const QString& value) {
     return std::filesystem::u8path(value.toUtf8().constData());
 #endif
 }
+// Bulk queue changes still emit every output outcome, but the catalog and log
+// can update once after the transaction instead of once per pending output.
+struct StatusBatch {
+    ConversionQueue* queue;
+    explicit StatusBatch(ConversionQueue* q):queue(q){emit queue->statusBatchStarted();}
+    ~StatusBatch(){emit queue->statusBatchFinished();}
+};
 QString jobKey(const Job& job) {return QString::number(job.batch)+QChar(0)+job.input+QChar(0)+job.output;}
 QDateTime originalDate(const QString& path) {
     const auto fallback=QFileInfo(path).lastModified();
@@ -156,6 +163,7 @@ ConversionQueue::~ConversionQueue() { pool_.clear();pool_.waitForDone(); }
 void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     if(busy())throw std::logic_error("A conversion batch is already running");
     if(jobs.isEmpty())return;
+    const StatusBatch updates(this);
     orderJobs(jobs);
     sessions_.clear();originalDates_.clear();activeInputs_.clear();activeOutputs_.clear();activeBatches_.clear();batchAliases_.clear();
     jobs_=std::move(jobs);next_=active_=finished_=succeeded_=failed_=cancelled_=skipped_=0;
@@ -168,6 +176,7 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
 }
 void ConversionQueue::enqueue(QVector<Job> jobs,int parallelism,int cores) {
     if(!busy()){start(std::move(jobs),parallelism,cores);return;}
+    const StatusBatch updates(this);
     orderJobs(jobs);
     for(auto& job:jobs){job.options.threads=threadBudget_;if(!remaining_.value(job.input)){fileErrors_.remove(job.input);fileCancelled_.remove(job.input);fileSkipped_.remove(job.input);fileSucceeded_.remove(job.input);}++remaining_[job.input];}
     jobs_+=jobs;
@@ -188,6 +197,7 @@ void ConversionQueue::cancelBatch(qint64 batch) {cancelPendingMatching(nullptr,b
 void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
     if(!busy()){start(std::move(jobs),parallelism,cores);return;}
     if(jobs.isEmpty())return;
+    const StatusBatch updates(this);
     orderJobs(jobs);
     QSet<QString> inputs;for(const auto& job:jobs)inputs.insert(job.input);
     QVector<Job> priority,rest;
@@ -195,14 +205,17 @@ void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
     // outputs finish in place; new targets reuse the same source session.
     for(int i=next_;i<jobs_.size();++i)
         (inputs.contains(jobs_[i].input)?priority:rest).append(jobs_[i]);
+    QHash<QString,int> pendingOutputs;
+    auto outputKey=[](const Job& job){return job.input+QChar(0)+job.output;};
+    for(int i=0;i<priority.size();++i)pendingOutputs.insert(outputKey(priority[i]),i);
     QVector<Job> added;
     for(auto& job:jobs) {
         if(activeOutputs_.value(job.input)==job.output){batchAliases_[jobKey({job.input,job.output,{},activeBatches_.value(job.input)})].insert(job.batch);continue;}
-        const auto pending=std::find_if(priority.cbegin(),priority.cend(),[&](const Job& other){return other.input==job.input&&other.output==job.output;});
-        if(pending!=priority.cend()){batchAliases_[jobKey(*pending)].insert(job.batch);continue;}
+        const auto pending=pendingOutputs.constFind(outputKey(job));
+        if(pending!=pendingOutputs.cend()){batchAliases_[jobKey(priority[pending.value()])].insert(job.batch);continue;}
         job.options.threads=threadBudget_;
         if(!remaining_.value(job.input)){fileErrors_.remove(job.input);fileCancelled_.remove(job.input);fileSkipped_.remove(job.input);fileSucceeded_.remove(job.input);}
-        priority.append(job);added.append(job);++remaining_[job.input];
+        pendingOutputs.insert(outputKey(job),priority.size());priority.append(job);added.append(job);++remaining_[job.input];
     }
     orderJobs(priority);
     jobs_.resize(next_);jobs_+=priority;jobs_+=rest;
@@ -220,6 +233,7 @@ void ConversionQueue::cancelPendingFor(const QStringList& inputs) {
 }
 void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs,qint64 batch) {
     if(!busy())return;
+    const StatusBatch updates(this);
     // Keep total job count and the order of unselected pending outputs intact.
     const auto end=std::stable_partition(jobs_.begin()+next_,jobs_.end(),[&](const Job& job){return (batch<0||job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch))&&(!inputs||inputs->contains(job.input));});
     const int stop=int(end-jobs_.begin());

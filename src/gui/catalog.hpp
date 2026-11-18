@@ -48,6 +48,8 @@ public:
     void setBackgroundMetadata(bool enabled);
     void setAspectSampling(bool enabled);
     void setStatus(const QString& path, const QString& status, const QString& error = {});
+    void beginStatusUpdates();
+    void endStatusUpdates();
     // Layout probes never enqueue work; views bracket actual painting instead.
     void beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible);
     void endThumbnailFrame();
@@ -69,6 +71,9 @@ private:
     bool metadataWanted(const QString& path) const;
     int find(const QString& path) const;
     QVector<Record> records_;
+    mutable QHash<QString,int> rowsByPath_;
+    mutable bool rowIndexValid_ = false;
+    int statusUpdateDepth_ = 0, firstStatusRow_ = -1, lastStatusRow_ = -1;
     QSet<QString> known_;
     QThreadPool scans_, workers_;
     QSemaphore sourceReadSlots_{2}; // At most two source handles, shared by thumbnails and metadata.

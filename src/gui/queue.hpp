@@ -52,6 +52,8 @@ public:
     int failed() const { return failed_; }
     int total() const { return jobs_.size(); }
 signals:
+    void statusBatchStarted();
+    void statusBatchFinished();
     void statusChanged(const QString& path, const QString& state, const QString& detail);
     void outputStarted(qint64 batch, const QString& input, const QString& output);
     void outputFinished(qint64 batch, const QString& input, const QString& output, const QString& state);

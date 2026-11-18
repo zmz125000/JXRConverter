@@ -232,7 +232,14 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     }
 }
 QStringList Catalog::paths() const { QStringList out; for(const auto& r:records_)out<<r.path; return out; }
-int Catalog::find(const QString& path) const { for(int i=0;i<records_.size();++i)if(records_[i].path==path)return i;return -1; }
+int Catalog::find(const QString& path) const {
+    if(!rowIndexValid_) {
+        rowsByPath_.clear();rowsByPath_.reserve(records_.size());
+        for(int row=0;row<records_.size();++row)rowsByPath_.insert(records_[row].path,row);
+        rowIndexValid_=true;
+    }
+    return rowsByPath_.value(path,-1);
+}
 void Catalog::addPaths(const QStringList& paths, bool recursive) {
     const auto epoch=epoch_;
     ++scanning_;emit scanStateChanged(true);
@@ -283,7 +290,7 @@ void Catalog::insertPaths(const QVector<Record>& paths) {
     }
     if(!additions.isEmpty()){
         beginInsertRows({},records_.size(),records_.size()+additions.size()-1);
-        records_+=additions;
+        rowIndexValid_=false;records_+=additions;
         endInsertRows();
     }
     // In browsing mode let the first paint schedule a combined thumbnail and
@@ -346,7 +353,7 @@ void Catalog::clear() {
     epoch_->store(false);epoch_=std::make_shared<std::atomic_bool>(true);
     scans_.clear();scanning_=0;metadataQueue_.clear();visibleThumbnails_.clear();cancelMetadata();
     for(const auto& path:thumbnailJobs_.keys())cancelThumbnail(path);
-    beginResetModel();records_.clear();known_.clear();cache_.clear();endResetModel();
+    beginResetModel();records_.clear();rowsByPath_.clear();rowIndexValid_=false;known_.clear();cache_.clear();endResetModel();
     emit scanStateChanged(false);
 }
 void Catalog::beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible) {
@@ -451,13 +458,22 @@ void Catalog::removePaths(const QStringList& paths) {
     for(int i=records_.size()-1;i>=0;--i)if(removal.contains(records_[i].path)) {
         const auto path=records_[i].path;
         visibleThumbnails_.removeAll(path);cancelThumbnail(path);
-        beginRemoveRows({},i,i);records_.removeAt(i);known_.remove(key(path));cache_.remove(path);endRemoveRows();
+        beginRemoveRows({},i,i);records_.removeAt(i);rowIndexValid_=false;known_.remove(key(path));cache_.remove(path);endRemoveRows();
     }
     pumpMetadata();
 }
 void Catalog::setStatus(const QString& path,const QString& status,const QString& error) {
     const int row=find(path);if(row<0)return;records_[row].status=status;records_[row].error=error;
-    emit dataChanged(index(row,0),index(row,ColumnCount-1),{Qt::DisplayRole});
+    if(statusUpdateDepth_) {
+        firstStatusRow_=firstStatusRow_<0?row:std::min(firstStatusRow_,row);
+        lastStatusRow_=std::max(lastStatusRow_,row);
+    } else emit dataChanged(index(row,Status),index(row,Error),{Qt::DisplayRole});
+}
+void Catalog::beginStatusUpdates() {++statusUpdateDepth_;}
+void Catalog::endStatusUpdates() {
+    if(!statusUpdateDepth_||--statusUpdateDepth_)return;
+    const int first=firstStatusRow_,last=lastStatusRow_;firstStatusRow_=lastStatusRow_=-1;
+    if(first>=0)emit dataChanged(index(first,Status),index(last,Error),{Qt::DisplayRole});
 }
 CatalogFilter::CatalogFilter(QObject* parent):QSortFilterProxyModel(parent) {setDynamicSortFilter(true);setSortCaseSensitivity(Qt::CaseInsensitive);}
 void CatalogFilter::setFilter(const Filter& filter) {
