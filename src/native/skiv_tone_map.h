@@ -22,6 +22,7 @@
 // IN THE SOFTWARE.
 #include "jxrc/converter.hpp"
 #include "hdr_parallel.h"
+#include "tonal_zones.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -30,7 +31,7 @@
 #include <vector>
 
 inline bool skiv_tone_mapper(jxrc::SdrToneMapper mapper) {
-    return mapper==jxrc::SdrToneMapper::skiv||mapper==jxrc::SdrToneMapper::skiv_custom;
+    return mapper==jxrc::SdrToneMapper::skiv||mapper==jxrc::SdrToneMapper::skiv_custom||mapper==jxrc::SdrToneMapper::skiv_manual;
 }
 namespace skiv {
 using RGB=std::array<double,3>;
@@ -86,16 +87,22 @@ inline RGB input_xyz(const std::vector<float>& pixels,size_t at,const Matrix& sp
 }
 // Match SKIV's 65536-bin, 99.94th-percentile luminance estimate. Ignore fully
 // invisible pixels and handle a constant image without a zero-range division.
-inline double content_peak(const std::vector<float>& pixels,const Matrix& space) {
+inline double content_peak(const std::vector<float>& pixels,const Matrix& space,bool max_rgb=false) {
+    const auto metric=[&](size_t i) {
+        if(!max_rgb)return input_xyz(pixels,i,space)[1];
+        double peak=0.;
+        for(unsigned c=0;c<3;++c)if(std::isfinite(pixels[i+c]))peak=std::max(peak,double(pixels[i+c]));
+        return peak*(203./80.);
+    };
     double low=std::numeric_limits<double>::infinity(),high=-low;uint64_t count=0;
     for(size_t i=0;i<pixels.size();i+=4)if(std::isfinite(pixels[i+3])&&pixels[i+3]>0.f) {
-        const double y=input_xyz(pixels,i,space)[1];low=std::min(low,y);high=std::max(high,y);++count;
+        const double y=metric(i);low=std::min(low,y);high=std::max(high,y);++count;
     }
     if(!count)return 0.;
     if(high<=low)return std::max(high,0.);
     std::vector<uint64_t> histogram(65536);
     for(size_t i=0;i<pixels.size();i+=4)if(std::isfinite(pixels[i+3])&&pixels[i+3]>0.f) {
-        const double y=std::max(input_xyz(pixels,i,space)[1],0.);
+        const double y=std::max(metric(i),0.);
         const auto bin=size_t(std::clamp(std::round((y-low)/(high-low)*65536.),0.,65535.));++histogram[bin];
     }
     double percent=100.;
@@ -149,4 +156,55 @@ inline std::vector<float> tone_map_skiv_base(const std::vector<float>& hdr,int g
     }
     });
     return output;
+}
+
+// Manual tonal edits remain HDR. Replace SKIV's ICtCp intensity/chroma mapping
+// with the selected working-RGB metric while retaining its intensity curve.
+inline std::vector<float> tone_map_skiv_manual(const std::vector<float>& hdr,int gamut,
+        float shoulder,float cap_nits,jxrc::SdrColorMapping mapping,
+        std::array<float,3> luma,std::array<float,3> zones) {
+    using namespace skiv;
+    auto adjusted=hdr;
+    const size_t pixels=adjusted.size()/4;
+    hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned) {
+        for(size_t pixel=begin;pixel<end;++pixel) {
+            const size_t i=pixel*4;
+            if(!std::isfinite(adjusted[i+3])||adjusted[i+3]<=0.f) {
+                adjusted[i]=adjusted[i+1]=adjusted[i+2]=0.f;continue;
+            }
+            for(unsigned c=0;c<3;++c)adjusted[i+c]=std::max(std::isfinite(adjusted[i+c])?adjusted[i+c]:0.f,0.f);
+            apply_tonal_zones(adjusted[i],adjusted[i+1],adjusted[i+2],zones[0],zones[1],zones[2],luma);
+        }
+    });
+    const Matrix& space=gamut==2?rgb2020_xyz:gamut==1?rgbp3_xyz:rgb709_xyz;
+    const double cap=std::clamp(double(cap_nits),204.,10000.);
+    const double peak=std::min(content_peak(adjusted,space,mapping!=jxrc::SdrColorMapping::luminance),cap/80.);
+    const double white=pq(1.5),output_white=pq(203./80.);
+    const double peak_pq=std::max(output_white,pq(peak));
+    const double knee=std::clamp(double(shoulder),0.,.99),input_knee=pq(knee*203./80.);
+    const double curve_knee=intensity(input_knee,peak_pq,white),curve_peak=intensity(peak_pq,peak_pq,white);
+    const auto curve=[&](double value) {
+        if(value<=knee)return value;
+        const double input=std::min(pq(value*203./80.),peak_pq);
+        const double mapped=input_knee+(intensity(input,peak_pq,white)-curve_knee)*
+            (output_white-input_knee)/std::max(curve_peak-curve_knee,1e-12);
+        return std::clamp(inverse_pq(std::clamp(mapped,input_knee,output_white))*80./203.,0.,1.);
+    };
+    hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned) {
+        for(size_t pixel=begin;pixel<end;++pixel) {
+            const size_t i=pixel*4;
+            if(mapping==jxrc::SdrColorMapping::per_channel) {
+                for(unsigned c=0;c<3;++c)adjusted[i+c]=float(curve(adjusted[i+c]));
+            } else {
+                const double metric=mapping==jxrc::SdrColorMapping::luminance?
+                    double(adjusted[i])*luma[0]+double(adjusted[i+1])*luma[1]+double(adjusted[i+2])*luma[2]:
+                    std::max({adjusted[i],adjusted[i+1],adjusted[i+2]});
+                if(metric>knee) {
+                    const double scale=curve(metric)/metric;
+                    for(unsigned c=0;c<3;++c)adjusted[i+c]=float(std::clamp(adjusted[i+c]*scale,0.,1.));
+                }
+            }
+        }
+    });
+    return adjusted;
 }

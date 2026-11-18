@@ -28,7 +28,7 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
 Processing controls (PQ/HLG targets require process mode):
   HLG uses the BT.2100 1000-nit reference display (gamma 1.2).
   --sdr-tone-map                Map HDR highlights into SDR outputs and gain-map bases
-  --sdr-tone-mapper skiv-custom|skiv|logarithmic|extended-reinhard|reinhard (default skiv-custom)
+  --sdr-tone-mapper skiv-custom|skiv-manual|skiv|logarithmic|extended-reinhard|reinhard (default skiv-custom)
   --sdr-color-mapping max-rgb|luminance|per-channel  Default: max-rgb
   --sdr-shadows -1..1 --sdr-midtones -1..1 --sdr-highlights -1..1  Default: 0
   --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.67)
@@ -97,7 +97,7 @@ int run(int argc,char** argv) {
         else if(arg=="--overwrite")o.overwrite=true;
         else if(arg=="--srgb-clamp")o.srgb_clamp=true;
         else if(arg=="--sdr-tone-map")o.sdr_tone_map=true;
-        else if(arg=="--sdr-tone-mapper")o.sdr_tone_mapper=choice<jxrc::SdrToneMapper>(value(),{{"skiv",jxrc::SdrToneMapper::skiv},{"skiv-custom",jxrc::SdrToneMapper::skiv_custom},{"logarithmic",jxrc::SdrToneMapper::logarithmic},{"reinhard",jxrc::SdrToneMapper::reinhard},{"extended-reinhard",jxrc::SdrToneMapper::extended_reinhard}});
+        else if(arg=="--sdr-tone-mapper")o.sdr_tone_mapper=choice<jxrc::SdrToneMapper>(value(),{{"skiv-manual",jxrc::SdrToneMapper::skiv_manual},{"skiv",jxrc::SdrToneMapper::skiv},{"skiv-custom",jxrc::SdrToneMapper::skiv_custom},{"logarithmic",jxrc::SdrToneMapper::logarithmic},{"reinhard",jxrc::SdrToneMapper::reinhard},{"extended-reinhard",jxrc::SdrToneMapper::extended_reinhard}});
         else if(arg=="--sdr-color-mapping")o.sdr_color_mapping=choice<jxrc::SdrColorMapping>(value(),{{"max-rgb",jxrc::SdrColorMapping::max_rgb},{"luminance",jxrc::SdrColorMapping::luminance},{"per-channel",jxrc::SdrColorMapping::per_channel}});
         else if(arg=="--sdr-shadows")o.sdr_shadows=number(value());
         else if(arg=="--sdr-midtones")o.sdr_midtones=number(value());

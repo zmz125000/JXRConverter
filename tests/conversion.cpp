@@ -1709,6 +1709,27 @@ static void skiv_tone_mapping(const fs::path& dir) {
         const auto result=tone_map_skiv_base(wide,gamut,false,.67f,2000.f);
         for(size_t i=0;i<result.size();i+=4) {const auto rgb=skiv::transform(skiv::xyz709,skiv::transform(space,{result[i],result[i+1],result[i+2]}));for(unsigned c=0;c<3;++c)check(std::abs(rgb[c]-stock[i+c])<.0001,"SKIV rematrix changed output colors");}
     }
+    // Manual replaces ICtCp color mapping: independent channels keep a dim
+    // channel below the shoulder, whereas shared metrics scale it together.
+    const std::vector<float> colored={4,.2f,.1f,.4f, .18f,.18f,.18f,1};
+    const std::array<float,3> luma={.2126f,.7152f,.0722f};
+    const auto maxManual=tone_map_skiv_manual(colored,0,.67f,2000,jxrc::SdrColorMapping::max_rgb,luma,{});
+    const auto lumManual=tone_map_skiv_manual(colored,0,.67f,2000,jxrc::SdrColorMapping::luminance,luma,{});
+    const auto perManual=tone_map_skiv_manual(colored,0,.67f,2000,jxrc::SdrColorMapping::per_channel,luma,{});
+    check(perManual[1]==colored[1]&&perManual[2]==colored[2],"Manual Per channel did not replace SKIV chroma mapping");
+    check(maxManual!=lumManual&&maxManual!=perManual&&lumManual!=perManual,"Manual color modes have no effect");
+    check(std::abs(maxManual[1]/maxManual[2]-2.f)<.0001f,"Manual Max RGB changed channel ratios");
+    for(const auto* result:{&maxManual,&lumManual,&perManual}) {
+        check((*result)[3]==.4f&&(*result)[7]==1.f,"Manual changed alpha");
+        for(unsigned c=0;c<3;++c)check((*result)[4+c]==colored[4+c],"Manual changed pixels below shoulder");
+    }
+    for(auto mapping:{jxrc::SdrColorMapping::max_rgb,jxrc::SdrColorMapping::luminance,jxrc::SdrColorMapping::per_channel}) {
+        auto neutral=tone_map_skiv_manual(ramp,0,.67f,2000,mapping,luma,{});float previous=0;
+        for(size_t i=0;i<neutral.size();i+=4) {
+            check(neutral[i]>=previous-.0001f&&neutral[i]<=1.f,"Manual neutral curve is not monotonic/bounded");previous=neutral[i];
+        }
+    }
+    check(maxManual!=tone_map_skiv_manual(colored,0,.67f,2000,jxrc::SdrColorMapping::max_rgb,luma,{.4f,-.5f,.7f}),"Manual ignored tonal edits");
     std::vector<float> pixels(16*16*4);
     for(size_t i=0;i<256;++i) {const float v=i%16<4?.2f:i%16<8?1.f:i%16<12?3.f:8.f;for(unsigned c=0;c<3;++c)pixels[i*4+c]=v;pixels[i*4+3]=1;}
     const auto source=dir/"skiv-source.jxl";
@@ -1720,6 +1741,12 @@ static void skiv_tone_mapping(const fs::path& dir) {
     const auto ignored=dir/"skiv-stock-ignored.png";session.convert(ignored,o);check(bytes(ignored)==bytes(stockPath),"Stock SKIV used disabled controls");
     o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_custom;o.sdr_shoulder=.67;o.sdr_hdr_range_nits=1000;
     const auto customIgnored=dir/"skiv-custom-ignored.png";session.convert(customIgnored,o);check(bytes(customIgnored)==bytes(customPath),"SKIV custom used disabled color/auto/tonal controls");
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_manual;
+    const auto manualPath=dir/"skiv-manual.png";session.convert(manualPath,o);
+    o.sdr_shadows=-.6f;o.sdr_midtones=.4f;o.sdr_highlights=-.3f;
+    const auto manualEdited=dir/"skiv-manual-edited.png";session.convert(manualEdited,o);
+    check(bytes(manualPath)!=bytes(manualEdited),"Manual tonal change reused cached SDR pixels");
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_custom;
     auto decode_sdr=[](const fs::path& path) {const auto data=bytes(path);const auto raster=decode_regular(data.data(),data.size());std::vector<float> out;uhdr_color_gamut_t gamut;regular_to_linear(raster,out,gamut);return out;};
     const auto expectedBase=decode_sdr(customPath);
     for(auto target:{jxrc::Target::jpeg_gainmap,jxrc::Target::avif_gainmap}) {
@@ -1728,6 +1755,7 @@ static void skiv_tone_mapping(const fs::path& dir) {
         const auto actualBase=decode_sdr(basePath);
         for(unsigned x:{2u,6u,10u,14u})check(std::abs(actualBase[x*4]-expectedBase[x*4])<.04,"SKIV gain-map base differs from SDR output");
     }
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_manual;
     for(auto target:{jxrc::Target::png_hdr,jxrc::Target::jxl_linear,jxrc::Target::avif_hlg}) {
         o.target=target;const auto enabled=dir/("skiv-hdr-on-"+std::to_string(int(target))),disabled=dir/("skiv-hdr-off-"+std::to_string(int(target)));
         o.sdr_tone_map=true;session.convert(enabled,o);o.sdr_tone_map=false;session.convert(disabled,o);check(bytes(enabled)==bytes(disabled),"SKIV changed HDR output");

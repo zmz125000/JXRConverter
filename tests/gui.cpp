@@ -324,7 +324,7 @@ private slots:
     void autoToneControlsAndReset() {
         appSettings().clear();MainWindow window;
         auto* automatic=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(automatic);QVERIFY(!automatic->isChecked());
-        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QVERIFY(mapper);mapper->setCurrentIndex(4);
+        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QVERIFY(mapper);mapper->setCurrentIndex(mapper->findData(2));
         automatic->setChecked(true);QVERIFY(mapper->isEnabled());
         auto* autoShoulder=window.findChild<QCheckBox*>("sdrAutoShoulder");QVERIFY(autoShoulder);QVERIFY(!autoShoulder->isChecked());
         QVERIFY(window.findChild<QSlider*>("sdrShoulder")->isEnabled());
@@ -334,7 +334,7 @@ private slots:
             auto* input=window.findChild<QDoubleSpinBox*>(name);QVERIFY(!input->isEnabled());
             QVERIFY(!window.findChild<QSlider*>(QString(name)+"Slider")->isEnabled());
         }
-        automatic->setChecked(false);QVERIFY(mapper->isEnabled());QCOMPARE(mapper->currentIndex(),4);
+        automatic->setChecked(false);QVERIFY(mapper->isEnabled());QCOMPARE(mapper->currentData().toInt(),2);
         window.findChild<QDoubleSpinBox*>("sdrShadows")->setValue(.5);
         window.findChild<QSlider*>("sdrShoulder")->setValue(40);
         auto* reset=window.findChild<QPushButton*>("resetSdrToneMapping");QVERIFY(reset);reset->click();
@@ -346,7 +346,7 @@ private slots:
     }
     void skivToneMapControls() {
         appSettings().clear();MainWindow window;
-        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),5);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
+        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),6);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
         QVERIFY(window.options().sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom);QVERIFY(!window.options().sdr_auto_tone_curve);
         auto* shoulder=window.findChild<QSlider*>("sdrShoulder");auto* range=window.findChild<QSpinBox*>("sdrHdrRangeInput");
         auto* autoRange=window.findChild<QCheckBox*>("sdrAutoHdrRange");QVERIFY(shoulder->isEnabled());QVERIFY(autoRange->isEnabled());
@@ -356,7 +356,14 @@ private slots:
         for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})QVERIFY(!window.findChild<QDoubleSpinBox*>(name)->isEnabled());
         mapper->setCurrentIndex(0);QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::skiv);
         QVERIFY(!shoulder->isEnabled());QVERIFY(!range->isEnabled());QVERIFY(!autoRange->isEnabled());
-        mapper->setCurrentIndex(2);QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());QVERIFY(autoRange->isEnabled());
+        mapper->setCurrentIndex(mapper->findData(5));QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::skiv_manual);
+        QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());
+        QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());
+        QVERIFY(!window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
+        window.findChild<QCheckBox*>("sdrAutoToneCurve")->setChecked(true);
+        for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})QVERIFY(window.findChild<QDoubleSpinBox*>(name)->isEnabled());
+        window.findChild<QCheckBox*>("sdrAutoToneCurve")->setChecked(false);
+        mapper->setCurrentIndex(mapper->findData(0));QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());QVERIFY(autoRange->isEnabled());
         QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());QVERIFY(window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
         mapper->setCurrentIndex(1);window.findChild<QCheckBox*>("sdrToneMap")->setChecked(false);QVERIFY(!mapper->isEnabled());
         window.findChild<QPushButton*>("resetSdrToneMapping")->click();QCOMPARE(mapper->currentIndex(),1);QVERIFY(shoulder->isEnabled());
@@ -370,7 +377,7 @@ private slots:
             auto* autoCurve=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(autoCurve);QVERIFY(!autoCurve->isChecked());autoCurve->setChecked(true);
             window.findChild<QCheckBox*>("sdrAutoShoulder")->setChecked(true);
             auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");
-            QVERIFY(mapper);mapper->setCurrentIndex(3);
+            QVERIFY(mapper);mapper->setCurrentIndex(mapper->findData(1));
             auto* enabled=window.findChild<QCheckBox*>("sdrToneMap");
             auto* shoulder=window.findChild<QSlider*>("sdrShoulder");
             auto* range=window.findChild<QSlider*>("sdrHdrRangeNits");
@@ -388,7 +395,7 @@ private slots:
             QCOMPARE(options.sdr_shoulder,.75f);QCOMPARE(options.sdr_hdr_range_nits,1500);
             QVERIFY(!range->isEnabled());QVERIFY(!rangeInput->isEnabled());
         }
-        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrAutoShoulder")->isChecked());QVERIFY(restored.findChild<QCheckBox*>("sdrAutoToneCurve")->isChecked());QCOMPARE(restored.findChild<QComboBox*>("sdrColorMapping")->currentIndex(),1);QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentIndex(),3);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
+        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrAutoShoulder")->isChecked());QVERIFY(restored.findChild<QCheckBox*>("sdrAutoToneCurve")->isChecked());QCOMPARE(restored.findChild<QComboBox*>("sdrColorMapping")->currentIndex(),1);QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentData().toInt(),1);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
         appSettings().clear();
     }
     void pngThumbnailFallback() {

@@ -161,7 +161,7 @@ void validate(const Options& o) {
     if(o.quality.png_depth!=8&&o.quality.png_depth!=16)throw std::invalid_argument("PNG depth must be 8 or 16");
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
-    range(static_cast<int>(o.sdr_tone_mapper),0,4,"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
+    range(static_cast<int>(o.sdr_tone_mapper),0,5,"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
     range(o.sdr_shoulder,0,0.99,"SDR shoulder");range(o.sdr_hdr_range_nits,204,10000,"SDR HDR range");
     range(o.sdr_shadows,-1,1,"SDR shadows");range(o.sdr_midtones,-1,1,"SDR midtones");range(o.sdr_highlights,-1,1,"SDR highlights");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
@@ -240,6 +240,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
     const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png;
     const bool base_only=cache.gainmap&&!full_gainmap&&sdr_target;
+    const bool manual_tones=o.sdr_tone_mapper==SdrToneMapper::skiv_manual||
+        (!skiv_tone_mapper(o.sdr_tone_mapper)&&!o.sdr_auto_tone_curve);
+    const bool tonal_edits=o.sdr_tone_map&&manual_tones&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights);
     if(cache.gainmap&&!full_gainmap) {
         const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
         // Off/Auto can edit the stored SDR base, but rebuilding a gain map
@@ -250,7 +253,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp && !(o.sdr_tone_map&&!skiv_tone_mapper(o.sdr_tone_mapper)&&!o.sdr_auto_tone_curve&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights))) {
+    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
         if(format==6&&!cache.raster_hdr) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
             cache.raster_hdr=regular->hdr();direct_sdr=!cache.raster_hdr;
@@ -260,7 +263,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     // Off/Auto export the stored base to SDR/source targets, retaining an
     // existing map in JPEG/AVIF. Full renders HDR before encoding any target.
     const bool direct_gainmap=cache.gainmap && !full_gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp &&
-        !(base_only&&o.sdr_tone_map&&!skiv_tone_mapper(o.sdr_tone_mapper)&&!o.sdr_auto_tone_curve&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights));
+        !(base_only&&tonal_edits);
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
@@ -416,7 +419,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
-            const std::array<float,3> zones=(skiv_tone_mapper(o.sdr_tone_mapper)||o.sdr_auto_tone_curve)?std::array<float,3>{}:std::array<float,3>{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights};
+            const std::array<float,3> zones=manual_tones?std::array<float,3>{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights}:std::array<float,3>{};
             const bool adjust_zones=zones!=std::array<float,3>{};
             if(peak>1.f||adjust_zones) {
                 // The manual range is a ceiling. Fit a dimmer source to its
@@ -430,7 +433,10 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                     // than the pre-adjustment content peak, as its manual cap.
                     const float curve_range=(o.sdr_auto_tone_curve||adjust_zones)&&!o.sdr_auto_hdr_range?
                         float(o.sdr_hdr_range_nits):range;
-                    if(skiv_tone_mapper(o.sdr_tone_mapper)) {
+                    if(o.sdr_tone_mapper==SdrToneMapper::skiv_manual) {
+                        cache.mapped_sdr=tone_map_skiv_manual(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
+                            o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones);
+                    } else if(skiv_tone_mapper(o.sdr_tone_mapper)) {
                         cache.mapped_sdr=tone_map_skiv_base(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
                             o.sdr_tone_mapper==SdrToneMapper::skiv_custom,o.sdr_shoulder,
                             o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits));
