@@ -163,7 +163,6 @@ private:
     qint64 nextJob_ = 1, viewedJob_ = 0, quickJob_ = -1;
     struct BrowserState {
         QVariantMap controls;
-        QString search;
         int mode = 0, aspect = 2;
         Qt::SortOrder order = Qt::AscendingOrder;
         QByteArray header;
@@ -174,6 +173,10 @@ private:
         int currentColumn = 0;
     };
     QHash<QString,BrowserState> browserStates_;
+    struct FilterState {QVariantMap controls;QString search;};
+    FilterState defaultFilters_;
+    QHash<QString,FilterState> filterStates_;
+    QString filterTabKey_;
     QString browserTabKey_;
     QHash<QString,ViewportState> scrollPositions_;
     quint64 scrollRestoreGeneration_ = 0;

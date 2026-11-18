@@ -183,6 +183,7 @@ protected:
 };
 QComboBox* combo(const QStringList& values,const char* name,QWidget* parent=nullptr) {auto* w=new QComboBox(parent);w->addItems(values);w->setObjectName(name);return w;}
 QSpinBox* spin(int low,int high,int initial,const char* name) {auto* w=new QSpinBox;w->setRange(low,high);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
+const char* settingProperty(QWidget* widget);
 constexpr int quickJobLimit=5;
 QDoubleSpinBox* real(double low,double high,double initial,double step,const char* name) {auto* w=new QDoubleSpinBox;w->setRange(low,high);w->setDecimals(2);w->setSingleStep(step);w->setValue(initial);w->setObjectName(name);w->setKeyboardTracking(false);return w;}
 QWidget* sliderInput(QDoubleSpinBox* input,const char* name) {
@@ -256,7 +257,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* reset=new QPushButton("Reset filters");filters->addWidget(reset);dates->addStretch();
     auto* viewBar=new QHBoxLayout;viewMode_=new QButtonGroup(this);viewMode_->setObjectName("viewMode");viewMode_->setExclusive(true);
     const QStringList viewNames={"Grid","List","Details"};for(int i=0;i<viewNames.size();++i){auto* button=new QPushButton(viewNames[i]);button->setCheckable(true);viewMode_->addButton(button,i);viewBar->addWidget(button);}viewMode_->button(0)->setChecked(true);sort_=new QComboBox;sort_->setObjectName("sortField");
-    for(int col=0;col<Catalog::ColumnCount;++col)sort_->addItem(catalog_->headerData(col,Qt::Horizontal,Qt::DisplayRole).toString(),col);
+    const int sortColumns[]={Catalog::Name,Catalog::Modified,Catalog::Created,Catalog::Size,Catalog::Format,
+        Catalog::Dimensions,Catalog::Width,Catalog::Height,Catalog::MaxEdge,Catalog::Megapixels,Catalog::AspectRatio,Catalog::Path,
+        Catalog::Transfer,Catalog::Primaries,Catalog::Bits,Catalog::Hdr,Catalog::Gainmap,Catalog::Raw,
+        Catalog::Status,Catalog::Error,Catalog::MetadataWarning,Catalog::Captured,Catalog::ExifDate,
+        Catalog::Camera,Catalog::Lens,Catalog::Iso,Catalog::Aperture,Catalog::Shutter,Catalog::Focal};
+    for(const int col:sortColumns)sort_->addItem(catalog_->headerData(col,Qt::Horizontal,Qt::DisplayRole).toString(),col);
     auto* direction=new QPushButton("Ascending");direction->setObjectName("sortDirection");viewBar->addWidget(new QLabel("Sort"));viewBar->addWidget(sort_);viewBar->addWidget(direction);viewBar->addStretch();
     smoothScrolling_=new QCheckBox("Smooth scrolling");smoothScrolling_->setObjectName("smoothScrolling");
     smoothScrolling_->setToolTip("Animate scrolling in the image grid, list and details views.");viewBar->addWidget(smoothScrolling_);
@@ -421,7 +427,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* dateRefresh=new QTimer(this);dateRefresh->setInterval(30000);connect(dateRefresh,&QTimer::timeout,this,[this]{if(today_->isChecked())updateFilter();});dateRefresh->start();
     connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);updateBackgroundMetadata();});
     connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
-    connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(column);direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
+    connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(sort_->findData(column));direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
     connect(smoothScrolling_,&QCheckBox::toggled,this,[this](bool enabled){list_->setSmoothScrolling(enabled);table_->setSmoothScrolling(enabled);});
     connect(autoAspect_,&QCheckBox::toggled,this,[this](bool on){catalog_->setAspectSampling(on);if(on){if(!portraitAspect_->isChecked()&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);}else{aspectSamplePending_=false;aspectTimer_->stop();}});
     connect(portraitAspect_,&QCheckBox::toggled,this,[this](bool on){if(!autoAspect_->isChecked())return;if(!on&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);});
@@ -468,6 +474,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* control:findChildren<QAbstractSpinBox*>())control->installEventFilter(this);
     for(auto* control:findChildren<QSlider*>())control->installEventFilter(this);
     jobButton_->installEventFilter(this);
+    for(auto* widget:filterControls())defaultFilters_.controls.insert(widget->objectName(),widget->property(settingProperty(widget)));
     auto settings=appSettings();restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",200).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
@@ -511,6 +518,7 @@ void MainWindow::restoreSettings() {
         const auto key="controls/"+widget->objectName();
         if(settings.contains(key)){const QSignalBlocker blocker(widget);
             if(widget==sdrToneMapper_){const int index=sdrToneMapper_->findData(settings.value(key).toInt());sdrToneMapper_->setCurrentIndex(index<0?1:index);}
+            else if(widget==sort_)sort_->setCurrentIndex(std::max(0,sort_->findData(settings.value(key).toInt())));
             else widget->setProperty(settingProperty(widget),settings.value(key));}
     }
     if(settings.contains("conversion/targets")) {
@@ -528,7 +536,7 @@ void MainWindow::restoreSettings() {
 }
 void MainWindow::saveSettings() const {
     auto settings=appSettings();
-    for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget==sdrToneMapper_?sdrToneMapper_->currentData():widget->property(settingProperty(widget)));
+    for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget==sdrToneMapper_?sdrToneMapper_->currentData():widget==sort_?sort_->currentData():widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
     settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
 }
@@ -779,7 +787,7 @@ void MainWindow::removeImageSelection() {
 }
 QString MainWindow::browserScrollKey() const {return QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{})+":"+QString::number(viewMode_->checkedId());}
 QList<QWidget*> MainWindow::browserControls() const {
-    return {search_,instant_,metadataFilters_,today_,format_,range_,minImageEdge_,megapixels_,dateEnabled_,dateFrom_,dateTo_,sort_,size_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_};
+    return {sort_,size_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_};
 }
 void MainWindow::switchBrowserState() {
     const auto key=QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{});
@@ -789,7 +797,7 @@ void MainWindow::switchBrowserState() {
     restoringBrowserScroll_=true;
     if(!browserTabKey_.isEmpty()){
         BrowserState state;for(auto* widget:browserControls())state.controls.insert(widget->objectName(),widget->property(settingProperty(widget)));
-        state.search=appliedSearch_;state.mode=viewMode_->checkedId();state.aspect=aspectIndex_;state.order=sortOrder_;state.header=table_->horizontalHeader()->saveState();
+        state.mode=viewMode_->checkedId();state.aspect=aspectIndex_;state.order=sortOrder_;state.header=table_->horizontalHeader()->saveState();
         browserStates_.insert(browserTabKey_,state);
     }
     browserTabKey_=key;
@@ -798,7 +806,7 @@ void MainWindow::switchBrowserState() {
     if(it!=browserStates_.cend()){
         const auto state=it.value();
         for(auto* widget:browserControls()){const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),state.controls.value(widget->objectName()));}
-        viewMode_->button(state.mode)->setChecked(true);aspectIndex_=state.aspect;sortOrder_=state.order;appliedSearch_=state.search;
+        viewMode_->button(state.mode)->setChecked(true);aspectIndex_=state.aspect;sortOrder_=state.order;
         {const QSignalBlocker blocker(table_->horizontalHeader());table_->horizontalHeader()->restoreState(state.header);}
         findChild<QPushButton*>("sortDirection")->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");
         // Visibility is normally updated by the Filters checkbox's signal.
@@ -806,6 +814,23 @@ void MainWindow::switchBrowserState() {
         const QSignalBlocker blocker(selection_);const bool previous=syncingSelection_;syncingSelection_=true;
         proxy_->sort(sort_->currentData().toInt(),sortOrder_);syncingSelection_=previous;
     }
+    const int tab=statusFilter_->checkedId();
+    const QString filterKey=(tab==0||tab==3||tab==4)?QStringLiteral("all"):
+        QString::number(tab)+":"+(tab==2?QString::number(viewedJob_):QString{});
+    if(filterKey!=filterTabKey_) {
+        if(!filterTabKey_.isEmpty()) {
+            FilterState previous;
+            for(auto* widget:filterControls())previous.controls.insert(widget->objectName(),widget->property(settingProperty(widget)));
+            previous.search=appliedSearch_;filterStates_.insert(filterTabKey_,previous);
+            const auto state=filterStates_.value(filterKey,defaultFilters_);
+            for(auto* widget:filterControls()) {
+                const QSignalBlocker blocker(widget);widget->setProperty(settingProperty(widget),state.controls.value(widget->objectName()));
+            }
+            appliedSearch_=state.search;
+        }
+        filterTabKey_=filterKey;
+    }
+    findChild<QScrollArea*>("metadataFilterScroll")->setVisible(metadataFilters_->isChecked());
     applyPresentation();
     catalog_->setAspectSampling(autoAspect_->isChecked());
 }
@@ -906,6 +931,7 @@ void MainWindow::clearJobs() {
     refreshJobs();saveJobs();updateFilter();
     for(auto it=scrollPositions_.begin();it!=scrollPositions_.end();)if(it.key().startsWith("2:"))it=scrollPositions_.erase(it);else ++it;
     for(auto it=browserStates_.begin();it!=browserStates_.end();)if(it.key().startsWith("2:"))it=browserStates_.erase(it);else ++it;
+    for(auto it=filterStates_.begin();it!=filterStates_.end();)if(it.key().startsWith("2:"))it=filterStates_.erase(it);else ++it;
 }
 bool MainWindow::isDraftJob(qint64 number) const {
     const SavedJob* saved=&temporaryJob_;for(const auto& job:savedJobs_)if(job.number==number)saved=&job;
@@ -1250,11 +1276,13 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
         if(priority||reuseJob||quick)queue_->enqueueNext(std::move(jobs),workers_->value());
         else if(append)queue_->enqueue(std::move(jobs),workers_->value());
         else queue_->start(std::move(jobs),workers_->value());
-        updateCounts();
+        refreshJobs();updateCounts();
     } catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);}
 }
 void MainWindow::reportError(const QString& message,const QStringList& paths) {
+    catalog_->beginStatusUpdates();
     for(const auto& path:paths)catalog_->setStatus(path,"Failed",message);
+    catalog_->endStatusUpdates();
     queueState_->setText(message);logMessage(message);
 }
 void MainWindow::stopQueue() {

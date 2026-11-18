@@ -22,6 +22,7 @@
 #include <QMimeData>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QElapsedTimer>
 #include <QSemaphore>
 #include <QSlider>
 #include <QSpinBox>
@@ -665,6 +666,46 @@ private slots:
         window.grab().save(QDir::tempPath()+"/jxrc-filter-inputs-test.png");
         window.findChild<QCheckBox*>("metadataFilters")->setChecked(false);
     }
+    void sharedAndIndependentTabFilters() {
+        appSettings().clear();MainWindow window;
+        const auto a=makeImage(root("tab-filters"),"apple.jpg",16,12,80);
+        const auto b=makeImage(root("tab-filters"),"berry.jpg",16,12,100);
+        window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
+        auto* view=window.findChild<FileListView*>();
+        view->selectionModel()->select(QItemSelection(window.filterModel()->index(0,0),window.filterModel()->index(1,0)),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        window.catalog()->setStatus(a,"Done");window.catalog()->setStatus(b,"Failed");
+        auto* instant=window.findChild<QLineEdit*>("instantFilter");
+        auto* filters=window.findChild<QCheckBox*>("metadataFilters");
+        instant->setText("app");filters->setChecked(true);QCOMPARE(window.filterModel()->rowCount(),1);
+        window.findChild<QPushButton*>("statusSelected")->click();
+        QVERIFY(instant->text().isEmpty());QVERIFY(!filters->isChecked());QCOMPARE(window.filterModel()->rowCount(),2);
+        instant->setText("berry");
+        window.findChild<QPushButton*>("statusRemember")->click();QVERIFY(instant->text().isEmpty());
+        instant->setText("remember-only");
+        window.findChild<QPushButton*>("statusAll")->click();QCOMPARE(instant->text(),QString("app"));QVERIFY(filters->isChecked());
+        window.findChild<QPushButton*>("statusFinished")->click();QCOMPARE(instant->text(),QString("app"));QCOMPARE(window.filterModel()->rowCount(),1);
+        window.findChild<QPushButton*>("statusFailed")->click();QCOMPARE(instant->text(),QString("app"));QCOMPARE(window.filterModel()->rowCount(),0);
+        instant->setText("ber");window.findChild<QPushButton*>("statusAll")->click();QCOMPARE(instant->text(),QString("ber"));
+        window.findChild<QPushButton*>("statusSelected")->click();QCOMPARE(instant->text(),QString("berry"));QVERIFY(!filters->isChecked());
+        window.findChild<QPushButton*>("statusRemember")->click();QCOMPARE(instant->text(),QString("remember-only"));
+    }
+    void basicSortFieldsFirst() {
+        appSettings().clear();
+        appSettings().setValue("controls/sortField",int(Catalog::Modified));
+        {
+            MainWindow window;auto* sort=window.findChild<QComboBox*>("sortField");
+            QCOMPARE(sort->count(),int(Catalog::ColumnCount));
+            QCOMPARE(sort->itemData(0).toInt(),int(Catalog::Name));QCOMPARE(sort->itemData(1).toInt(),int(Catalog::Modified));
+            QCOMPARE(sort->itemData(2).toInt(),int(Catalog::Created));QCOMPARE(sort->itemData(3).toInt(),int(Catalog::Size));
+            QVERIFY(sort->findData(Catalog::Path)<sort->findData(Catalog::Camera));
+            QVERIFY(sort->findData(Catalog::Format)<sort->findData(Catalog::ExifDate));
+            QCOMPARE(sort->currentData().toInt(),int(Catalog::Modified));
+            window.findChild<FileTableView*>()->sortByColumn(Catalog::Created,Qt::DescendingOrder);
+            QCOMPARE(sort->currentData().toInt(),int(Catalog::Created));
+        }
+        QCOMPARE(appSettings().value("controls/sortField").toInt(),int(Catalog::Created));
+        MainWindow restored;QCOMPARE(restored.findChild<QComboBox*>("sortField")->currentData().toInt(),int(Catalog::Created));
+    }
     void instantFilenameFilterWithMetadataFilters() {
         appSettings().clear();MainWindow window;window.show();
         window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
@@ -830,7 +871,7 @@ private slots:
             QVERIFY(file.open(QIODevice::ReadWrite));QVERIFY(file.setFileTime(entry.second,QFileDevice::FileModificationTime));file.close();
         }
         MainWindow window;window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
-        window.findChild<QComboBox*>("sortField")->setCurrentIndex(Catalog::Modified);
+        window.findChild<QComboBox*>("sortField")->setCurrentIndex(window.findChild<QComboBox*>("sortField")->findData(Catalog::Modified));
         window.addPaths({newer,older});QTRY_COMPARE(window.catalog()->rowCount(),2);
         QTRY_VERIFY(!window.catalog()->scanning());
         for(const auto& path:{older,newer}) {
@@ -1027,9 +1068,9 @@ private slots:
         auto* instant=window.findChild<QLineEdit*>("instantFilter");instant->setText("00.jpg");
         auto* size=window.findChild<QSlider*>("thumbnailSize");size->setValue(300);
         window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
-        auto* sort=window.findChild<QComboBox*>("sortField");sort->setCurrentIndex(Catalog::Format);
+        auto* sort=window.findChild<QComboBox*>("sortField");sort->setCurrentIndex(sort->findData(Catalog::Format));
         window.findChild<QPushButton*>("statusFinished")->click();
-        QVERIFY(instant->text().isEmpty());QCOMPARE(size->value(),100);QCOMPARE(sort->currentData().toInt(),int(Catalog::Name));
+        QCOMPARE(instant->text(),QString("00.jpg"));QCOMPARE(size->value(),100);QCOMPARE(sort->currentData().toInt(),int(Catalog::Name));
         window.findChild<QButtonGroup*>("viewMode")->button(2)->click();
         window.findChild<FileTableView*>()->setColumnWidth(Catalog::Name,310);
         window.findChild<QPushButton*>("statusAll")->click();
@@ -1715,6 +1756,34 @@ private slots:
         edge->setValue(0);QVERIFY(transcode->isEnabled());QVERIFY(window.options().jpeg_transcoding);
         mode->setCurrentIndex(0);QVERIFY(transcode->isEnabled());QVERIFY(window.options().jpeg_transcoding);
         transcode->setChecked(false);
+    }
+    void largeBatchStartAndStop() {
+        appSettings().clear();
+        const auto directory=root("large-queue-input");QVERIFY(QDir().mkpath(directory));
+        QStringList paths;paths.reserve(10000);
+        for(int i=0;i<10000;++i) {
+            const auto path=directory+"/"+QString::number(i)+".jxr";
+            QFile file(path);QVERIFY(file.open(QIODevice::WriteOnly));file.write("invalid fixture");paths.append(path);
+        }
+        MainWindow window;
+        window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
+        window.addPaths(paths);QTRY_COMPARE_WITH_TIMEOUT(window.catalog()->rowCount(),10000,30000);
+        window.findChild<QLineEdit*>("outputDirectory")->setText(root("large-queue-output"));
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        for(int i=0;i<targets->count();++i)targets->item(i)->setCheckState(targets->item(i)->data(Qt::UserRole).toInt()==int(jxrc::Target::png)?Qt::Checked:Qt::Unchecked);
+        QSignalSpy changes(window.catalog(),&QAbstractItemModel::dataChanged),done(window.queue(),&ConversionQueue::batchFinished);
+        QElapsedTimer elapsed;elapsed.start();window.findChild<QPushButton*>("convertVisible")->click();
+        const auto startMs=elapsed.elapsed();QCOMPARE(window.queue()->total(),10000);
+        // Queueing and cancellation must notify the model in batches, even
+        // though every output still receives its individual terminal state.
+        QVERIFY(changes.count()<=2);changes.clear();elapsed.restart();
+        window.findChild<QPushButton*>("cancelQueue")->click();const auto stopMs=elapsed.elapsed();
+        QVERIFY(changes.count()<=2);QVERIFY(!window.queue()->hasPendingFor(paths));
+        qInfo()<<"10000 outputs: start"<<startMs<<"ms, stop"<<stopMs<<"ms";
+        QVERIFY(startMs<10000);QVERIFY(stopMs<10000);
+        QTRY_COMPARE_WITH_TIMEOUT(done.count(),1,30000);
+        QCOMPARE(done[0][0].toInt()+done[0][1].toInt()+done[0][2].toInt(),10000);
+        QVERIFY(done[0][2].toInt()>=10000-coreCount());
     }
     void queueParallelismFailureAndCancel() {
         std::atomic<int> active{0},peak{0},invalidBudget{0};

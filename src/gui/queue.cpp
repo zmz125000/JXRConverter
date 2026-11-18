@@ -117,7 +117,7 @@ QString outputFolder(const QString& input,const QString& directory,Target target
     return QDir(folder).absolutePath();
 }
 QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const Options& options,const OutputLayout& layout) {
-    validate(options);QVector<Job> result;QSet<QString> outputs;
+    validate(options);QVector<Job> result;QSet<QString> outputs;QHash<QString,int> nextSuffix;
     const int target=int(options.target);
     const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl","sdr.png","hdr.png","hlg.png","hlg.jxl","hlg.avif"};
     QString quality;
@@ -146,11 +146,13 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
             if(options.raw.auto_exposure)stem+="_ae";
         }
         const QString folder=outputFolder(input,directory,options.target,layout);
-        QString filename=stem+"_"+suffix;int n=2;
+        const auto namingKey=QDir(folder).absolutePath().toCaseFolded()+QChar(0)+stem.toCaseFolded()+QChar(0)+suffix;
+        QString filename=stem+"_"+suffix;int n=nextSuffix.value(namingKey,2);
         auto outputPath=[&]{return QDir(folder).absoluteFilePath(filename);};
         while(outputs.contains(pathKey(outputPath())) ||
               (layout.rename_conflicts && (QFileInfo::exists(outputPath()) || sources.contains(pathKey(outputPath())))))
             filename=stem+"_"+QString::number(n++)+"_"+suffix;
+        nextSuffix.insert(namingKey,n);
         const QString output=outputPath();outputs.insert(pathKey(output));
         if(sources.contains(pathKey(output)))throw std::invalid_argument("Output would replace an input file");
         Options snapshot=options;if(layout.rename_conflicts)snapshot.overwrite=false;
