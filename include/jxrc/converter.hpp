@@ -51,7 +51,7 @@ struct Options {
     SdrToneMapper sdr_tone_mapper = SdrToneMapper::skiv_custom; // SKIV with the manual SDR shoulder/range.
     SdrColorMapping sdr_color_mapping = SdrColorMapping::max_rgb;
     float sdr_shadows = 0, sdr_midtones = 0, sdr_highlights = 0; // SDR-only tonal adjustments, -1..1.
-    float sdr_shoulder = 0.67f; // Fraction of 203 nits used as the adjustable shoulder.
+    float sdr_shoulder = 0.50f; // Fraction of 203 nits used as the adjustable shoulder.
     int sdr_hdr_range_nits = 2000; // Ceiling in nits; a lower image peak maps to SDR white.
     bool sdr_auto_tone_curve = false; // Cap source first, then fit the adjusted SDR curve endpoint.
     bool sdr_auto_shoulder = false; // Auto tone curve: adapt the shoulder within 50–67%; otherwise use sdr_shoulder.

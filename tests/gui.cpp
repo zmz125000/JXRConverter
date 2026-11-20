@@ -345,7 +345,7 @@ private slots:
         auto* reset=window.findChild<QPushButton*>("resetSdrToneMapping");QVERIFY(reset);reset->click();
         const auto options=window.options();QVERIFY(!options.sdr_auto_tone_curve);QCOMPARE(options.sdr_tone_mapper,jxrc::SdrToneMapper::skiv_custom);QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
         QVERIFY(!options.sdr_auto_shoulder);QVERIFY(window.findChild<QSlider*>("sdrShoulder")->isEnabled());
-        QCOMPARE(options.sdr_shoulder,.67f);QCOMPARE(options.sdr_hdr_range_nits,2000);QCOMPARE(options.sdr_shadows,0.f);
+        QCOMPARE(options.sdr_shoulder,.50f);QCOMPARE(options.sdr_hdr_range_nits,2000);QCOMPARE(options.sdr_shadows,0.f);
         QCOMPARE(window.findChild<QSlider*>("sdrShadowsSlider")->value(),0);
         QCOMPARE(mapper->currentIndex(),1);
     }
@@ -431,7 +431,7 @@ private slots:
             QCOMPARE(slider->value(),75);
             QVERIFY(slider->isEnabled());
             window.findChild<QPushButton*>("resetSdrToneMapping")->click();
-            QCOMPARE(slider->value(),67);
+            QCOMPARE(slider->value(),50);
         }
         appSettings().clear();
     }

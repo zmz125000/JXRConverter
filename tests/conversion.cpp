@@ -1739,7 +1739,7 @@ static void skiv_tone_mapping(const fs::path& dir) {
     const auto stockPath=dir/"skiv-stock.png";session.convert(stockPath,o);check(bytes(customPath)!=bytes(stockPath),"SKIV mode change reused stale SDR render");
     o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;o.sdr_auto_tone_curve=true;o.sdr_auto_shoulder=true;o.sdr_shadows=1;o.sdr_midtones=-1;o.sdr_highlights=.5;o.sdr_shoulder=.1;o.sdr_hdr_range_nits=204;
     const auto ignored=dir/"skiv-stock-ignored.png";session.convert(ignored,o);check(bytes(ignored)==bytes(stockPath),"Stock SKIV used disabled controls");
-    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_custom;o.sdr_shoulder=.67;o.sdr_hdr_range_nits=1000;
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_custom;o.sdr_shoulder=jxrc::Options{}.sdr_shoulder;o.sdr_hdr_range_nits=1000;
     const auto customIgnored=dir/"skiv-custom-ignored.png";session.convert(customIgnored,o);check(bytes(customIgnored)==bytes(customPath),"SKIV custom used disabled color/auto/tonal controls");
     o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_manual;
     const auto manualPath=dir/"skiv-manual.png";session.convert(manualPath,o);

@@ -125,7 +125,7 @@ private:
     QListWidget* targets_ = nullptr;
     QLineEdit *search_, *instant_, *format_, *output_;
     QSlider *size_, *sdrShoulder_, *sdrRange_;
-    static constexpr int defaultSdrShoulderPercent = 67;
+    static constexpr int defaultSdrShoulderPercent = 50;
     QSpinBox *minImageEdge_, *quality_, *maxEdge_, *kelvin_, *nits_, *workers_, *sdrRangeInput_;
     QDoubleSpinBox *sdrShadows_, *sdrMidtones_, *sdrHighlights_, *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
