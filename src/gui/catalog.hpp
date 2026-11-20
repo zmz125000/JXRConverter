@@ -20,9 +20,11 @@ struct Record {
     qint64 bytes = 0;
     int width = 0, height = 0, bits = 0, iso = 0;
     double aperture = 0, shutter = 0, focal = 0;
+    double displayAspect = 0;
     bool video = false, raw = false, gainmap = false, hdr = false, inspected = false, thumbnailPending = false, thumbnailFailed = false;
     QDateTime captured, created, modified;
     QDateTime imageDate() const { return captured.isValid()?captured:modified.isValid()?modified:created; }
+    double aspectRatio() const { return displayAspect>0?displayAspect:height>0?double(width)/height:0; }
     QMap<QString, QString> exif;
 };
 bool supportedFile(const QString& path);
@@ -43,6 +45,7 @@ public:
     const Record& record(int row) const { return records_.at(row); }
     QStringList paths() const;
     void addPaths(const QStringList& paths, bool recursive = true, bool includeVideos = true);
+    void addGeneratedImage(const QString& path);
     const QSet<QString>& videoPaths() const { return videoPaths_; }
     void removePaths(const QStringList& paths);
     void clear();

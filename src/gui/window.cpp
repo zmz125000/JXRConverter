@@ -241,12 +241,6 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images and videos",{},
         "Images and videos (*.exr *.hdr *.rgbe *.xyze *.pic *.pfm *.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.heics *.heifs *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw "+
         videoFilePatterns()+");;All files (*)"));});
-    auto* frame=toolbar->addAction("Grab video frame…");
-    frame->setObjectName("grabVideoFrame");
-    connect(frame,&QAction::triggered,this,[this] {
-        const auto source=QFileDialog::getOpenFileName(this,"Open HDR video",{},"Video files ("+videoFilePatterns()+");;All files (*)");
-        if(!source.isEmpty())importVideoFrame(source);
-    });
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open media folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
     auto* recent=new QToolButton;recent->setObjectName("recentFolders");recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
@@ -905,6 +899,7 @@ void MainWindow::restoreBrowserScroll() {
         selection_->setCurrentIndex(current,QItemSelectionModel::NoUpdate);
         view->horizontalScrollBar()->setValue(state.scroll.x());view->verticalScrollBar()->setValue(state.scroll.y());
         changingAspect_=previous;restoringBrowserScroll_=false;
+        if(statusFilter_->checkedId()==VideoTab)requestAspectSample(true);
     });
 }
 namespace {
@@ -1103,12 +1098,21 @@ void MainWindow::importVideoFrame(const QString& source) {
         layout.converted_subfolder=convertedFolder_->isChecked();
         if(output.isEmpty()&&!layout.source_folder)return QString{};
         return outputFolder(source,output,Target::png_hdr,layout);
-    },[this](const QString& path) {
-        addPaths({path});
+    },[this](const QString& path,bool convert)->QString {
+        if(statusFilter_->checkedId()!=0){statusFilter_->button(0)->setChecked(true);updateFilter();}
         selectedImages_={path};
         rememberedImages_.insert(path);
+        catalog_->addGeneratedImage(path);
         syncSelection();
         updateCounts();
+        if(!convert)return {};
+        const auto targets=selectedTargets();
+        if(targets.isEmpty())return "Frame saved. Select an output format to convert it.";
+        if(routingToken_||updater_->installing())return "Frame saved. Use Convert selected when the main window is ready.";
+        auto routing=std::make_shared<Routing>();
+        routing->insert(path,{true,false,{}});
+        return convertPaths({path},targets,false,true,false,false,false,routing)
+            ?"Frame queued for conversion.":"Frame saved. See the output queue for the conversion error.";
     });
 }
 
@@ -1172,7 +1176,7 @@ void MainWindow::applyPresentation() {
 }
 void MainWindow::requestAspectSample(bool viewport) {
     if(!autoAspect_->isChecked()||changingAspect_||restoringBrowserScroll_)return;
-    aspectSamplePending_=true;aspectViewportSample_=viewport;aspectTimer_->start();
+    aspectSamplePending_=true;aspectViewportSample_=viewport||statusFilter_->checkedId()==VideoTab;aspectTimer_->start();
 }
 void MainWindow::setThumbnailAspect(int index) {
     index=std::clamp(index,0,4);if(index==aspectIndex_)return;
@@ -1189,9 +1193,9 @@ void MainWindow::updateAutoThumbnailAspect() {
     else for(int row=0;row<std::min(2,catalog_->rowCount());++row)rows.append(row);
     if(rows.isEmpty())return;
     int choice=-1;
-    for(const auto row:rows){const auto& record=catalog_->record(row);if(record.video)continue;if(!record.inspected)return;
-        if(record.width<=0||record.height<=0){aspectSamplePending_=false;return;}
-        const double ratio=double(record.width)/record.height;
+    for(const auto row:rows){const auto& record=catalog_->record(row);if(!record.inspected)return;
+        if(record.width<=0||record.height<=0){if(record.video)continue;aspectSamplePending_=false;return;}
+        const double ratio=record.aspectRatio();
         // Near-square images use square cells. Landscape and portrait ranges
         // are mirrored, with 1.6 separating 4:3 and 16:9 landscape cells.
         int match=ratio>=1.6?0:ratio>1.1?1:ratio<1.0/1.6?3:ratio<1.0/1.1?4:2;
@@ -1266,9 +1270,9 @@ void MainWindow::convertFiles(bool selected) {
     const bool quick=!paths.isEmpty()&&paths.size()<quickJobLimit&&!reuse;
     convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
 }
-void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing,qint64 contextJob) {
+bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing,qint64 contextJob) {
     if(reuseJob&&contextJob<0)contextJob=viewedJob_;
-    if(routingToken_||paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
+    if(routingToken_||paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return false;
     try {
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
         const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
@@ -1311,7 +1315,7 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
                         updateCounts();
                     },Qt::QueuedConnection);
                 });
-                return;
+                return true;
             }
             routing=prepared;
         }
@@ -1365,7 +1369,8 @@ void MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
         else if(append)queue_->enqueue(std::move(jobs),workers_->value());
         else queue_->start(std::move(jobs),workers_->value());
         refreshJobs();updateCounts();
-    } catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);}
+        return true;
+    } catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);return false;}
 }
 void MainWindow::reportError(const QString& message,const QStringList& paths) {
     catalog_->beginStatusUpdates();

@@ -50,6 +50,17 @@ void keepBasicFileMetadata(Record& updated,const Record& original) {
     if(!updated.created.isValid())updated.created=original.created;
     if(!updated.modified.isValid())updated.modified=original.modified;
 }
+Record fileRecord(const QString& path,const QFileInfo& info,bool video=false) {
+    Record record;
+    record.path=path;
+    record.name=info.fileName();
+    record.format=info.suffix().toUpper();
+    record.video=video;
+    record.bytes=info.size();
+    record.modified=info.lastModified().toLocalTime();
+    record.created=info.birthTime().toLocalTime();
+    return record;
+}
 }
 bool supportedFile(const QString& path) {
     static const QSet<QString> extensions = {"exr","hdr","rgbe","xyze","pic","pfm","png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
@@ -122,7 +133,17 @@ Record metadataFromBytes(const QString& path,const SourceBuffer& source,const st
 }
 }
 Record readMetadata(const QString& path,const std::function<bool()>& cancelled,QSemaphore* sourceReadSlots) {
-    try {return metadataFromBytes(path,readSource(path,cancelled,sourceReadSlots),cancelled);}
+    try {
+        if(supportedVideoFile(path)) {
+            if(sourceReadSlots)sourceReadSlots->acquire();
+            QSemaphoreReleaser releaseReadSlot(sourceReadSlots);
+            checkCancelled(cancelled);
+            auto metadata=readVideoMetadata(path,cancelled);
+            keepBasicFileMetadata(metadata,fileRecord(path,QFileInfo(path),true));
+            return metadata;
+        }
+        return metadataFromBytes(path,readSource(path,cancelled,sourceReadSlots),cancelled);
+    }
     catch(const std::exception& e) {
         Record result;if(cancelled&&cancelled())return result;
         result.path=path;result.name=QFileInfo(path).fileName();result.format=QFileInfo(path).suffix().toUpper();
@@ -232,7 +253,7 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     case Height:return r.height>0?QString::number(r.height):QString{};
     case MaxEdge:return r.width>0&&r.height>0?QString::number(std::max(r.width,r.height)):QString{};
     case Megapixels:return r.width>0&&r.height>0?QString::number(double(r.width)*r.height/1e6,'f',2):QString{};
-    case AspectRatio:return r.width>0&&r.height>0?QString("%1:1").arg(double(r.width)/r.height,0,'f',3):QString{};
+    case AspectRatio:return r.aspectRatio()>0?QString("%1:1").arg(r.aspectRatio(),0,'f',3):QString{};
     case Hdr:return r.inspected?QString(r.hdr?"Yes":"No"):QString{};
     case Gainmap:return r.inspected?QString(r.gainmap?"Yes":"No"):QString{};
     case Raw:return r.inspected?QString(r.raw?"Yes":"No"):QString{};
@@ -262,10 +283,7 @@ void Catalog::addPaths(const QStringList& paths, bool recursive, bool includeVid
         auto add=[&](const QString& path,const QFileInfo& info,bool allowVideo) {
             const bool video=allowVideo&&supportedVideoFile(path);
             if(!video&&!supportedFile(path))return;
-            Record r;r.path=path;r.name=info.fileName();r.format=info.suffix().toUpper();
-            r.video=video;
-            r.bytes=info.size();r.modified=info.lastModified().toLocalTime();r.created=info.birthTime().toLocalTime();
-            batch.append(std::move(r));
+            batch.append(fileRecord(path,info,video));
         };
         for(const auto& path:paths) {
             if(!epoch->load())break;
@@ -286,6 +304,9 @@ void Catalog::addPaths(const QStringList& paths, bool recursive, bool includeVid
         }
         send();QMetaObject::invokeMethod(this,[this,epoch]{if(epoch->load()){--scanning_;emit scanStateChanged(scanning_>0);}},Qt::QueuedConnection);
     });
+}
+void Catalog::addGeneratedImage(const QString& path) {
+    insertPaths({fileRecord(path,QFileInfo(path))});
 }
 void Catalog::insertPaths(const QVector<Record>& paths) {
     const auto epoch=epoch_;
@@ -311,7 +332,7 @@ void Catalog::insertPaths(const QVector<Record>& paths) {
 }
 bool Catalog::metadataWanted(const QString& path) const {
     if(backgroundMetadata_||visibleThumbnails_.contains(path))return true;
-    // The first two images are used by automatic grid aspect detection.
+    // The first two entries are used by automatic grid aspect detection.
     if(aspectSampling_)for(int row=0;row<std::min(2,int(records_.size()));++row)if(records_[row].path==path)return true;
     return false;
 }
@@ -333,10 +354,10 @@ void Catalog::pumpMetadata() {
     auto standalone=[this](int row) {
         // A visible thumbnail supplies metadata from its source buffer. Only
         // failed thumbnails need a separate metadata fallback.
-        return row>=0&&!records_[row].video&&!records_[row].inspected&&(!visibleThumbnails_.contains(records_[row].path)||records_[row].thumbnailFailed);
+        return row>=0&&!records_[row].inspected&&(!visibleThumbnails_.contains(records_[row].path)||records_[row].thumbnailFailed);
     };
     for(const auto& candidate:visibleThumbnails_) {
-        const int row=find(candidate);if(standalone(row)){path=candidate;break;}
+        const int row=find(candidate);if(standalone(row)&&!records_[row].video){path=candidate;break;}
     }
     if(path.isEmpty()&&aspectSampling_)for(int row=0;row<std::min(2,int(records_.size()));++row)if(standalone(row)){path=records_[row].path;break;}
     if(path.isEmpty()&&backgroundMetadata_)while(!metadataQueue_.isEmpty()) {
@@ -433,7 +454,11 @@ void Catalog::pumpThumbnails() {
         auto* task=QRunnable::create([this,path,token,edge,collectMetadata] {
             QImage image;QString error;Record metadata;
             if(token->load()) {
-                try {image=readThumbnail(path,edge,[token]{return !token->load();},collectMetadata?&metadata:nullptr,&sourceReadSlots_);}catch(const std::exception& e){error=QString::fromUtf8(e.what());}
+                try {image=readThumbnail(path,edge,[token]{return !token->load();},collectMetadata?&metadata:nullptr,&sourceReadSlots_);}
+                catch(const std::exception& e) {
+                    error=QString::fromUtf8(e.what());
+                    if(collectMetadata&&supportedVideoFile(path))metadata.inspected=true;
+                }
             }
             QMetaObject::invokeMethod(this,[this,path,token,image,error,metadata=std::move(metadata)]() mutable {
                 thumbnailJobs_.remove(path);
@@ -573,7 +598,7 @@ bool CatalogFilter::lessThan(const QModelIndex& left,const QModelIndex& right) c
     switch(left.column()) {
     case Catalog::Width:return numeric(a.width,b.width);case Catalog::Height:return numeric(a.height,b.height);
     case Catalog::MaxEdge:return numeric(std::max(a.width,a.height),std::max(b.width,b.height));
-    case Catalog::AspectRatio:return numeric(a.height>0?double(a.width)/a.height:0,b.height>0?double(b.width)/b.height:0);
+    case Catalog::AspectRatio:return numeric(a.aspectRatio(),b.aspectRatio());
     case Catalog::Hdr:return numeric(a.hdr,b.hdr);case Catalog::Gainmap:return numeric(a.gainmap,b.gainmap);case Catalog::Raw:return numeric(a.raw,b.raw);
     case Catalog::Megapixels:case Catalog::Dimensions:return numeric(double(a.width)*a.height,double(b.width)*b.height);
     case Catalog::Size:return numeric(a.bytes,b.bytes);case Catalog::Captured:return a.imageDate()==b.imageDate()?a.path<b.path:a.imageDate()<b.imageDate();
