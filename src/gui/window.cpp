@@ -599,7 +599,7 @@ QWidget* MainWindow::buildControls() {
     sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls. SKIV (manual) applies Shadows, Midtones and Highlights to HDR pixels first, then feeds them into SKIV’s curve with Max RGB, Luminance or Per channel replacing its ICtCp color mapping.");
     sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");toneForm->addRow("Color mapping",sdrColorMapping_);
     sdrColorMapping_->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation. In SKIV (manual), this replaces SKIV’s internal ICtCp intensity/chroma mapping; tonal edits run first.");
-    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(67);sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
+    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
     sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(2000);sdrRangeInput_=spin(204,10000,2000,"sdrHdrRangeInput");sdrRangeInput_->setSingleStep(50);sdrRangeInput_->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeInput_);toneForm->addRow("HDR range cap",rangeRow);
     connect(sdrRange_,&QSlider::valueChanged,sdrRangeInput_,&QSpinBox::setValue);connect(sdrRangeInput_,&QSpinBox::valueChanged,sdrRange_,&QSlider::setValue);
     sdrRangeInput_->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
@@ -612,7 +612,7 @@ QWidget* MainWindow::buildControls() {
     auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
     connect(resetTone,&QPushButton::clicked,this,[this]{
         sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(false);sdrAutoShoulder_->setChecked(false);
-        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(0);sdrShoulder_->setValue(67);sdrRange_->setValue(2000);
+        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(0);sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrRange_->setValue(2000);
         for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setValue(0.);
         updateMode();
     });

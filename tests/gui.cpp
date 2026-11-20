@@ -341,7 +341,7 @@ private slots:
         auto* reset=window.findChild<QPushButton*>("resetSdrToneMapping");QVERIFY(reset);reset->click();
         const auto options=window.options();QVERIFY(!options.sdr_auto_tone_curve);QCOMPARE(options.sdr_tone_mapper,jxrc::SdrToneMapper::skiv_custom);QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
         QVERIFY(!options.sdr_auto_shoulder);QVERIFY(window.findChild<QSlider*>("sdrShoulder")->isEnabled());
-        QCOMPARE(options.sdr_shoulder,.67f);QCOMPARE(options.sdr_hdr_range_nits,2000);QCOMPARE(options.sdr_shadows,0.f);
+        QCOMPARE(options.sdr_shoulder,.50f);QCOMPARE(options.sdr_hdr_range_nits,2000);QCOMPARE(options.sdr_shadows,0.f);
         QCOMPARE(window.findChild<QSlider*>("sdrShadowsSlider")->value(),0);
         QCOMPARE(mapper->currentIndex(),1);
     }
@@ -350,6 +350,7 @@ private slots:
         auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),6);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
         QVERIFY(window.options().sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom);QVERIFY(!window.options().sdr_auto_tone_curve);
         auto* shoulder=window.findChild<QSlider*>("sdrShoulder");auto* range=window.findChild<QSpinBox*>("sdrHdrRangeInput");
+        QCOMPARE(shoulder->value(),50);
         auto* autoRange=window.findChild<QCheckBox*>("sdrAutoHdrRange");QVERIFY(shoulder->isEnabled());QVERIFY(autoRange->isEnabled());
         autoRange->setChecked(false);QVERIFY(range->isEnabled());
         for(const auto* name:{"sdrAutoToneCurve","sdrAutoShoulder"})QVERIFY(!window.findChild<QCheckBox*>(name)->isEnabled());
