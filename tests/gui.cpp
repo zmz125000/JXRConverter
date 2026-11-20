@@ -1091,6 +1091,22 @@ private slots:
         QVERIFY(!convertAll->isEnabled());
         QVERIFY(!convertSelected->isEnabled());
 
+        {
+            FolderReceiver receiver;
+            QDesktopServices::setUrlHandler("file",&receiver,"open");
+            const auto restore=qScopeGuard([]{QDesktopServices::unsetUrlHandler("file");});
+            QTimer::singleShot(0,&window,[&] {
+                auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if(!menu)return;
+                auto* action=menu->findChild<QAction*>("openMediaFile");
+                if(!action||action->text()!="Open video"){menu->close();return;}
+                menu->setActiveAction(action);
+                QTest::keyClick(menu,Qt::Key_Return);
+            });
+            view->customContextMenuRequested(view->visualRect(model->index(0,0)).center());
+            QCOMPARE(receiver.opened,QUrl::fromLocalFile(QFileInfo(video).canonicalFilePath()));
+        }
+
         window.findChild<QPushButton*>("statusAll")->click();
         window.findChild<QLineEdit*>("instantFilter")->setText("clip");
         QCOMPARE(model->rowCount(),1);

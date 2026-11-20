@@ -393,16 +393,16 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(qApp->styleHints(),&QStyleHints::colorSchemeChanged,this,[theme]{if(theme->currentIndex()==0)applyDesktopStyle(0);});
 #endif
-    auto openImage=[this](const QModelIndex& index){
+    auto openOnDoubleClick=[this](const QModelIndex& index){
         if(!index.isValid())return;
         const auto path=index.data(Catalog::PathRole).toString();
         if(index.data(Catalog::VideoRole).toBool())importVideoFrame(path);
         else QDesktopServices::openUrl(QUrl::fromLocalFile(path));
     };
-    connect(list_,&QListView::doubleClicked,this,openImage);connect(table_,&QTableView::doubleClicked,this,openImage);
+    connect(list_,&QListView::doubleClicked,this,openOnDoubleClick);connect(table_,&QTableView::doubleClicked,this,openOnDoubleClick);
     for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
         view->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(view,&QWidget::customContextMenuRequested,this,[this,view,openImage](const QPoint& point){
+        connect(view,&QWidget::customContextMenuRequested,this,[this,view](const QPoint& point){
             const auto fieldIndex=view->indexAt(point);
             if(!fieldIndex.isValid()){QMenu menu;auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");if(menu.exec(view->viewport()->mapToGlobal(point))==reset)resetFilters();return;}
             const int fieldColumn=fieldIndex.column();const QString fieldValue=fieldIndex.data().toString();
@@ -412,7 +412,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             if(view==table_){addField=menu.addAction("Add this to filters");addField->setObjectName("addFieldToFilters");addField->setEnabled(!fieldValue.isEmpty());addField->setToolTip(catalog_->headerData(fieldColumn,Qt::Horizontal,Qt::DisplayRole).toString()+": "+fieldValue);}
             auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
             const bool video=index.data(Catalog::VideoRole).toBool();
-            auto* open=menu.addAction(video?"Grab video frame…":"Open image");auto* folder=menu.addAction("Open folder");folder->setObjectName("revealImageFile");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this file’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
+            auto* open=menu.addAction(video?"Open video":"Open image");
+            open->setObjectName("openMediaFile");
+            auto* grab=video?menu.addAction("Grab video frame…"):nullptr;
+            auto* folder=menu.addAction("Open folder");folder->setObjectName("revealImageFile");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this file’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
             const QString currentImage=index.data(Catalog::PathRole).toString();rememberedImages_.insert(currentImage);
             auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!video&&!updater_->installing()&&!selectedTargets().isEmpty());
             auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!video&&!updater_->installing());
@@ -440,7 +443,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
                 else if(action==start){dateFrom_->setDate(captured);if(dateTo_->date()<captured)dateTo_->setDate(captured);}
                 else{dateTo_->setDate(captured);if(dateFrom_->date()>captured)dateFrom_->setDate(captured);}
                 today_->setChecked(false);metadataFilters_->setChecked(true);dateEnabled_->setChecked(true);updateFilter();
-            }else if(action==open)openImage(index);else if(action==folder)revealFile(index.data(Catalog::PathRole).toString());else if(action==remove)removeImageSelection();
+            }else if(action==open)QDesktopServices::openUrl(QUrl::fromLocalFile(currentImage));
+            else if(grab&&action==grab)importVideoFrame(currentImage);
+            else if(action==folder)revealFile(currentImage);
+            else if(action==remove)removeImageSelection();
         });
     }
     connect(list_,&FileListView::pathsDropped,this,&MainWindow::addDroppedPaths);connect(table_,&FileTableView::pathsDropped,this,&MainWindow::addDroppedPaths);
