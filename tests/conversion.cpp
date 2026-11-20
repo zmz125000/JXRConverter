@@ -1731,7 +1731,7 @@ static void skiv_tone_mapping(const fs::path& dir) {
     }
     check(maxManual!=tone_map_skiv_manual(colored,0,.67f,2000,jxrc::SdrColorMapping::max_rgb,luma,{.4f,-.5f,.7f}),"Manual ignored tonal edits");
     std::vector<float> pixels(16*16*4);
-    for(size_t i=0;i<256;++i) {const float v=i%16<4?.2f:i%16<8?1.f:i%16<12?3.f:8.f;for(unsigned c=0;c<3;++c)pixels[i*4+c]=v;pixels[i*4+3]=1;}
+    for(size_t i=0;i<256;++i) {const float v=i%16<4?.05f:i%16<8?1.f:i%16<12?3.f:8.f;for(unsigned c=0;c<3;++c)pixels[i*4+c]=v;pixels[i*4+3]=1;}
     const auto source=dir/"skiv-source.jxl";
     check(encode_jxl_f32(16,16,pixels.data(),UHDR_CG_BT_709,true,source.string().c_str(),StillEncodeQuality(0),false)==0,"SKIV source fixture");
     jxrc::ConversionSession session(source);jxrc::Options o;o.mode=jxrc::Mode::process;o.sdr_tone_map=true;o.sdr_auto_hdr_range=false;o.sdr_hdr_range_nits=1000;o.target=jxrc::Target::png;o.quality.preset=jxrc::Preset::lossless;
@@ -1764,23 +1764,21 @@ static void skiv_tone_mapping(const fs::path& dir) {
     o.sdr_tone_mapper=jxrc::SdrToneMapper::mpcvr;
     o.target=jxrc::Target::png;
     o.sdr_tone_map=true;
+    o.sdr_auto_hdr_range=true;
     const auto mpcvr=dir/"mpcvr.png";
     session.convert(mpcvr,o);
     check(bytes(mpcvr)!=bytes(customPath),"MPCVR reused another mapper's SDR render");
+    const auto mpcvrBase=decode_sdr(mpcvr);
+    check(std::abs(mpcvrBase[2*4]-.05f)<.005f,"MPCVR changed neutral levels below the knee at 203 nits");
     o.sdr_auto_tone_curve=false;o.sdr_auto_shoulder=false;o.sdr_color_mapping=jxrc::SdrColorMapping::max_rgb;
     o.sdr_shadows=0;o.sdr_midtones=0;o.sdr_highlights=0;
+    o.sdr_shoulder=.3f;o.sdr_auto_hdr_range=false;o.sdr_hdr_range_nits=500;
     const auto ignoredMpcvr=dir/"mpcvr-ignored.png";
     session.convert(ignoredMpcvr,o);
-    check(bytes(mpcvr)==bytes(ignoredMpcvr),"MPCVR used disabled tone controls");
-    o.sdr_shoulder=.3f;
-    const auto lowerTarget=dir/"mpcvr-lower-target.png";
-    session.convert(lowerTarget,o);
-    check(bytes(mpcvr)!=bytes(lowerTarget),"MPCVR ignored the SDR display target");
-    o.sdr_hdr_range_nits=500;
-    const auto lowerCap=dir/"mpcvr-lower-cap.png";
-    session.convert(lowerCap,o);
-    check(bytes(lowerTarget)!=bytes(lowerCap),"MPCVR ignored the HDR range cap");
-    const auto mpcvrBase=decode_sdr(lowerCap);
+    check(bytes(mpcvr)==bytes(ignoredMpcvr),"MPCVR changed with disabled controls in the same session");
+    const auto freshMpcvr=dir/"mpcvr-fresh.png";
+    jxrc::convert(source,freshMpcvr,o);
+    check(bytes(mpcvr)==bytes(freshMpcvr),"MPCVR used disabled tone controls in a fresh session");
     for(auto target:{jxrc::Target::jpeg_gainmap,jxrc::Target::avif_gainmap}) {
         o.target=target;
         const auto gain=dir/("mpcvr-gain-"+std::to_string(int(target)));

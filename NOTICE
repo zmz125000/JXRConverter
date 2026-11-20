@@ -55,5 +55,4 @@ The MPCVR SDR tone mapper in src/native/mpcvr_tone_map.h is a modified CPU
 port of the HDR-to-SDR Metadata spline by adipose in MPC Video Renderer,
 licensed under GPL version 3.
 https://github.com/zmz125000/VideoRenderer/blob/70811bc1ea738b7033e89ebc6392b47dd5befaaa/Shaders/convert/hdr_tone_mapping_spline.hlsl
-The still-image port uses the image peak, an optional HDR cap, and a display
-target derived from JXRConverter's SDR shoulder setting.
+The still-image port uses the measured image peak and a 203-nit SDR display target.

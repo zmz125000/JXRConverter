@@ -7,13 +7,13 @@
 #include "hdr_encode.h"
 #include "skiv_tone_map.h"
 
-// Input uses 203 nits per unit. Output is relative to the chosen display white.
+// Input and output use 203 nits per unit.
 // Both are linear RGB in the encoder's gamut.
-inline std::vector<float> tone_map_mpcvr_base(std::vector<float> image, int gamut,
-                                             double source_peak, double sdr_white) {
+inline std::vector<float> tone_map_mpcvr_base(std::vector<float> image, int gamut, double source_peak) {
     using skiv::Matrix;
     using skiv::RGB;
     using skiv::transform;
+    constexpr double sdr_white = kSdrWhiteNits;
     constexpr double flat_at = 4000.0;
     constexpr Matrix rgb_to_lms = {{{.412109375, .523925781, .063964844},
         {.166748047, .720458984, .112792969}, {.024169922, .075439453, .900390625}}};

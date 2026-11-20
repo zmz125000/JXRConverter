@@ -37,8 +37,8 @@ bool export_pixels_capture() { return true; }
 bool retain_reader_pixels(std::vector<uint8_t>&) { return false; }
 bool retain_reader_pixels(std::vector<uint16_t>&) { return false; }
 namespace jxrc {
-float mpcvr_display_nits(float shoulder) {
-    return std::max(25.f, shoulder * kSdrWhiteNits);
+float mpcvr_display_nits(float) {
+    return kSdrWhiteNits;
 }
 
 namespace {
@@ -431,9 +431,14 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             if(peak>1.f||adjust_zones) {
                 // The manual range is a ceiling. Fit a dimmer source to its
                 // actual peak; only values above the ceiling are clipped.
-                const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
+                const float range=(mpcvr||o.sdr_auto_hdr_range)?peak*kSdrWhiteNits:
                     std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
-                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping||cache.mapped_zones!=zones||cache.mapped_auto_range!=o.sdr_auto_hdr_range||cache.mapped_cap!=o.sdr_hdr_range_nits||cache.mapped_auto_curve!=o.sdr_auto_tone_curve||cache.mapped_auto_shoulder!=o.sdr_auto_shoulder) {
+                const bool controls_changed=!mpcvr&&(
+                    cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_color_mapping!=o.sdr_color_mapping||
+                    cache.mapped_zones!=zones||cache.mapped_auto_range!=o.sdr_auto_hdr_range||
+                    cache.mapped_cap!=o.sdr_hdr_range_nits||cache.mapped_auto_curve!=o.sdr_auto_tone_curve||
+                    cache.mapped_auto_shoulder!=o.sdr_auto_shoulder);
+                if(cache.mapped_sdr.empty()||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||controls_changed) {
                     const std::array<float,3> luma=gamut==UHDR_CG_BT_2100?std::array<float,3>{.2627f,.6780f,.0593f}:
                         gamut==UHDR_CG_DISPLAY_P3?std::array<float,3>{.2289746f,.6917385f,.0792869f}:std::array<float,3>{.2126f,.7152f,.0722f};
                     // An adjusted render needs the selected ceiling, rather
@@ -441,7 +446,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                     const float curve_range=(o.sdr_auto_tone_curve||adjust_zones)&&!o.sdr_auto_hdr_range?
                         float(o.sdr_hdr_range_nits):range;
                     if(mpcvr) {
-                        cache.mapped_sdr=tone_map_mpcvr_base(linear,cg,range,mpcvr_display_nits(o.sdr_shoulder));
+                        cache.mapped_sdr=tone_map_mpcvr_base(linear,cg,range);
                     } else if(o.sdr_tone_mapper==SdrToneMapper::skiv_manual) {
                         cache.mapped_sdr=tone_map_skiv_manual(linear,cg,
                             o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones);

@@ -28,10 +28,11 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
 Processing controls (PQ/HLG targets require process mode):
   HLG uses the BT.2100 1000-nit reference display (gamma 1.2).
   --sdr-tone-map                Map HDR highlights into SDR outputs and gain-map bases
-  --sdr-tone-mapper skiv-custom|skiv-manual|skiv|logarithmic|extended-reinhard|reinhard|mpcvr (default skiv-custom)
+  --sdr-tone-mapper skiv-custom|skiv-manual|skiv|mpcvr|logarithmic|extended-reinhard|reinhard (default skiv-custom)
+                                MPCVR uses a fixed 203-nit target and the F32 image peak
   --sdr-color-mapping max-rgb|luminance|per-channel  Default: max-rgb
   --sdr-shadows -1..1 --sdr-midtones -1..1 --sdr-highlights -1..1  Default: 0
-  --sdr-shoulder 0..0.95        Fraction of 203 nits (default 0.67); MPCVR display target, minimum 25 nits
+  --sdr-shoulder 0..0.95        Fraction of 203 nits (default 0.67)
   --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 2000)
   --sdr-auto-tone-curve         Fit an automatic logarithmic SDR curve (default off; ignored by SKIV and MPCVR)
   --sdr-auto-shoulder           Auto tone curve: adapt shoulder within 50–67% (default off)
