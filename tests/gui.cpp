@@ -1024,6 +1024,38 @@ private slots:
         tab("statusAll");QVERIFY(selection->selectedRows().isEmpty());
         tab("statusRemember");QCOMPARE(model->rowCount(),2);
     }
+    void replacingFilteredSelection() {
+        appSettings().clear();MainWindow window;window.show();
+        const auto directory=root("replace-filtered-selection");
+        const auto a=makeImage(directory,"a.jpg",32,24,100);
+        const auto b=makeImage(directory,"b.jpg",32,24,100);
+        const auto c=makeImage(directory,"c.jpg",32,24,100);
+        window.addPaths({a,b,c});
+        auto* model=window.filterModel();
+        QTRY_COMPARE(model->rowCount(),3);
+        auto* view=window.findChild<FileListView*>();
+        auto* selection=view->selectionModel();
+        auto* filter=window.findChild<QLineEdit*>("instantFilter");
+        auto* counts=window.findChild<QLabel*>("catalogCounts");
+
+        selection->select(model->index(0,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+        selection->select(model->index(1,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        filter->setText("c.jpg");
+        QCOMPARE(model->rowCount(),1);
+        QVERIFY(counts->text().contains("2 selected"));
+        const auto point=view->visualRect(model->index(0,0)).center();
+        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::ControlModifier,point);
+        QCOMPARE(selection->selectedRows().size(),1);
+        QVERIFY(counts->text().contains("3 selected"));
+
+        // A normal click replaces the selection even when Qt sees no change
+        // to the sole visible selected row.
+        QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,point);
+        QVERIFY(counts->text().contains("1 selected"));
+        filter->clear();
+        QCOMPARE(selection->selectedRows().size(),1);
+        QCOMPARE(selection->selectedRows().first().data(Catalog::PathRole).toString(),c);
+    }
     void libraryTabScrollPositions() {
         appSettings().clear();MainWindow window;window.resize(1200,700);window.show();
         const auto directory=root("tab-scroll");const auto source=makeImage(directory,"00.jpg",32,24,100);QStringList files{source};

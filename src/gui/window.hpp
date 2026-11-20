@@ -51,6 +51,7 @@ protected:
     void dropEvent(QDropEvent*) override;
 private:
     QWidget* buildControls();
+    void importVideoFrame();
     void addDroppedPaths(const QStringList& paths);
     void loadHistory();
     void saveHistory();

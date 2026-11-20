@@ -51,6 +51,10 @@ PQ JXL pixel-processing exports record the measured maximum RGB channel level in
 
 GUI input formats follow the converter's current codec support; the GUI does not add the Android-only formats listed in [port status](port-status.md).
 
+Use **Grab video frame…** to open an HDR video, seek with the slider or enter a position in seconds, and preview the frame at that time. **Save and add frame…** saves the full-resolution frame as a 16-bit HDR PNG and selects it in the image list. Use the existing image targets and **Convert selected** to export it.
+
+Frame grabbing uses the external `ffmpeg` and `ffprobe` executables from PATH or the application directory. Tagged PQ and HLG keep their source transfer. Dolby Vision Profile 5 uses the RPU metadata to produce BT.2020 PQ and needs an FFmpeg build with libplacebo and Vulkan support. The picker shows an SDR preview, and the saved frame stays in HDR.
+
 Pixel-processing exposure defaults to **0 EV** (unchanged exposure). **−3 EV** multiplies linear RGB by 1/8; **+3 EV** multiplies it by 8. Processing still decodes and re-encodes the image at 0 EV, with source-preserving fast paths where eligible. JPEG/AVIF gain-map photos and Apple/ProXDR HEIC photos exported to ordinary JPEG or AVIF keep the SDR base plus gain map when exposure is 0, resizing is disabled and sRGB clamp is off, including in Process pixels mode. Exposure, resizing or sRGB clamping requests use the float32 HDR render path instead. JPEG recompression remains lossy; this is base/map retention, not a promise of identical compressed bytes.
 
 **Auto exposure** in RAW rendering is off by default and works in Source headroom,

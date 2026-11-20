@@ -39,9 +39,9 @@ Supported HDR formats: JPG, PNG, JXR, JXL, HEIF, AVIF, OpenEXR, Radiance HDR, PF
 It also supports outputting 16-bit PNG, JXL and AVIF with Linear, scRGB, HLG and PQ transfers   
 and comes with a Qt6 GUI for Windows, Linux and macOS.
 
-special thanks to [SKIV](https://github.com/SpecialKO/SKIV) for the best HDR to SDR tone mapper.
+special thanks to  [MPCVR](https://github.com/Aleksoid1978/VideoRenderer/) and [SKIV](https://github.com/SpecialKO/SKIV) for the best HDR to SDR tone mappers.
 
-#### The app uses piecewise tone mapping for HDR to SDR conversion, the results are much better than tools like Xbox Game Bar built-in PNG.  
+#### The app uses piecewise tone mapping (customized skiv) for HDR to SDR conversion, the results are much better than tools like Xbox Game Bar built-in PNG.  
 
 <img width="800" alt="download" src="https://github.com/user-attachments/assets/f8fcd4e1-6401-4010-afe7-5232cf5da598" />
 

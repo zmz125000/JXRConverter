@@ -3,6 +3,7 @@
 #include "style.hpp"
 #include "updater.hpp"
 #include "output_capture.hpp"
+#include "video_frame.hpp"
 #include <QStandardPaths>
 #include <QTextCursor>
 #include <QScrollBar>
@@ -65,10 +66,22 @@
 #include <QUrl>
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <stdexcept>
 
 namespace jxrc::gui {
 namespace {
+class LibrarySelectionModel final : public QItemSelectionModel {
+public:
+    using QItemSelectionModel::QItemSelectionModel;
+    using QItemSelectionModel::select;
+    std::function<void()> selectionReplaced;
+    void select(const QItemSelection& selection, SelectionFlags command) override {
+        QItemSelectionModel::select(selection,command);
+        if(command.testFlag(Clear)&&selectionReplaced)selectionReplaced();
+    }
+};
+
 class ToolbarSeparator : public QWidget {
 public:
     ToolbarSeparator(){setFixedWidth(8);setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Expanding);}
@@ -209,7 +222,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(proxy_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this]{++selectionModelChanges_;});
     connect(proxy_,&QAbstractItemModel::modelAboutToBeReset,this,[this]{++selectionModelChanges_;});
     connect(proxy_,&QAbstractItemModel::layoutAboutToBeChanged,this,[this]{++selectionModelChanges_;});
-    selection_=new QItemSelectionModel(proxy_,this);
+    auto* librarySelection=new LibrarySelectionModel(proxy_,this);
+    selection_=librarySelection;
     auto modelChanged=[this]{--selectionModelChanges_;QTimer::singleShot(0,this,&MainWindow::syncSelection);};
     connect(proxy_,&QAbstractItemModel::rowsRemoved,this,modelChanged);
     connect(proxy_,&QAbstractItemModel::modelReset,this,modelChanged);
@@ -217,6 +231,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
     auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.exr *.hdr *.rgbe *.xyze *.pic *.pfm *.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.heics *.heifs *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
+    auto* frame=toolbar->addAction("Grab video frame…");
+    frame->setObjectName("grabVideoFrame");
+    connect(frame,&QAction::triggered,this,&MainWindow::importVideoFrame);
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open image folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
     auto* recent=new QToolButton;recent->setObjectName("recentFolders");recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
@@ -438,6 +455,16 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(list_,&FileListView::bulkSelectionChanged,this,[this](bool selecting){bulkSelecting_=selecting;});
     connect(table_,&FileTableView::bulkSelectionChanged,this,[this](bool selecting){bulkSelecting_=selecting;});
     connect(selection_,&QItemSelectionModel::selectionChanged,this,&MainWindow::changeSelection);
+    librarySelection->selectionReplaced=[this] {
+        if(syncingSelection_||selectionModelChanges_||bulkSelecting_)return;
+        auto& paths=imageSelection();
+        const auto visible=selection_->selectedRows(0);
+        if(paths.size()==visible.size())return;
+        // Only visible rows can appear in the proxy's deselection signal.
+        paths.clear();
+        for(const auto& index:visible)paths.insert(index.data(Catalog::PathRole).toString());
+        updateCounts();
+    };
     for(auto* view:QList<QAbstractItemView*>{list_,table_})connect(view,&QAbstractItemView::clicked,this,[this](const QModelIndex& index){rememberedImages_.insert(index.data(Catalog::PathRole).toString());showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,[this]{syncSelection();updateCounts();});connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
     connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{requestAspectSample(list_->verticalScrollBar()->value()>0);});
@@ -1044,6 +1071,16 @@ void MainWindow::addPaths(const QStringList& paths) {
         if(statusFilter_->checkedId()!=0){statusFilter_->button(0)->setChecked(true);updateFilter();}
         catalog_->addPaths(paths,recursive_->isChecked());
     }
+}
+
+void MainWindow::importVideoFrame() {
+    const auto path=grabVideoFrame(this);
+    if(path.isEmpty())return;
+    addPaths({path});
+    selectedImages_={path};
+    rememberedImages_.insert(path);
+    syncSelection();
+    updateCounts();
 }
 
 void MainWindow::updateFilter() {
