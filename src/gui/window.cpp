@@ -32,6 +32,7 @@
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateEdit>
+#include <QDialog>
 #include <QDir>
 #include <QDesktopServices>
 #include <QDoubleSpinBox>
@@ -71,6 +72,13 @@
 
 namespace jxrc::gui {
 namespace {
+constexpr int VideoTab = 6;
+
+QStringList imagePaths(QStringList paths) {
+    paths.erase(std::remove_if(paths.begin(),paths.end(),supportedVideoFile),paths.end());
+    return paths;
+}
+
 class LibrarySelectionModel final : public QItemSelectionModel {
 public:
     using QItemSelectionModel::QItemSelectionModel;
@@ -230,11 +238,16 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(proxy_,&QAbstractItemModel::layoutChanged,this,modelChanged);
     catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
-    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images",{},"Images (*.exr *.hdr *.rgbe *.xyze *.pic *.pfm *.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.heics *.heifs *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw);;All files (*)"));});
+    auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images and videos",{},
+        "Images and videos (*.exr *.hdr *.rgbe *.xyze *.pic *.pfm *.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.heics *.heifs *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw "+
+        videoFilePatterns()+");;All files (*)"));});
     auto* frame=toolbar->addAction("Grab video frame…");
     frame->setObjectName("grabVideoFrame");
-    connect(frame,&QAction::triggered,this,&MainWindow::importVideoFrame);
-    auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open image folder");if(!path.isEmpty())addPaths({path});});
+    connect(frame,&QAction::triggered,this,[this] {
+        const auto source=QFileDialog::getOpenFileName(this,"Open HDR video",{},"Video files ("+videoFilePatterns()+");;All files (*)");
+        if(!source.isEmpty())importVideoFrame(source);
+    });
+    auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open media folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
     auto* recent=new QToolButton;recent->setObjectName("recentFolders");recent->setText("Recent folders");recent->setPopupMode(QToolButton::InstantPopup);auto* recentMenu=new QMenu(recent);recent->setMenu(recentMenu);toolbar->addWidget(recent);
     connect(recentMenu,&QMenu::aboutToShow,this,[this,recentMenu]{recentMenu->clear();for(const auto& path:recentFolders_){auto* action=recentMenu->addAction(path);connect(action,&QAction::triggered,this,[this,path]{addPaths({path});});}
@@ -246,6 +259,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     clearJobs_=toolbar->addAction("Clear jobs");clearJobs_->setObjectName("clearJobs");clearJobs_->setToolTip("Clear saved jobs and reset job numbering. Images already in the library stay available.");connect(clearJobs_,&QAction::triggered,this,&MainWindow::clearJobs);
     auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
     recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
+    includeVideos_=check("Include videos","includeVideos",true);includeVideos_->setToolTip("Include videos when importing folders");toolbar->addWidget(includeVideos_);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
     wheelChanges_->setToolTip("Allow the mouse wheel to change dropdowns, numeric inputs and sliders. Off lets you scroll past controls without changing settings. The Jobs button always allows wheel navigation.");toolbar->addWidget(wheelChanges_);
     checkUpdates_=check("Check for updates","checkForUpdates",true);checkUpdates_->setToolTip("Check at startup and on every hour. Updates are installed only when you click Update.");toolbar->addWidget(checkUpdates_);
@@ -323,7 +337,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     tab("Remember",5,"statusRemember")->setToolTip("Images you clicked or individually selected; Select all does not add images");
     tab("Selected",1,"statusSelected")->setToolTip("Your selection across all views; image clicks leave it unchanged");
     separator("collectionSeparator");
-    tab("All",0,"statusAll")->setChecked(true);tab("Finished",3,"statusFinished");tab("Failed",4,"statusFailed");
+    tab("All",0,"statusAll")->setChecked(true);tab("Video",VideoTab,"statusVideo")->hide();
+    tab("Finished",3,"statusFinished");tab("Failed",4,"statusFailed");
     separator("selectionSeparator");
     connect(statusFilter_,&QButtonGroup::idClicked,this,&MainWindow::updateFilter);
     jobRefreshTimer_=new QTimer(this);jobRefreshTimer_->setSingleShot(true);jobRefreshTimer_->setInterval(50);connect(jobRefreshTimer_,&QTimer::timeout,this,&MainWindow::refreshJobs);
@@ -384,7 +399,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(qApp->styleHints(),&QStyleHints::colorSchemeChanged,this,[theme]{if(theme->currentIndex()==0)applyDesktopStyle(0);});
 #endif
-    auto openImage=[this](const QModelIndex& index){if(index.isValid())QDesktopServices::openUrl(QUrl::fromLocalFile(index.data(Catalog::PathRole).toString()));};
+    auto openImage=[this](const QModelIndex& index){
+        if(!index.isValid())return;
+        const auto path=index.data(Catalog::PathRole).toString();
+        if(index.data(Catalog::VideoRole).toBool())importVideoFrame(path);
+        else QDesktopServices::openUrl(QUrl::fromLocalFile(path));
+    };
     connect(list_,&QListView::doubleClicked,this,openImage);connect(table_,&QTableView::doubleClicked,this,openImage);
     for(auto* view:QList<QAbstractItemView*>{list_,table_}) {
         view->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -397,14 +417,15 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             QMenu menu;QAction* addField=nullptr;
             if(view==table_){addField=menu.addAction("Add this to filters");addField->setObjectName("addFieldToFilters");addField->setEnabled(!fieldValue.isEmpty());addField->setToolTip(catalog_->headerData(fieldColumn,Qt::Horizontal,Qt::DisplayRole).toString()+": "+fieldValue);}
             auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
-            auto* open=menu.addAction("Open image");auto* folder=menu.addAction("Open folder");folder->setObjectName("revealImageFile");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this image’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
+            const bool video=index.data(Catalog::VideoRole).toBool();
+            auto* open=menu.addAction(video?"Grab video frame…":"Open image");auto* folder=menu.addAction("Open folder");folder->setObjectName("revealImageFile");auto* camera=menu.addAction("Add camera to search");auto* format=menu.addAction("Add format to search");auto* bits=menu.addAction("Add bit depth to search");auto* date=menu.addAction("Set date");date->setObjectName("setImageDate");date->setToolTip("Filter to this file’s day");auto* start=menu.addAction("Set start date");auto* end=menu.addAction("Set end date");
             const QString currentImage=index.data(Catalog::PathRole).toString();rememberedImages_.insert(currentImage);
-            auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!updater_->installing()&&!selectedTargets().isEmpty());
-            auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!updater_->installing());
+            auto* convertImage=menu.addAction("Convert image");convertImage->setObjectName("convertImage");convertImage->setEnabled(!video&&!updater_->installing()&&!selectedTargets().isEmpty());
+            auto* convertTo=menu.addMenu("Convert to…");convertTo->setObjectName("convertTo");convertTo->setEnabled(!video&&!updater_->installing());
             for(int i=0;i<targets_->count();++i){const auto* item=targets_->item(i);auto* action=convertTo->addAction(item->text());action->setObjectName("convertTarget"+item->data(Qt::UserRole).toString());action->setData(item->data(Qt::UserRole));action->setEnabled(item->flags()&Qt::ItemIsEnabled);}
             const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.imageDate().date();const QString cameraName=record.camera,formatName=record.format;const int depth=record.bits;camera->setEnabled(!cameraName.isEmpty());bits->setEnabled(depth>0);date->setEnabled(captured.isValid());start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
             const auto queueSelection=selectedPaths();
-            auto* sendJob=menu.addAction("Send selected to new job");sendJob->setObjectName("sendSelectedToJob");sendJob->setEnabled(!selectedPaths().isEmpty()&&!updater_->installing());
+            auto* sendJob=menu.addAction("Send selected to new job");sendJob->setObjectName("sendSelectedToJob");sendJob->setEnabled(!imagePaths(queueSelection).isEmpty()&&!updater_->installing());
             auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
             auto* remove=menu.addAction(statusFilter_->checkedId()==1?"Remove from selection":"Remove selected");remove->setEnabled(statusFilter_->checkedId()==1||!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
@@ -467,10 +488,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     };
     for(auto* view:QList<QAbstractItemView*>{list_,table_})connect(view,&QAbstractItemView::clicked,this,[this](const QModelIndex& index){rememberedImages_.insert(index.data(Catalog::PathRole).toString());showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,[this]{syncSelection();updateCounts();});connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
-    connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{requestAspectSample(list_->verticalScrollBar()->value()>0);});
+    connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{updateVideoTab();requestAspectSample(list_->verticalScrollBar()->value()>0);});
     connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);selectedTabImages_.remove(path);rememberedImages_.remove(path);for(auto& selected:jobSelections_)selected.remove(path);}});
-    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())aspectSamplePending_=false;updateFilter();});
-    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{aspectSamplePending_=false;loggedWarnings_.clear();selectedImages_.clear();selectedTabImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateFilter();showMetadata();});
+    connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())aspectSamplePending_=false;updateVideoTab();updateFilter();});
+    connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{aspectSamplePending_=false;loggedWarnings_.clear();selectedImages_.clear();selectedTabImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateVideoTab();updateFilter();showMetadata();});
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& first,const QModelIndex& last){
         updateCounts();showMetadata();if(autoAspect_->isChecked()&&aspectSamplePending_)aspectTimer_->start();
         for(int row=first.row();row<=last.row();++row){const auto& record=catalog_->record(row);if(record.metadataWarning.isEmpty())continue;const auto warning=record.path+"\n"+record.metadataWarning;if(!loggedWarnings_.contains(warning)){loggedWarnings_.insert(warning);logMessage("Warning: "+warning);}}
@@ -504,7 +525,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* widget:filterControls())defaultFilters_.controls.insert(widget->objectName(),widget->property(settingProperty(widget)));
     auto settings=appSettings();restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",200).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
-    output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());
+    output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());includeVideos_->setChecked(settings.value("browser/includeVideos",true).toBool());
     restoreSettings();appliedSearch_=loadFilters_->isChecked()?settings.value("search/applied",search_->text()).toString():QString{};direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     catalog_->setAspectSampling(autoAspect_->isChecked());updateMode();updateFilter();updatePresentation();updateCounts();requestAspectSample(false);
     QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
@@ -515,7 +536,7 @@ MainWindow::~MainWindow() {
     if(routingToken_)routingToken_->store(false);
     routingWorkers_.waitForDone();
     saveJobs();saveSettings();
-    auto settings=appSettings();settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("conversion/output",output_->text());
+    auto settings=appSettings();settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("browser/includeVideos",includeVideos_->isChecked());settings.setValue("conversion/output",output_->text());
 }
 namespace {
 const char* settingProperty(QWidget* widget) {
@@ -965,8 +986,9 @@ bool MainWindow::isDraftJob(qint64 number) const {
     return !saved->files.isEmpty()&&saved->outputs.isEmpty();
 }
 void MainWindow::createDraftJob(const QStringList& files) {
-    if(files.isEmpty())return;
-    QStringList unique=files;unique.removeDuplicates();
+    auto unique=imagePaths(files);
+    if(unique.isEmpty())return;
+    unique.removeDuplicates();
     const auto number=nextJob_++;savedJobs_.append({number,unique,{},{},false,jobParentName(unique),QDateTime::currentDateTimeUtc()});jobHistoryDirty_=true;showJob(number);
 }
 void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse,bool quick) {
@@ -1052,7 +1074,7 @@ void MainWindow::saveHistory() {
 }
 void MainWindow::addDroppedPaths(const QStringList& paths) {
     QStringList files;
-    for(const auto& path:paths)if(supportedFile(path)){
+    for(const auto& path:paths)if(supportedFile(path)||supportedVideoFile(path)){
         // A remote QFileInfo::isFile()/canonicalFilePath() can block the UI.
         // The catalog verifies and canonicalizes imported paths on its scan thread.
         const auto absolute=QDir::cleanPath(QFileInfo(path).absoluteFilePath());
@@ -1069,18 +1091,32 @@ void MainWindow::addDroppedPaths(const QStringList& paths) {
 void MainWindow::addPaths(const QStringList& paths) {
     if(!paths.isEmpty()){
         if(statusFilter_->checkedId()!=0){statusFilter_->button(0)->setChecked(true);updateFilter();}
-        catalog_->addPaths(paths,recursive_->isChecked());
+        catalog_->addPaths(paths,recursive_->isChecked(),includeVideos_->isChecked());
     }
 }
 
-void MainWindow::importVideoFrame() {
-    const auto path=grabVideoFrame(this);
-    if(path.isEmpty())return;
-    addPaths({path});
-    selectedImages_={path};
-    rememberedImages_.insert(path);
-    syncSelection();
-    updateCounts();
+void MainWindow::importVideoFrame(const QString& source) {
+    grabVideoFrame(this,source,[this,source] {
+        const auto output=output_->text().trimmed();
+        OutputLayout layout;
+        layout.source_folder=sourceFolder_->isChecked();
+        layout.converted_subfolder=convertedFolder_->isChecked();
+        if(output.isEmpty()&&!layout.source_folder)return QString{};
+        return outputFolder(source,output,Target::png_hdr,layout);
+    },[this](const QString& path) {
+        addPaths({path});
+        selectedImages_={path};
+        rememberedImages_.insert(path);
+        syncSelection();
+        updateCounts();
+    });
+}
+
+void MainWindow::updateVideoTab() {
+    auto* tab=statusFilter_->button(VideoTab);
+    const bool hasVideos=!catalog_->videoPaths().isEmpty();
+    if(!hasVideos&&tab->isChecked())statusFilter_->button(0)->setChecked(true);
+    tab->setVisible(hasVideos);
 }
 
 void MainWindow::updateFilter() {
@@ -1089,6 +1125,7 @@ void MainWindow::updateFilter() {
     jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
     const auto key=browserScrollKey();const bool changed=key!=scrollKey_;if(changed)saveBrowserScroll();
     Filter f;const int tab=statusFilter_->checkedId();f.status=(tab==3||tab==4)?tab:0;
+    f.videosOnly=tab==VideoTab;
     f.restrictPaths=tab==1||tab==2||tab==5;
     if(tab==1)f.paths=selectedImages_;
     else if(tab==5)f.paths=rememberedImages_;
@@ -1152,7 +1189,7 @@ void MainWindow::updateAutoThumbnailAspect() {
     else for(int row=0;row<std::min(2,catalog_->rowCount());++row)rows.append(row);
     if(rows.isEmpty())return;
     int choice=-1;
-    for(const auto row:rows){const auto& record=catalog_->record(row);if(!record.inspected)return;
+    for(const auto row:rows){const auto& record=catalog_->record(row);if(record.video)continue;if(!record.inspected)return;
         if(record.width<=0||record.height<=0){aspectSamplePending_=false;return;}
         const double ratio=double(record.width)/record.height;
         // Near-square images use square cells. Landscape and portrait ranges
@@ -1161,7 +1198,7 @@ void MainWindow::updateAutoThumbnailAspect() {
         if(!portraitAspect_->isChecked()&&match>=3)match=2;
         if(choice<0)choice=match;else if(choice!=match){aspectSamplePending_=false;return;}
     }
-    aspectSamplePending_=false;setThumbnailAspect(choice);
+    aspectSamplePending_=false;if(choice>=0)setThumbnailAspect(choice);
 }
 QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
 void MainWindow::showLibraryMessage(const QString& message,int timeout) {
@@ -1182,7 +1219,19 @@ void MainWindow::updateCounts() {
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy()||bool(routingToken_));
     progressStop_->setVisible(queue_->busy()||bool(routingToken_));
-    selected_->setEnabled(!routingToken_&&selected>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2||selected<quickJobLimit));visible_->setEnabled(!routingToken_&&proxy_->rowCount()>0&&hasTargets&&!(updater_&&updater_->installing())&&(!queue_->busy()||statusFilter_->checkedId()==2||proxy_->rowCount()<quickJobLimit));cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(statusFilter_->checkedId()==2&&queue_->hasPendingBatch(viewedJob_));
+    const auto& selection=imageSelection();
+    const auto& videos=catalog_->videoPaths();
+    const auto& smaller=selection.size()<videos.size()?selection:videos;
+    const auto& larger=selection.size()<videos.size()?videos:selection;
+    const int selectedImages=selected-std::count_if(smaller.cbegin(),smaller.cend(),[&](const QString& path){return larger.contains(path);});
+    const int visibleImages=proxy_->imageCount();
+    const auto canConvert=[&](int count){
+        return !routingToken_&&count>0&&hasTargets&&!(updater_&&updater_->installing())
+            &&(!queue_->busy()||statusFilter_->checkedId()==2||count<quickJobLimit);
+    };
+    selected_->setEnabled(statusFilter_->checkedId()!=VideoTab&&canConvert(selectedImages));
+    visible_->setEnabled(canConvert(visibleImages));
+    cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(statusFilter_->checkedId()==2&&queue_->hasPendingBatch(viewedJob_));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
@@ -1210,7 +1259,9 @@ void MainWindow::showMetadata() {
     text+="\nEXIF\n";for(auto it=r.exif.cbegin();it!=r.exif.cend();++it)text+=it.key()+" = "+it.value()+"\n";inspector_->setPlainText(text);
 }
 void MainWindow::convertFiles(bool selected) {
+    if(statusFilter_->checkedId()==VideoTab)return;
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
+    paths=imagePaths(std::move(paths));
     const bool reuse=statusFilter_->checkedId()==2;
     const bool quick=!paths.isEmpty()&&paths.size()<quickJobLimit&&!reuse;
     convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
@@ -1338,7 +1389,9 @@ void MainWindow::checkForUpdates() {
 }
 void MainWindow::closeEvent(QCloseEvent* event) {
     if(routingToken_){routingToken_->store(false);routingToken_.reset();}
-    if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after active conversions finish…");event->ignore();return;}event->accept();
+    if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after active conversions finish…");event->ignore();return;}
+    for(auto* dialog:findChildren<QDialog*>("videoFrameDialog",Qt::FindDirectChildrenOnly))dialog->close();
+    event->accept();
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
 

@@ -1,10 +1,12 @@
 #include "video_frame.hpp"
+#include "catalog.hpp"
 #include "jxrc/converter.hpp"
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QDoubleSpinBox>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -13,17 +15,20 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPixmap>
 #include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QRegularExpressionValidator>
 #include <QSaveFile>
-#include <QSignalBlocker>
 #include <QSlider>
 #include <QStandardPaths>
+#include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QUrl>
 #include <QtEndian>
 #include <zlib.h>
 #include <algorithm>
@@ -35,6 +40,8 @@
 namespace jxrc::gui {
 namespace {
 const QSize previewSize(640, 368);
+const QStringList videoExtensions={"mp4","mkv","mov","m4v","webm","ts","m2ts","mts","avi","hevc","h265",
+    "h264","av1","mpg","mpeg","vob","wmv","asf","flv","3gp","3g2","ogv","mxf","m2v","mpv","dv"};
 
 QString executable(const QString& name) {
     auto paths=qEnvironmentVariable("PATH").split(QDir::listSeparator(),Qt::SkipEmptyParts);
@@ -53,6 +60,15 @@ QString timecode(qint64 milliseconds) {
         .arg(milliseconds%1000,3,10,QChar('0'));
 }
 
+const QRegularExpression& timecodePattern() {
+    static const QRegularExpression pattern(R"(^(\d{1,3}):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$)");
+    return pattern;
+}
+
+QStringList probeArguments(const QString& source) {
+    return {"-v","error","-select_streams","V:0","-show_streams","-show_format","-of","json","-i",source};
+}
+
 struct VideoStream {
     int index=-1;
     QSize size;
@@ -61,6 +77,7 @@ struct VideoStream {
     int primaries=0;
     int transfer=0;
     bool dolbyVision=false;
+    QString hdrError, primariesName, transferName;
     QString inputMatrix;
 
     QString ffmpegPrimaries() const {
@@ -82,44 +99,61 @@ VideoStream readStream(const QByteArray& json) {
     const auto rate=video.value("avg_frame_rate").toString().split('/');
     if(rate.size()==2&&rate[1].toDouble()>0)stream.fps=rate[0].toDouble()/rate[1].toDouble();
     if(stream.index<0||stream.size.isEmpty())throw std::runtime_error("Video dimensions are unavailable.");
-    if(!std::isfinite(stream.duration)||stream.duration<=0)throw std::runtime_error("The video has no seekable duration.");
-
+    stream.transferName=video.value("color_transfer").toString();
+    stream.primariesName=video.value("color_primaries").toString();
     const auto sideData=video.value("side_data_list").toArray();
     for(const auto& item:sideData) {
         const auto data=item.toObject();
         if(data.value("dv_profile").toInt()!=5)continue;
         if(data.value("rpu_present_flag").toInt()!=1)
-            throw std::runtime_error("This Dolby Vision Profile 5 stream has no RPU metadata.");
+            stream.hdrError="This Dolby Vision Profile 5 stream has no RPU metadata.";
         stream.dolbyVision=true;
         stream.primaries=9;
         stream.transfer=16;
         return stream;
     }
-    const auto transfer=video.value("color_transfer").toString();
-    const auto primaries=video.value("color_primaries").toString();
+    const auto& transfer=stream.transferName;
+    const auto& primaries=stream.primariesName;
     stream.transfer=transfer=="smpte2084"?16:transfer=="arib-std-b67"?18:0;
     stream.primaries=primaries=="bt2020"?9:primaries=="smpte432"?12:primaries=="bt709"?1:0;
-    if(!stream.transfer||!stream.primaries)
-        throw std::runtime_error("No supported HDR signal found. Use a tagged PQ or HLG video, or Dolby Vision Profile 5.");
     const auto matrix=video.value("color_space").toString();
-    if(matrix=="bt2020c")
-        throw std::runtime_error("BT.2020 constant-luminance video is unsupported for frame grabs.");
+    if(!stream.transfer||!stream.primaries)
+        stream.hdrError="No supported HDR signal found. Use a tagged PQ or HLG video, or Dolby Vision Profile 5.";
+    else if(matrix=="bt2020c")
+        stream.hdrError="BT.2020 constant-luminance video is unsupported for frame grabs.";
     if(matrix=="bt2020nc"||(matrix.isEmpty()&&stream.primaries==9))stream.inputMatrix="bt2020";
     return stream;
 }
 
-QString frameFilter(const VideoStream& stream,bool preview) {
+QString frameFilter(const VideoStream& stream,const QSize& preview) {
     const QString fit=QString("w=%1:h=%2:force_original_aspect_ratio=decrease")
-        .arg(previewSize.width()).arg(previewSize.height());
+        .arg(preview.width()).arg(preview.height());
     if(stream.dolbyVision) {
         // Profile 5 needs the per-frame RPU reshaping before RGB samples can be tagged as PQ.
-        return "showinfo=checksum=0,libplacebo="+(preview?fit+":":QString{})+
+        return "showinfo=checksum=0,libplacebo="+(!preview.isEmpty()?fit+":":QString{})+
             "format=gbrp16le:colorspace=gbr:color_primaries=bt2020:color_trc=smpte2084:"
             "range=pc:apply_dolbyvision=true:apply_filmgrain=false,format=rgb48be";
     }
-    QString scale=preview?fit:"w=iw:h=ih";
+    QString scale=!preview.isEmpty()?fit:"w=iw:h=ih";
     if(!stream.inputMatrix.isEmpty())scale+=":in_color_matrix="+stream.inputMatrix;
     return "showinfo=checksum=0,scale="+scale+":out_range=pc:flags=accurate_rnd+full_chroma_int,format=rgb48be";
+}
+
+QStringList frameArguments(const QString& source,const VideoStream& stream,int position,const QSize& preview,bool thumbnail=false) {
+    QStringList args={"-hide_banner","-nostdin","-loglevel",thumbnail?"error":"info"};
+    if(thumbnail)args << "-threads" << "1" << "-filter_threads" << "1";
+    if(!thumbnail)args << "-ss" << QString::number(position/1000.0,'f',3) << "-copyts" << "-start_at_zero";
+    args << "-i" << source << "-map" << QString("0:%1").arg(stream.index);
+    if(stream.hdrError.isEmpty()) {
+        args << "-vf" << frameFilter(stream,preview)
+             << "-pix_fmt" << "rgb48be" << "-colorspace" << "rgb" << "-color_primaries" << stream.ffmpegPrimaries()
+             << "-color_trc" << stream.ffmpegTransfer() << "-color_range" << "pc";
+    } else {
+        args << "-vf" << QString("scale=w=%1:h=%2:force_original_aspect_ratio=decrease").arg(preview.width()).arg(preview.height())
+             << "-pix_fmt" << "rgb24";
+    }
+    args << "-frames:v" << "1" << "-c:v" << "png" << "-threads:v" << "1" << "-f" << "image2pipe" << "pipe:1";
+    return args;
 }
 
 void tagFramePng(QByteArray& png,const VideoStream& stream) {
@@ -150,17 +184,46 @@ void tagFramePng(QByteArray& png,const VideoStream& stream) {
     throw std::runtime_error("FFmpeg returned an incomplete PNG frame.");
 }
 
+QImage hdrPreview(const QByteArray& png,int edge) {
+    const auto* first=reinterpret_cast<const uint8_t*>(png.constData());
+    const auto image=jxrc::preview_bytes(std::vector<uint8_t>(first,first+png.size()),edge);
+    if(image.rgba.empty())throw std::runtime_error("Cannot display this frame.");
+    return QImage(image.rgba.data(),int(image.width),int(image.height),int(image.width)*4,QImage::Format_RGBA8888).copy();
+}
+
+QByteArray runThumbnailProcess(const QString& program,const QStringList& args,const std::function<bool()>& cancelled) {
+    if(cancelled&&cancelled())throw std::runtime_error("Video thumbnail cancelled.");
+    QProcess process;
+    process.start(program,args);
+    QElapsedTimer timer;
+    timer.start();
+    while(process.state()!=QProcess::NotRunning) {
+        process.waitForFinished(50);
+        if(process.state()==QProcess::NotRunning)break;
+        if((cancelled&&cancelled())||timer.elapsed()>=15000) {
+            process.kill();
+            process.waitForFinished(1000);
+            throw std::runtime_error("Video thumbnail timed out or was cancelled.");
+        }
+    }
+    if(process.error()==QProcess::FailedToStart||process.exitStatus()!=QProcess::NormalExit||process.exitCode()!=0) {
+        auto error=QString::fromLocal8Bit(process.readAllStandardError()).trimmed().section('\n',-3);
+        if(error.isEmpty())error=process.errorString();
+        throw std::runtime_error(error.toStdString());
+    }
+    return process.readAllStandardOutput();
+}
+
 class VideoFrameDialog final : public QDialog {
 public:
-    VideoFrameDialog(QWidget* parent,QString source,QString ffmpeg,QString ffprobe)
-        : QDialog(parent), source_(std::move(source)), ffmpeg_(std::move(ffmpeg)) {
-        setWindowTitle("Grab video frame");
+    VideoFrameDialog(QWidget* parent,QString source,QString ffmpeg,QString ffprobe,
+                     std::function<QString()> outputDirectory,std::function<void(const QString&)> frameSaved)
+        : QDialog(parent), source_(std::move(source)), ffmpeg_(std::move(ffmpeg)),
+          outputDirectory_(std::move(outputDirectory)), frameSaved_(std::move(frameSaved)) {
+        setAttribute(Qt::WA_DeleteOnClose);
+        setWindowTitle("Grab video frame - "+QFileInfo(source_).fileName());
         setObjectName("videoFrameDialog");
         auto* layout=new QVBoxLayout(this);
-        auto* name=new QLabel(QFileInfo(source_).fileName());
-        name->setTextFormat(Qt::PlainText);
-        name->setWordWrap(true);
-        layout->addWidget(name);
 
         preview_=new QLabel;
         preview_->setObjectName("videoFramePreview");
@@ -178,14 +241,14 @@ public:
         clock_=new QLabel;
         timeRow->addWidget(clock_,1);
         timeRow->addWidget(new QLabel("Seek to"));
-        seconds_=new QDoubleSpinBox;
-        seconds_->setObjectName("videoFrameTime");
-        seconds_->setAccessibleName("Seek to seconds");
-        seconds_->setDecimals(3);
-        seconds_->setSuffix(" s");
-        seconds_->setKeyboardTracking(false);
-        seconds_->setEnabled(false);
-        timeRow->addWidget(seconds_);
+        time_=new QLineEdit;
+        time_->setObjectName("videoFrameTime");
+        time_->setAccessibleName("Seek to HH:MM:SS.ms");
+        time_->setPlaceholderText("HH:MM:SS.ms");
+        time_->setText(timecode(0));
+        time_->setValidator(new QRegularExpressionValidator(timecodePattern(),time_));
+        time_->setEnabled(false);
+        timeRow->addWidget(time_);
         layout->addLayout(timeRow);
 
         status_=new QLabel("Reading video information…");
@@ -193,15 +256,28 @@ public:
         status_->setTextFormat(Qt::PlainText);
         status_->setWordWrap(true);
         layout->addWidget(status_);
-        auto* buttons=new QDialogButtonBox(QDialogButtonBox::Cancel);
-        grab_=buttons->addButton("Save and add frame…",QDialogButtonBox::ActionRole);
+        auto* buttons=new QDialogButtonBox(QDialogButtonBox::Close);
+        auto* folder=buttons->addButton(QString{},QDialogButtonBox::ActionRole);
+        folder->setObjectName("openVideoFramesFolder");
+        folder->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));
+        folder->setToolTip("Open video_frames folder");
+        folder->setAccessibleName(folder->toolTip());
+        folder->ensurePolished();
+        folder->setFixedWidth(folder->sizeHint().height());
+        grab_=buttons->addButton("Save and add frame",QDialogButtonBox::ActionRole);
         grab_->setObjectName("saveVideoFrame");
-        grab_->setAutoDefault(false);
-        buttons->button(QDialogButtonBox::Cancel)->setAutoDefault(false);
-        grab_->setEnabled(false);
+        saveAs_=buttons->addButton("Save frame as…",QDialogButtonBox::ActionRole);
+        saveAs_->setObjectName("saveVideoFrameAs");
+        for(auto* button:buttons->buttons())static_cast<QPushButton*>(button)->setAutoDefault(false);
+        setSaveEnabled(false);
         layout->addWidget(buttons);
         connect(buttons,&QDialogButtonBox::rejected,this,&QDialog::reject);
-        connect(grab_,&QPushButton::clicked,this,&VideoFrameDialog::saveFrame);
+        connect(folder,&QPushButton::clicked,this,&VideoFrameDialog::openFolder);
+        connect(grab_,&QPushButton::clicked,this,[this]{
+            const auto directory=framesDirectory();
+            if(!directory.isEmpty())startGrab(directory,true);
+        });
+        connect(saveAs_,&QPushButton::clicked,this,&VideoFrameDialog::saveFrameAs);
 
         timer_.setSingleShot(true);
         timer_.setInterval(130);
@@ -210,8 +286,7 @@ public:
             else timer_.start();
         });
         connect(seek_,&QSlider::valueChanged,this,[this](int value) {
-            const QSignalBlocker blocker(seconds_);
-            seconds_->setValue(value/1000.0);
+            time_->setText(timecode(value));
             updateClock();
             invalidatePreview();
             if(!seek_->isSliderDown())timer_.start();
@@ -219,8 +294,13 @@ public:
         connect(seek_,&QSlider::sliderReleased,this,[this] {
             if(!previewReady_)timer_.start();
         });
-        connect(seconds_,&QDoubleSpinBox::valueChanged,this,[this](double value) {
-            seek_->setValue(qRound(value*1000));
+        connect(time_,&QLineEdit::editingFinished,this,[this] {
+            const auto match=timecodePattern().match(time_->text());
+            if(!match.hasMatch())return;
+            const qint64 requested=match.captured(1).toLongLong()*3600000+match.captured(2).toInt()*60000
+                +match.captured(3).toInt()*1000+match.captured(4).leftJustified(3,'0').toInt();
+            seek_->setValue(int(std::clamp(requested,qint64(0),qint64(seek_->maximum()))));
+            time_->setText(timecode(seek_->value()));
         });
         connect(&process_,&QProcess::finished,this,&VideoFrameDialog::processFinished);
         connect(&process_,&QProcess::errorOccurred,this,[this](QProcess::ProcessError error) {
@@ -230,7 +310,7 @@ public:
             errorMessage(operation,"Cannot start "+QFileInfo(process_.program()).fileName()+": "+process_.errorString());
         });
         operation_=Operation::probe;
-        process_.start(ffprobe,{"-v","error","-select_streams","V:0","-show_streams","-show_format","-of","json","-i",source_});
+        process_.start(ffprobe,probeArguments(source_));
     }
 
     ~VideoFrameDialog() override {
@@ -241,8 +321,6 @@ public:
         }
     }
 
-    QString savedPath() const { return saved_; }
-
 private:
     enum class Operation { idle, probe, preview, grab };
 
@@ -252,7 +330,7 @@ private:
 
     void invalidatePreview() {
         previewReady_=false;
-        grab_->setEnabled(false);
+        setSaveEnabled(false);
         status_->setText("Seeking…");
         if(operation_==Operation::preview) {
             obsolete_=true;
@@ -266,13 +344,7 @@ private:
         decodePosition_=seek_->value();
         const bool preview=operation==Operation::preview;
         status_->setText(preview?"Decoding preview…":"Decoding full-resolution frame…");
-        process_.start(ffmpeg_,{
-            "-hide_banner","-nostdin","-loglevel","info","-ss",QString::number(decodePosition_/1000.0,'f',3),
-            "-copyts","-start_at_zero","-i",source_,"-map",QString("0:%1").arg(stream_.index),
-            "-vf",frameFilter(stream_,preview),"-frames:v","1","-c:v","png","-threads:v","1",
-            "-pix_fmt","rgb48be","-colorspace","rgb","-color_primaries",stream_.ffmpegPrimaries(),
-            "-color_trc",stream_.ffmpegTransfer(),"-color_range","pc","-f","image2pipe","pipe:1"
-        });
+        process_.start(ffmpeg_,frameArguments(source_,stream_,decodePosition_,preview?previewSize:QSize{}));
     }
 
     void processFinished(int code,QProcess::ExitStatus exit) {
@@ -292,6 +364,8 @@ private:
         try {
             if(operation==Operation::probe) {
                 stream_=readStream(output);
+                if(!stream_.hdrError.isEmpty())throw std::runtime_error(stream_.hdrError.toStdString());
+                if(!std::isfinite(stream_.duration)||stream_.duration<=0)throw std::runtime_error("The video has no seekable duration.");
                 durationMs_=int(std::min(stream_.duration*1000.,double(std::numeric_limits<int>::max())));
                 // Accurate seeking returns the first frame at or after the seek point.
                 const auto frameMs=stream_.fps>0?std::clamp(1000./stream_.fps,1.,double(durationMs_)+1):1;
@@ -299,8 +373,6 @@ private:
                 seek_->setRange(0,last);
                 seek_->setSingleStep(int(std::lround(frameMs)));
                 seek_->setPageStep(std::max(1000,durationMs_/100));
-                seconds_->setRange(0,last/1000.0);
-                seconds_->setSingleStep(seek_->singleStep()/1000.0);
                 setSeekEnabled(true);
                 updateClock();
                 decodeFrame(Operation::preview);
@@ -311,11 +383,15 @@ private:
             if(operation==Operation::preview) {
                 showPreview(output,log);
             } else {
-                QSaveFile file(destination_);
+                const auto path=automaticName_?availableFilename(QDir(destination_)):destination_;
+                QSaveFile file(path);
                 if(!file.open(QIODevice::WriteOnly)||file.write(output)!=output.size()||!file.commit())
                     throw std::runtime_error(("Cannot save frame: "+file.errorString()).toStdString());
-                saved_=QFileInfo(destination_).canonicalFilePath();
-                accept();
+                const auto saved=QFileInfo(path).canonicalFilePath();
+                status_->setText("Saved "+QFileInfo(path).fileName());
+                setSeekEnabled(true);
+                setSaveEnabled(true);
+                frameSaved_(saved.isEmpty()?QFileInfo(path).absoluteFilePath():saved);
             }
         }catch(const std::exception& error) {
             errorMessage(operation,QString::fromUtf8(error.what()));
@@ -323,11 +399,7 @@ private:
     }
 
     void showPreview(const QByteArray& png,const QString& log) {
-        const auto* first=reinterpret_cast<const uint8_t*>(png.constData());
-        const auto image=jxrc::preview_bytes(std::vector<uint8_t>(first,first+png.size()),previewSize.width());
-        if(image.rgba.empty())throw std::runtime_error("Cannot display this frame.");
-        const QImage view(image.rgba.data(),int(image.width),int(image.height),int(image.width)*4,QImage::Format_RGBA8888);
-        preview_->setPixmap(QPixmap::fromImage(view));
+        preview_->setPixmap(QPixmap::fromImage(hdrPreview(png,previewSize.width())));
         const static QRegularExpression pts(R"(\bn:\s*0\s+pts:\s*\S+\s+pts_time:(\S+))");
         bool valid=false;
         const auto frameTime=pts.match(log).captured(1).toDouble(&valid);
@@ -337,70 +409,141 @@ private:
         status_->setText(QString("Frame %1 · %2 × %3 · %4")
             .arg(timecode(framePosition_)).arg(stream_.size.width()).arg(stream_.size.height()).arg(transfer));
         previewReady_=true;
-        grab_->setEnabled(true);
+        setSaveEnabled(true);
     }
 
     void setSeekEnabled(bool enabled) {
         seek_->setEnabled(enabled);
-        seconds_->setEnabled(enabled);
+        time_->setEnabled(enabled);
+    }
+
+    void setSaveEnabled(bool enabled) {
+        grab_->setEnabled(enabled);
+        saveAs_->setEnabled(enabled);
     }
 
     void errorMessage(Operation operation,const QString& message) {
         status_->setText(message);
         if(operation==Operation::grab) {
             setSeekEnabled(true);
-            grab_->setEnabled(previewReady_);
+            setSaveEnabled(previewReady_);
         }
     }
 
-    void saveFrame() {
-        if(operation_!=Operation::idle||!previewReady_)return;
+    QString availableFilename(const QDir& directory) const {
         const QFileInfo source(source_);
         auto stamp=timecode(framePosition_);
         stamp.replace(':','-');
-        const auto stem=source.absoluteDir().filePath(source.completeBaseName()+"_"+stamp);
+        const auto stem=directory.filePath(source.completeBaseName()+"_"+stamp);
         auto proposed=stem+".png";
         for(int suffix=2;QFileInfo::exists(proposed);++suffix)proposed=stem+QString("_%1.png").arg(suffix);
-        QFileDialog dialog(this,"Save HDR video frame",proposed,"PNG image (*.png)");
-        dialog.setAcceptMode(QFileDialog::AcceptSave);
-        dialog.setDefaultSuffix("png");
-        if(dialog.exec()!=QDialog::Accepted)return;
-        const auto path=dialog.selectedFiles().value(0);
-        if(QFileInfo(path).suffix().compare("png",Qt::CaseInsensitive)!=0) {
-            status_->setText("Choose a filename ending in .png.");
-            return;
+        return proposed;
+    }
+
+    QString framesDirectory() {
+        const auto root=outputDirectory_();
+        if(!root.isEmpty()) {
+            const auto path=QDir(root).absoluteFilePath("video_frames");
+            if(QDir().mkpath(path))return path;
         }
-        destination_=path;
+        status_->setText("Choose a writable output folder for video_frames.");
+        return {};
+    }
+
+    void openFolder() {
+        const auto path=framesDirectory();
+        if(!path.isEmpty()&&!QDesktopServices::openUrl(QUrl::fromLocalFile(path)))
+            status_->setText("The system file manager could not open the video_frames folder.");
+    }
+
+    void saveFrameAs() {
+        if(operation_!=Operation::idle||!previewReady_)return;
+        auto* dialog=new QFileDialog(this,"Save HDR video frame",availableFilename(QFileInfo(source_).absoluteDir()),"PNG image (*.png)");
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
+        dialog->setAcceptMode(QFileDialog::AcceptSave);
+        dialog->setDefaultSuffix("png");
+        connect(dialog,&QFileDialog::fileSelected,this,[this](const QString& path) {
+            if(QFileInfo(path).suffix().compare("png",Qt::CaseInsensitive)==0)startGrab(path,false);
+            else status_->setText("Choose a filename ending in .png.");
+        });
+        connect(dialog,&QDialog::finished,this,[this] {
+            if(operation_==Operation::idle) {
+                setSeekEnabled(true);
+                setSaveEnabled(previewReady_);
+            }
+        });
         setSeekEnabled(false);
-        grab_->setEnabled(false);
+        setSaveEnabled(false);
+        dialog->show();
+    }
+
+    void startGrab(const QString& destination,bool automaticName) {
+        if(operation_!=Operation::idle||!previewReady_)return;
+        destination_=destination;
+        automaticName_=automaticName;
+        setSeekEnabled(false);
+        setSaveEnabled(false);
         decodeFrame(Operation::grab);
     }
 
     const QString source_, ffmpeg_;
-    QString destination_, saved_;
+    const std::function<QString()> outputDirectory_;
+    const std::function<void(const QString&)> frameSaved_;
+    QString destination_;
     VideoStream stream_;
     QProcess process_;
     QTimer timer_;
     QLabel *preview_, *clock_, *status_;
     QSlider* seek_;
-    QDoubleSpinBox* seconds_;
-    QPushButton* grab_;
+    QLineEdit* time_;
+    QPushButton *grab_, *saveAs_;
     Operation operation_=Operation::idle;
     int durationMs_=0, decodePosition_=0, framePosition_=0;
-    bool obsolete_=false, previewReady_=false;
+    bool obsolete_=false, previewReady_=false, automaticName_=false;
 };
 }
 
-QString grabVideoFrame(QWidget* parent) {
+bool supportedVideoFile(const QString& path) {
+    return videoExtensions.contains(QFileInfo(path).suffix().toLower());
+}
+
+QString videoFilePatterns() {
+    return "*."+videoExtensions.join(" *.");
+}
+
+QImage readVideoThumbnail(const QString& path,int edge,const std::function<bool()>& cancelled,Record* metadata) {
+    const auto ffmpeg=executable("ffmpeg"),ffprobe=executable("ffprobe");
+    if(ffmpeg.isEmpty()||ffprobe.isEmpty())throw std::runtime_error("Video thumbnails require ffmpeg and ffprobe.");
+    const auto stream=readStream(runThumbnailProcess(ffprobe,probeArguments(path),cancelled));
+    if(metadata) {
+        metadata->width=stream.size.width();
+        metadata->height=stream.size.height();
+        metadata->hdr=stream.transfer!=0;
+        metadata->transfer=stream.transfer==16?"PQ":stream.transfer==18?"HLG":stream.transferName;
+        metadata->primaries=stream.dolbyVision?"BT.2020":stream.primariesName;
+        metadata->inspected=true;
+    }
+    auto png=runThumbnailProcess(ffmpeg,frameArguments(path,stream,0,QSize(edge,edge),true),cancelled);
+    if(stream.hdrError.isEmpty()) {
+        tagFramePng(png,stream);
+        return hdrPreview(png,edge);
+    }
+    auto image=QImage::fromData(png,"PNG");
+    if(image.isNull())throw std::runtime_error("FFmpeg did not return a video thumbnail.");
+    return image;
+}
+
+void grabVideoFrame(QWidget* parent,const QString& source,std::function<QString()> outputDirectory,
+                    std::function<void(const QString&)> frameSaved) {
     const auto ffmpeg=executable("ffmpeg"),ffprobe=executable("ffprobe");
     if(ffmpeg.isEmpty()||ffprobe.isEmpty()) {
-        QMessageBox::information(parent,"Grab video frame","Install FFmpeg and make both ffmpeg and ffprobe available on PATH.");
-        return {};
+        auto* message=new QMessageBox(QMessageBox::Information,"Grab video frame",
+            "Install FFmpeg and make both ffmpeg and ffprobe available on PATH.",QMessageBox::Ok,parent);
+        message->setAttribute(Qt::WA_DeleteOnClose);
+        message->show();
+        return;
     }
-    const auto source=QFileDialog::getOpenFileName(parent,"Open HDR video",{},
-        "Video files (*.mp4 *.mkv *.mov *.m4v *.webm *.ts *.m2ts *.mts *.avi *.hevc *.h265 *.av1);;All files (*)");
-    if(source.isEmpty())return {};
-    VideoFrameDialog dialog(parent,source,ffmpeg,ffprobe);
-    return dialog.exec()==QDialog::Accepted?dialog.savedPath():QString{};
+    auto* dialog=new VideoFrameDialog(parent,source,ffmpeg,ffprobe,std::move(outputDirectory),std::move(frameSaved));
+    dialog->show();
 }
 }

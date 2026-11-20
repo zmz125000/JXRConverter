@@ -20,7 +20,7 @@ struct Record {
     qint64 bytes = 0;
     int width = 0, height = 0, bits = 0, iso = 0;
     double aperture = 0, shutter = 0, focal = 0;
-    bool raw = false, gainmap = false, hdr = false, inspected = false, thumbnailPending = false, thumbnailFailed = false;
+    bool video = false, raw = false, gainmap = false, hdr = false, inspected = false, thumbnailPending = false, thumbnailFailed = false;
     QDateTime captured, created, modified;
     QDateTime imageDate() const { return captured.isValid()?captured:modified.isValid()?modified:created; }
     QMap<QString, QString> exif;
@@ -33,7 +33,7 @@ class Catalog : public QAbstractTableModel {
     Q_OBJECT
 public:
     enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, Created, Modified, ExifDate, Width, Height, MaxEdge, Megapixels, AspectRatio, Hdr, Gainmap, Raw, Path, Error, MetadataWarning, ColumnCount };
-    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole, DetailsRole };
+    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole, DetailsRole, VideoRole };
     explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 128*1024);
     ~Catalog() override;
     int rowCount(const QModelIndex& parent = {}) const override;
@@ -42,7 +42,8 @@ public:
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
     const Record& record(int row) const { return records_.at(row); }
     QStringList paths() const;
-    void addPaths(const QStringList& paths, bool recursive = true);
+    void addPaths(const QStringList& paths, bool recursive = true, bool includeVideos = true);
+    const QSet<QString>& videoPaths() const { return videoPaths_; }
     void removePaths(const QStringList& paths);
     void clear();
     void setBackgroundMetadata(bool enabled);
@@ -74,7 +75,7 @@ private:
     mutable QHash<QString,int> rowsByPath_;
     mutable bool rowIndexValid_ = false;
     int statusUpdateDepth_ = 0, firstStatusRow_ = -1, lastStatusRow_ = -1;
-    QSet<QString> known_;
+    QSet<QString> known_, videoPaths_;
     QThreadPool scans_, workers_;
     QSemaphore sourceReadSlots_{2}; // At most two source handles, shared by thumbnails and metadata.
     static constexpr int ThumbnailBudget = 6;
@@ -98,7 +99,7 @@ QString catalogFieldKey(int column);
 struct Filter {
     QString search, text, format, range;
     int status = 0; // All, Finished (3), Failed (4); collection membership is independent.
-    bool restrictPaths = false;
+    bool restrictPaths = false, videosOnly = false;
     QSet<QString> paths;
     int minWidth = 0, minHeight = 0, minMaxEdge = 0;
     double minMegapixels = 0;
@@ -112,10 +113,12 @@ public:
     explicit CatalogFilter(QObject* parent = nullptr);
     void setFilter(const Filter& filter);
     const Filter& filter() const { return filter_; }
+    int imageCount() const;
 protected:
     bool filterAcceptsRow(int row, const QModelIndex& parent) const override;
     bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
 private:
     Filter filter_;
+    mutable int imageCount_ = -1;
 };
 }

@@ -1,4 +1,5 @@
 #include "catalog.hpp"
+#include "video_frame.hpp"
 #include "jxrc/converter.hpp"
 #include <exiv2/exiv2.hpp>
 #include <QDirIterator>
@@ -41,6 +42,7 @@ QString dimensions(const Record& r) {
     return r.width > 0 ? QString("%1 × %2").arg(r.width).arg(r.height) : QString{};
 }
 void keepBasicFileMetadata(Record& updated,const Record& original) {
+    updated.video=original.video;
     if(updated.path.isEmpty())updated.path=original.path;
     if(updated.name.isEmpty())updated.name=original.name;
     if(updated.format.isEmpty())updated.format=original.format;
@@ -128,6 +130,12 @@ Record readMetadata(const QString& path,const std::function<bool()>& cancelled,Q
     }
 }
 QImage readThumbnail(const QString& path,int edge,const std::function<bool()>& cancelled,Record* metadata,QSemaphore* sourceReadSlots) {
+    if(supportedVideoFile(path)) {
+        if(sourceReadSlots)sourceReadSlots->acquire();
+        QSemaphoreReleaser releaseReadSlot(sourceReadSlots);
+        checkCancelled(cancelled);
+        return readVideoThumbnail(path,edge,cancelled,metadata);
+    }
     const auto source=readSource(path,cancelled,sourceReadSlots,metadata!=nullptr);
     Preview image;ImageInfo info;
     try {image=preview_bytes(source.bytes,std::min(edge,768),metadata?&info:nullptr,cancelled);}
@@ -183,6 +191,7 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     if (!index.isValid() || index.row() >= records_.size()) return {};
     const auto& r = records_[index.row()];
     if (role == PathRole) return r.path;
+    if (role == VideoRole) return r.video;
     if (role == RawRole) return r.raw;
     if (role == SummaryRole) return QStringList{dimensions(r), r.format, r.transfer}.filter(QRegularExpression(".+")).join(" · ");
     if (role == DetailsRole) {
@@ -240,19 +249,21 @@ int Catalog::find(const QString& path) const {
     }
     return rowsByPath_.value(path,-1);
 }
-void Catalog::addPaths(const QStringList& paths, bool recursive) {
+void Catalog::addPaths(const QStringList& paths, bool recursive, bool includeVideos) {
     const auto epoch=epoch_;
     ++scanning_;emit scanStateChanged(true);
-    scans_.start([this,paths,recursive,epoch] {
+    scans_.start([this,paths,recursive,includeVideos,epoch] {
         QVector<Record> batch;
         auto send=[&] {
             if(batch.isEmpty()||!epoch->load())return;
             auto ready=std::move(batch);batch.clear();
             QMetaObject::invokeMethod(this,[this,ready,epoch]{if(epoch->load())insertPaths(ready);},Qt::QueuedConnection);
         };
-        auto add=[&](const QString& path,const QFileInfo& info) {
-            if(!supportedFile(path))return;
+        auto add=[&](const QString& path,const QFileInfo& info,bool allowVideo) {
+            const bool video=allowVideo&&supportedVideoFile(path);
+            if(!video&&!supportedFile(path))return;
             Record r;r.path=path;r.name=info.fileName();r.format=info.suffix().toUpper();
+            r.video=video;
             r.bytes=info.size();r.modified=info.lastModified().toLocalTime();r.created=info.birthTime().toLocalTime();
             batch.append(std::move(r));
         };
@@ -267,10 +278,10 @@ void Catalog::addPaths(const QStringList& paths, bool recursive) {
                 QDirIterator it(root,QDir::Files|QDir::Readable|QDir::NoSymLinks,recursive?QDirIterator::Subdirectories:QDirIterator::NoIteratorFlags);
                 while(epoch->load()&&it.hasNext()) {
                     const auto file=it.next();if(!epoch->load())break;
-                    add(file,it.fileInfo());
+                    add(file,it.fileInfo(),includeVideos);
                     if(batch.size()>=64)send();
                 }
-            } else if(info.isFile()&&supportedFile(path))add(info.canonicalFilePath(),info);
+            } else if(info.isFile()&&(supportedFile(path)||supportedVideoFile(path)))add(info.canonicalFilePath(),info,true);
             else QMetaObject::invokeMethod(this,[this,path,epoch]{if(epoch->load())emit scanError("Skipped unsupported or missing file: "+path);},Qt::QueuedConnection);
         }
         send();QMetaObject::invokeMethod(this,[this,epoch]{if(epoch->load()){--scanning_;emit scanStateChanged(scanning_>0);}},Qt::QueuedConnection);
@@ -284,13 +295,14 @@ void Catalog::insertPaths(const QVector<Record>& paths) {
         const auto id=key(r.path);if(id.isEmpty()||known_.contains(id))continue;
         known_.insert(id);
         if(r.format=="JPG"||r.format=="JPE")r.format="JPEG";
-        r.raw=!QSet<QString>{"EXR","HDR","RADIANCE","RGBE","XYZE","PIC","PFM","HEIC","HEIF","HEICS","HEIFS","HIF","PNG","WEBP","TIF","TIFF","BMP","GIF","JPEG","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
-        metadataQueue_.append(r.path);
+        r.raw=!r.video&&!QSet<QString>{"EXR","HDR","RADIANCE","RGBE","XYZE","PIC","PFM","HEIC","HEIF","HEICS","HEIFS","HIF","PNG","WEBP","TIF","TIFF","BMP","GIF","JPEG","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
+        if(!r.video)metadataQueue_.append(r.path);
         additions.append(std::move(r));
     }
     if(!additions.isEmpty()){
         beginInsertRows({},records_.size(),records_.size()+additions.size()-1);
         rowIndexValid_=false;records_+=additions;
+        for(const auto& r:additions)if(r.video)videoPaths_.insert(r.path);
         endInsertRows();
     }
     // In browsing mode let the first paint schedule a combined thumbnail and
@@ -321,7 +333,7 @@ void Catalog::pumpMetadata() {
     auto standalone=[this](int row) {
         // A visible thumbnail supplies metadata from its source buffer. Only
         // failed thumbnails need a separate metadata fallback.
-        return row>=0&&!records_[row].inspected&&(!visibleThumbnails_.contains(records_[row].path)||records_[row].thumbnailFailed);
+        return row>=0&&!records_[row].video&&!records_[row].inspected&&(!visibleThumbnails_.contains(records_[row].path)||records_[row].thumbnailFailed);
     };
     for(const auto& candidate:visibleThumbnails_) {
         const int row=find(candidate);if(standalone(row)){path=candidate;break;}
@@ -353,7 +365,7 @@ void Catalog::clear() {
     epoch_->store(false);epoch_=std::make_shared<std::atomic_bool>(true);
     scans_.clear();scanning_=0;metadataQueue_.clear();visibleThumbnails_.clear();cancelMetadata();
     for(const auto& path:thumbnailJobs_.keys())cancelThumbnail(path);
-    beginResetModel();records_.clear();rowsByPath_.clear();rowIndexValid_=false;known_.clear();cache_.clear();endResetModel();
+    beginResetModel();records_.clear();rowsByPath_.clear();rowIndexValid_=false;known_.clear();videoPaths_.clear();cache_.clear();endResetModel();
     emit scanStateChanged(false);
 }
 void Catalog::beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible) {
@@ -458,7 +470,7 @@ void Catalog::removePaths(const QStringList& paths) {
     for(int i=records_.size()-1;i>=0;--i)if(removal.contains(records_[i].path)) {
         const auto path=records_[i].path;
         visibleThumbnails_.removeAll(path);cancelThumbnail(path);
-        beginRemoveRows({},i,i);records_.removeAt(i);rowIndexValid_=false;known_.remove(key(path));cache_.remove(path);endRemoveRows();
+        beginRemoveRows({},i,i);videoPaths_.remove(path);records_.removeAt(i);rowIndexValid_=false;known_.remove(key(path));cache_.remove(path);endRemoveRows();
     }
     pumpMetadata();
 }
@@ -475,7 +487,25 @@ void Catalog::endStatusUpdates() {
     const int first=firstStatusRow_,last=lastStatusRow_;firstStatusRow_=lastStatusRow_=-1;
     if(first>=0)emit dataChanged(index(first,Status),index(last,Error),{Qt::DisplayRole});
 }
-CatalogFilter::CatalogFilter(QObject* parent):QSortFilterProxyModel(parent) {setDynamicSortFilter(true);setSortCaseSensitivity(Qt::CaseInsensitive);}
+CatalogFilter::CatalogFilter(QObject* parent):QSortFilterProxyModel(parent) {
+    setDynamicSortFilter(true);setSortCaseSensitivity(Qt::CaseInsensitive);
+    auto invalidateCount=[this]{imageCount_=-1;};
+    connect(this,&QAbstractItemModel::rowsInserted,this,invalidateCount);
+    connect(this,&QAbstractItemModel::rowsRemoved,this,invalidateCount);
+    connect(this,&QAbstractItemModel::modelReset,this,invalidateCount);
+    connect(this,&QAbstractItemModel::layoutChanged,this,invalidateCount);
+}
+int CatalogFilter::imageCount() const {
+    const auto* catalog=qobject_cast<const Catalog*>(sourceModel());
+    if(!catalog||filter_.videosOnly)return 0;
+    if(catalog->videoPaths().isEmpty())return rowCount();
+    if(catalog->videoPaths().size()==catalog->rowCount())return 0;
+    if(imageCount_>=0)return imageCount_;
+    imageCount_=0;
+    for(int row=0;row<rowCount();++row)
+        imageCount_+=!catalog->record(mapToSource(index(row,0)).row()).video;
+    return imageCount_;
+}
 void CatalogFilter::setFilter(const Filter& filter) {
 #if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
     beginFilterChange();
@@ -492,6 +522,7 @@ QString catalogFieldKey(int column) {
 }
 bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     const auto& r=static_cast<Catalog*>(sourceModel())->record(row);const auto& f=filter_;
+    if(f.videosOnly&&!r.video)return false;
     if(f.restrictPaths&&!f.paths.contains(r.path))return false;
     if(f.status==3&&!r.status.startsWith("Done")&&r.status!="Skipped")return false;
     if(f.status==4&&r.status!="Failed")return false;

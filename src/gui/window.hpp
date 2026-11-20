@@ -51,7 +51,8 @@ protected:
     void dropEvent(QDropEvent*) override;
 private:
     QWidget* buildControls();
-    void importVideoFrame();
+    void importVideoFrame(const QString& source);
+    void updateVideoTab();
     void addDroppedPaths(const QStringList& paths);
     void loadHistory();
     void saveHistory();
@@ -130,6 +131,7 @@ private:
     QDoubleSpinBox *sdrShadows_, *sdrMidtones_, *sdrHighlights_, *megapixels_, *distance_, *exposure_, *rawExposure_, *highlight_, *shoulder_, *shadows_, *midtones_, *highlights_;
     QDateEdit *dateFrom_, *dateTo_;
     QCheckBox *autoAspect_, *portraitAspect_, *smoothScrolling_, *loadFolder_, *loadFiles_, *loadJobs_, *loadFilters_, *acceptSdr_, *metadataFilters_, *today_, *wheelChanges_, *checkUpdates_, *dateEnabled_, *recursive_, *downsize_, *exif_, *transcode_, *formatFolders_, *convertedFolder_, *parentFolders_, *flattenFolders_, *dateFolders_, *jobFolders_, *jumpToJob_, *sourceFolder_, *renameConflicts_, *preserveOriginalDate_, *overwrite_, *convertGamut_, *srgbClamp_, *bt2020_, *cameraLook_, *linearHdr_, *disableRawBoost_, *rawAutoExposure_, *rawProtectHighlights_, *autoBitDepth_, *sdrToneMap_, *sdrAutoCurve_, *sdrAutoShoulder_, *sdrAutoRange_;
+    QCheckBox* includeVideos_;
     QGroupBox *custom_, *processing_, *raw_, *toneMap_;
     QLabel *sdrShoulderValue_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;

@@ -1056,6 +1056,67 @@ private slots:
         QCOMPARE(selection->selectedRows().size(),1);
         QCOMPARE(selection->selectedRows().first().data(Catalog::PathRole).toString(),c);
     }
+    void videosInLibraryAndConversion() {
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        const auto directory=root("video-library");
+        const auto image=makeImage(directory,"image.jpg",32,24,100);
+        const auto video=directory+"/clip.MKV";
+        QFile stub(video);
+        QVERIFY(stub.open(QIODevice::WriteOnly));
+        stub.close();
+
+        auto* model=window.filterModel();
+        auto* videoTab=window.findChild<QPushButton*>("statusVideo");
+        auto* includeVideos=window.findChild<QCheckBox*>("includeVideos");
+        auto* convertAll=window.findChild<QPushButton*>("convertVisible");
+        auto* convertSelected=window.findChild<QPushButton*>("convertSelected");
+        auto* view=window.findChild<FileListView*>();
+        QVERIFY(includeVideos->isChecked());
+        QVERIFY(videoTab->isHidden());
+        includeVideos->setChecked(false);
+        window.addPaths({directory});
+        QTRY_VERIFY(!window.catalog()->scanning());
+        QCOMPARE(model->rowCount(),1);
+
+        includeVideos->setChecked(true);
+        window.addPaths({directory});
+        QTRY_COMPARE(model->rowCount(),2);
+        QVERIFY(!videoTab->isHidden());
+        QCOMPARE(model->imageCount(),1);
+        videoTab->click();
+        QCOMPARE(model->rowCount(),1);
+        QVERIFY(model->index(0,0).data(Catalog::VideoRole).toBool());
+        QVERIFY(!convertAll->isEnabled());
+        QVERIFY(!convertSelected->isEnabled());
+
+        window.findChild<QPushButton*>("statusAll")->click();
+        window.findChild<QLineEdit*>("instantFilter")->setText("clip");
+        QCOMPARE(model->rowCount(),1);
+        QVERIFY(!convertAll->isEnabled());
+        view->selectionModel()->select(model->index(0,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+        QVERIFY(!convertSelected->isEnabled());
+        window.findChild<QLineEdit*>("instantFilter")->clear();
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        for(int row=0;row<targets->count();++row) {
+            auto* item=targets->item(row);
+            item->setCheckState(item->data(Qt::UserRole).toInt()==int(jxrc::Target::jpeg)?Qt::Checked:Qt::Unchecked);
+        }
+        window.findChild<QLineEdit*>("outputDirectory")->setText(root("video-library-output"));
+        QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
+        QVERIFY(convertAll->isEnabled());
+        convertAll->click();
+        QTRY_COMPARE(done.count(),1);
+        QCOMPARE(window.queue()->total(),1);
+        QCOMPARE(done.first().first().toInt(),1);
+
+        videoTab->click();
+        window.findChild<QPushButton*>("clearLibrary")->click();
+        QVERIFY(videoTab->isHidden());
+        QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());
+        QCOMPARE(window.catalog()->paths(),QStringList{image});
+    }
     void libraryTabScrollPositions() {
         appSettings().clear();MainWindow window;window.resize(1200,700);window.show();
         const auto directory=root("tab-scroll");const auto source=makeImage(directory,"00.jpg",32,24,100);QStringList files{source};

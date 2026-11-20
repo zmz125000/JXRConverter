@@ -300,6 +300,12 @@ void ThumbnailDelegate::paint(QPainter* painter,const QStyleOptionViewItem& opti
     const auto icon=qvariant_cast<QIcon>(index.data(Catalog::ThumbnailRole));
     if(!icon.isNull())paintThumbnail(painter,thumb,icon,fill);
     else{painter->setPen(QColor("#88958f"));painter->drawText(thumb,Qt::AlignCenter,index.siblingAtColumn(Catalog::Format).data().toString());}
+    if(index.data(Catalog::VideoRole).toBool()) {
+        const QRect badge(thumb.left()+4,thumb.bottom()-23,20,20);
+        painter->setPen(Qt::NoPen);painter->setBrush(option.palette.base());painter->drawRoundedRect(badge,4,4);
+        const auto* style=option.widget?option.widget->style():QApplication::style();
+        style->standardIcon(QStyle::SP_MediaPlay).paint(painter,badge.adjusted(3,3,-3,-3));
+    }
     QRect text=grid?QRect(tile.left()+10,thumb.bottom()+8,tile.width()-20,20):QRect(thumb.right()+14,tile.top()+8,tile.width()-thumb.width()-32,20);
     painter->setPen(option.palette.text().color());QFont font=option.font;font.setBold(true);painter->setFont(font);
     painter->drawText(text,Qt::AlignVCenter,painter->fontMetrics().elidedText(index.data().toString(),Qt::ElideMiddle,text.width()));
