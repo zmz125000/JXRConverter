@@ -31,7 +31,7 @@ https://github.com/zmz125000/LocalViewer
 
 JXRConverter is a HDR image converter that  
 renders accurate SDR base images,  
-while preserving wide color gamut,  
+while preserving wide color gamut, with built-in color management  
 then outputs to JPG/AVIF Gain Map Ultra HDR and more.   
 
 Supported HDR formats: JPG, PNG, JXR, JXL, HEIF, AVIF, OpenEXR, Radiance HDR, PFM, TIFF and RAW.  
@@ -41,7 +41,11 @@ and comes with a Qt6 GUI for Windows, Linux and macOS.
 
 special thanks to [SKIV](https://github.com/SpecialKO/SKIV) for the best HDR to SDR tone mapper.
 
-Features:  
+#### The app uses piecewise tone mapping for HDR to SDR conversion, the results are much better than tools like Xbox Game Bar built-in PNG.  
+
+<img width="800" alt="download" src="https://github.com/user-attachments/assets/f8fcd4e1-6401-4010-afe7-5232cf5da598" />
+
+## Features:  
 1. Convert OpenEXR, Radiance HDR/RGBE/XYZE, PFM, floating-point/LogLuv TIFF, JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL scRGB, HLG and PQ HDR.
 2. Creates accurate SDR JPGs from HDR sources by preserving the "untouched" SDR range (0-203 nits) from HDR sources to sRGB SDR.
 3. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
@@ -61,7 +65,7 @@ See the [conversion matrix](docs/conversion-matrix.md) for input classes, output
 <img alt="Get it on GitHub" src="https://github.com/zmz125000/LocalViewer-art/blob/master/get-it-on-github.svg" width="200px"/>
 </a>
 
-<img width="2232" height="1561" alt="JXRConverter screenshot" src="https://github.com/user-attachments/assets/a9cdc1e5-86de-4592-8fa6-4db33049ab23" />
+<img width="2587" height="1726" alt="Screenshot 2026-11-18 200403_result" src="https://github.com/user-attachments/assets/1387bd0d-26b7-4b2d-b5b9-9dfd3db69a77" />
 <img width="1920" height="1080" alt="JXRConverter JXR JPG HDR sample" src="https://github.com/zmz125000/LocalViewer-art/blob/master/Screenshots/PRAGMATA%204_21_2026%2010_24_50%20PM_low_gainmap.jpg?raw=true" />
 <img width="1920" height="1080" alt="JXRConverter JXR JPG HDR sample" src="https://github.com/zmz125000/LocalViewer-art/blob/master/Screenshots/S.T.A.L.K.E.R.%202_%20Heart%20of%20Chornobyl%20%20%2011_23_2025%2010_04_32%20AM_low_gainmap.jpg?raw=true" />
 
