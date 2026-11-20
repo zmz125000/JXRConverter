@@ -1,6 +1,7 @@
 #include "video_frame.hpp"
 #include "catalog.hpp"
 #include "jxrc/converter.hpp"
+#include <QColorSpace>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialog>
@@ -81,6 +82,7 @@ struct VideoStream {
     QString hdrError, primariesName, transferName;
     QString inputMatrix;
 
+    bool hdr() const { return transfer!=0; }
     QString ffmpegPrimaries() const {
         return primaries==9?"bt2020":primaries==12?"smpte432":"bt709";
     }
@@ -129,12 +131,48 @@ VideoStream readStream(const QByteArray& json) {
     stream.transfer=transfer=="smpte2084"?16:transfer=="arib-std-b67"?18:0;
     stream.primaries=primaries=="bt2020"?9:primaries=="smpte432"?12:primaries=="bt709"?1:0;
     const auto matrix=video.value("color_space").toString();
-    if(!stream.transfer||!stream.primaries)
-        stream.hdrError="No supported HDR signal found. Use a tagged PQ or HLG video, or Dolby Vision Profile 5.";
+    if(stream.hdr()&&!stream.primaries)
+        stream.hdrError="This HDR signal has unsupported or missing color primaries.";
     else if(matrix=="bt2020c")
         stream.hdrError="BT.2020 constant-luminance video is unsupported for frame grabs.";
     if(matrix=="bt2020nc"||(matrix.isEmpty()&&stream.primaries==9))stream.inputMatrix="bt2020";
+    else if(matrix=="smpte170m"||matrix=="bt470bg")stream.inputMatrix="bt601";
+    else if(matrix=="bt709"||matrix=="smpte240m"||matrix=="fcc")stream.inputMatrix=matrix;
     return stream;
+}
+
+QColorSpace sdrColorSpace(const VideoStream& stream) {
+    using Transfer=QColorSpace::TransferFunction;
+    QColorSpace color(QColorSpace::SRgb);
+    const auto& primaries=stream.primariesName;
+    const QPointF d65(.3127,.3290);
+    if(primaries=="smpte432")color.setPrimaries(QColorSpace::Primaries::DciP3D65);
+    else if(primaries=="bt2020")color.setPrimaries(d65,{.708,.292},{.170,.797},{.131,.046});
+    else if(primaries=="smpte170m"||primaries=="smpte240m")color.setPrimaries(d65,{.630,.340},{.310,.595},{.155,.070});
+    else if(primaries=="bt470bg")color.setPrimaries(d65,{.640,.330},{.290,.600},{.150,.060});
+
+    const auto& transfer=stream.transferName;
+    if(transfer=="linear")color.setTransferFunction(Transfer::Linear);
+    else if(transfer=="gamma22"||transfer=="gamma28")
+        color.setTransferFunction(Transfer::Gamma,transfer=="gamma22"?2.2f:2.8f);
+    else if(transfer=="bt709"||transfer=="smpte170m"||transfer=="bt2020-10"||transfer=="bt2020-12") {
+        // ICC curves describe encoded values going to linear light. Tabulate
+        // the inverse video transfer using the continuous BT.709 coefficients.
+        static const auto curve=[] {
+            QList<uint16_t> table;
+            constexpr int steps=4096;
+            constexpr double alpha=1.09929682680944, beta=0.018053968510807;
+            table.reserve(steps+1);
+            for(int i=0;i<=steps;++i) {
+                const double code=double(i)/steps;
+                const double linear=code<4.5*beta?code/4.5:std::pow((code+alpha-1.)/alpha,1./.45);
+                table.append(uint16_t(std::lround(linear*65535)));
+            }
+            return table;
+        }();
+        color.setTransferFunction(curve);
+    }
+    return color;
 }
 
 QString frameFilter(const VideoStream& stream,const QSize& preview) {
@@ -157,9 +195,9 @@ QStringList frameArguments(const QString& source,const VideoStream& stream,int p
     if(!thumbnail)args << "-ss" << QString::number(position/1000.0,'f',3) << "-copyts" << "-start_at_zero";
     args << "-i" << source << "-map" << QString("0:%1").arg(stream.index);
     if(stream.hdrError.isEmpty()) {
-        args << "-vf" << frameFilter(stream,preview)
-             << "-pix_fmt" << "rgb48be" << "-colorspace" << "rgb" << "-color_primaries" << stream.ffmpegPrimaries()
-             << "-color_trc" << stream.ffmpegTransfer() << "-color_range" << "pc";
+        args << "-vf" << frameFilter(stream,preview) << "-pix_fmt" << "rgb48be"
+             << "-colorspace" << "rgb" << "-color_range" << "pc";
+        if(stream.hdr())args << "-color_primaries" << stream.ffmpegPrimaries() << "-color_trc" << stream.ffmpegTransfer();
     } else {
         args << "-vf" << QString("scale=w=%1:h=%2:force_original_aspect_ratio=decrease").arg(preview.width()).arg(preview.height())
              << "-pix_fmt" << "rgb24";
@@ -172,31 +210,55 @@ void tagFramePng(QByteArray& png,const VideoStream& stream) {
     static const QByteArray signature=QByteArray::fromHex("89504e470d0a1a0a");
     if(png.size()<33||!png.startsWith(signature)||png.mid(12,4)!="IHDR"||png[24]!=16||png[25]!=2)
         throw std::runtime_error("FFmpeg did not return a 16-bit RGB PNG frame.");
-    // Some FFmpeg versions omit cICP. Replace it with the RGB metadata of the
-    // filter output, and discard whole-video light levels from this still.
+    // Some FFmpeg versions omit cICP. Use the RGB encoding of the filter
+    // output. SDR uses an ICC curve when the video transfer differs from sRGB.
     for(qsizetype at=33;at+12<=png.size();) {
         const auto length=qFromBigEndian<quint32>(png.constData()+at);
         if(length>png.size()-at-12)throw std::runtime_error("FFmpeg returned a truncated PNG.");
         const auto type=png.mid(at+4,4);
-        if(type=="cICP"||type=="cLLI")png.remove(at,qsizetype(length)+12);
+        if(type=="cICP"||type=="cLLI"||(!stream.hdr()&&(type=="iCCP"||type=="sRGB"||type=="gAMA"||type=="cHRM"||type=="mDCV")))
+            png.remove(at,qsizetype(length)+12);
         else at+=qsizetype(length)+12;
         if(type=="IEND") {
-            QByteArray cicp(16,'\0');
-            qToBigEndian<quint32>(4,cicp.data());
-            cicp.replace(4,4,"cICP");
-            cicp[8]=char(stream.primaries);
-            cicp[9]=char(stream.transfer);
-            cicp[11]=1; // Full-range RGB, with matrix coefficients 0 (identity).
-            const auto crc=crc32(0,reinterpret_cast<const Bytef*>(cicp.constData()+4),8);
-            qToBigEndian<quint32>(quint32(crc),cicp.data()+12);
-            png.insert(33,cicp);
+            QByteArray colorChunk(4,'\0');
+            if(stream.hdr()) {
+                colorChunk+="cICP";
+                colorChunk+=char(stream.primaries);
+                colorChunk+=char(stream.transfer);
+                colorChunk+='\0'; // RGB identity matrix, full range.
+                colorChunk+='\1';
+            } else {
+                const auto color=sdrColorSpace(stream);
+                if(color==QColorSpace(QColorSpace::SRgb)) {
+                    colorChunk+="sRGB";
+                    colorChunk+='\1'; // Relative colorimetric intent.
+                } else {
+                    const auto profile=color.iccProfile();
+                    if(profile.isEmpty())throw std::runtime_error("Cannot write the SDR frame color profile.");
+                    colorChunk+="iCCP";
+                    colorChunk+=QByteArray("Video SDR\0\0",11);
+                    colorChunk+=qCompress(profile).mid(4); // Drop Qt's uncompressed-length prefix.
+                }
+            }
+            qToBigEndian<quint32>(quint32(colorChunk.size()-8),colorChunk.data());
+            const auto crc=crc32(0,reinterpret_cast<const Bytef*>(colorChunk.constData()+4),uInt(colorChunk.size()-4));
+            colorChunk.resize(colorChunk.size()+4);
+            qToBigEndian<quint32>(quint32(crc),colorChunk.data()+colorChunk.size()-4);
+            png.insert(33,colorChunk);
             return;
         }
     }
     throw std::runtime_error("FFmpeg returned an incomplete PNG frame.");
 }
 
-QImage hdrPreview(const QByteArray& png,int edge) {
+QImage framePreview(const QByteArray& png,const VideoStream& stream,int edge) {
+    if(!stream.hdr()) {
+        auto image=QImage::fromData(png,"PNG");
+        if(image.isNull())throw std::runtime_error("Cannot display this frame.");
+        image.setColorSpace(sdrColorSpace(stream));
+        image.convertToColorSpace(QColorSpace::SRgb);
+        return image;
+    }
     const auto* first=reinterpret_cast<const uint8_t*>(png.constData());
     const auto image=jxrc::preview_bytes(std::vector<uint8_t>(first,first+png.size()),edge);
     if(image.rgba.empty())throw std::runtime_error("Cannot display this frame.");
@@ -238,7 +300,7 @@ Record videoMetadata(const VideoStream& stream) {
     metadata.width=stream.size.width();
     metadata.height=stream.size.height();
     metadata.displayAspect=stream.displayAspect;
-    metadata.hdr=stream.transfer!=0;
+    metadata.hdr=stream.hdr();
     metadata.transfer=stream.transfer==16?"PQ":stream.transfer==18?"HLG":stream.transferName;
     metadata.primaries=stream.dolbyVision?"BT.2020":stream.primariesName;
     metadata.inspected=true;
@@ -275,7 +337,7 @@ private:
 class VideoFrameDialog final : public QDialog {
 public:
     VideoFrameDialog(QWidget* parent,QString source,QString ffmpeg,QString ffprobe,
-                     std::function<QString()> outputDirectory,std::function<QString(const QString&,bool)> frameSaved)
+                     std::function<QString()> outputDirectory,std::function<QString(const QString&,bool,bool)> frameSaved)
         : QDialog(parent), source_(std::move(source)), ffmpeg_(std::move(ffmpeg)),
           outputDirectory_(std::move(outputDirectory)), frameSaved_(std::move(frameSaved)) {
         setAttribute(Qt::WA_DeleteOnClose);
@@ -336,10 +398,7 @@ public:
             if(!directory.isEmpty())startGrab(directory,FrameAction::save);
         });
         connect(saveAs_,&QPushButton::clicked,this,&VideoFrameDialog::saveFrameAs);
-        connect(convert_,&QPushButton::clicked,this,[this]{
-            const auto directory=framesDirectory();
-            if(!directory.isEmpty())startGrab(directory,FrameAction::convert);
-        });
+        connect(convert_,&QPushButton::clicked,this,&VideoFrameDialog::convertCurrentFrame);
 
         timer_.setSingleShot(true);
         timer_.setInterval(130);
@@ -392,6 +451,7 @@ private:
     }
 
     void invalidatePreview() {
+        lastSavedPath_.clear();
         previewReady_=false;
         setSaveEnabled(false);
         status_->setText("Seeking…");
@@ -450,9 +510,10 @@ private:
                 QSaveFile file(path);
                 if(!file.open(QIODevice::WriteOnly)||file.write(output)!=output.size()||!file.commit())
                     throw std::runtime_error(("Cannot save frame: "+file.errorString()).toStdString());
-                const auto saved=QFileInfo(path).canonicalFilePath();
-                const auto message=frameSaved_(saved.isEmpty()?QFileInfo(path).absoluteFilePath():saved,frameAction_==FrameAction::convert);
-                status_->setText(message.isEmpty()?"Saved "+QFileInfo(path).fileName():message);
+                const QFileInfo saved(path);
+                lastSavedPath_=saved.canonicalFilePath();
+                if(lastSavedPath_.isEmpty())lastSavedPath_=saved.absoluteFilePath();
+                publishFrame(lastSavedPath_,frameAction_==FrameAction::convert);
                 setSeekEnabled(true);
                 setSaveEnabled(true);
             }
@@ -462,13 +523,13 @@ private:
     }
 
     void showPreview(const QByteArray& png,const QString& log) {
-        preview_->setImage(hdrPreview(png,previewSize.width()),stream_.displayAspect);
+        preview_->setImage(framePreview(png,stream_,previewSize.width()),stream_.displayAspect);
         const static QRegularExpression pts(R"(\bn:\s*0\s+pts:\s*\S+\s+pts_time:(\S+))");
         bool valid=false;
         const auto frameTime=pts.match(log).captured(1).toDouble(&valid);
         framePosition_=valid&&std::isfinite(frameTime)&&frameTime>=0&&frameTime<=std::numeric_limits<int>::max()/1000.0
             ?qRound(frameTime*1000):decodePosition_;
-        const auto transfer=stream_.dolbyVision?"Dolby Vision → PQ":stream_.transfer==16?"PQ":"HLG";
+        const auto transfer=stream_.dolbyVision?"Dolby Vision → PQ":stream_.transfer==16?"PQ":stream_.transfer==18?"HLG":"SDR";
         status_->setText(QString("Frame %1 · %2 × %3 · %4")
             .arg(timecode(framePosition_)).arg(stream_.size.width()).arg(stream_.size.height()).arg(transfer));
         previewReady_=true;
@@ -522,7 +583,7 @@ private:
 
     void saveFrameAs() {
         if(operation_!=Operation::idle||!previewReady_)return;
-        auto* dialog=new QFileDialog(this,"Save HDR video frame",availableFilename(QFileInfo(source_).absoluteDir()),"PNG image (*.png)");
+        auto* dialog=new QFileDialog(this,"Save video frame",availableFilename(QFileInfo(source_).absoluteDir()),"PNG image (*.png)");
         dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->setAcceptMode(QFileDialog::AcceptSave);
         dialog->setDefaultSuffix("png");
@@ -541,6 +602,22 @@ private:
         dialog->show();
     }
 
+    void publishFrame(const QString& path,bool convert) {
+        const auto message=frameSaved_(path,convert,stream_.hdr());
+        status_->setText(message.isEmpty()?"Saved "+QFileInfo(path).fileName():message);
+    }
+
+    void convertCurrentFrame() {
+        if(operation_!=Operation::idle||!previewReady_)return;
+        // Only reuse a file written by this dialog since the last seek.
+        if(!lastSavedPath_.isEmpty()&&QFileInfo(lastSavedPath_).isFile()) {
+            publishFrame(lastSavedPath_,true);
+            return;
+        }
+        const auto directory=framesDirectory();
+        if(!directory.isEmpty())startGrab(directory,FrameAction::convert);
+    }
+
     void startGrab(const QString& destination,FrameAction action) {
         if(operation_!=Operation::idle||!previewReady_)return;
         destination_=destination;
@@ -552,8 +629,8 @@ private:
 
     const QString source_, ffmpeg_;
     const std::function<QString()> outputDirectory_;
-    const std::function<QString(const QString&,bool)> frameSaved_;
-    QString destination_;
+    const std::function<QString(const QString&,bool,bool)> frameSaved_;
+    QString destination_, lastSavedPath_;
     VideoStream stream_;
     QProcess process_;
     QTimer timer_;
@@ -589,7 +666,7 @@ QImage readVideoThumbnail(const QString& path,int edge,const std::function<bool(
     auto png=runVideoProcess(ffmpeg,frameArguments(path,stream,0,QSize(edge,edge),true),cancelled);
     if(stream.hdrError.isEmpty()) {
         tagFramePng(png,stream);
-        return hdrPreview(png,edge);
+        return framePreview(png,stream,edge);
     }
     auto image=QImage::fromData(png,"PNG");
     if(image.isNull())throw std::runtime_error("FFmpeg did not return a video thumbnail.");
@@ -597,7 +674,7 @@ QImage readVideoThumbnail(const QString& path,int edge,const std::function<bool(
 }
 
 void grabVideoFrame(QWidget* parent,const QString& source,std::function<QString()> outputDirectory,
-                    std::function<QString(const QString&,bool)> frameSaved) {
+                    std::function<QString(const QString&,bool,bool)> frameSaved) {
     const auto ffmpeg=executable("ffmpeg"),ffprobe=executable("ffprobe");
     if(ffmpeg.isEmpty()||ffprobe.isEmpty()) {
         auto* message=new QMessageBox(QMessageBox::Information,"Grab video frame",

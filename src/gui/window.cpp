@@ -1098,7 +1098,7 @@ void MainWindow::importVideoFrame(const QString& source) {
         layout.converted_subfolder=convertedFolder_->isChecked();
         if(output.isEmpty()&&!layout.source_folder)return QString{};
         return outputFolder(source,output,Target::png_hdr,layout);
-    },[this](const QString& path,bool convert)->QString {
+    },[this](const QString& path,bool convert,bool hdr)->QString {
         if(statusFilter_->checkedId()!=0){statusFilter_->button(0)->setChecked(true);updateFilter();}
         selectedImages_={path};
         rememberedImages_.insert(path);
@@ -1110,7 +1110,7 @@ void MainWindow::importVideoFrame(const QString& source) {
         if(targets.isEmpty())return "Frame saved. Select an output format to convert it.";
         if(routingToken_||updater_->installing())return "Frame saved. Use Convert selected when the main window is ready.";
         auto routing=std::make_shared<Routing>();
-        routing->insert(path,{true,false,{}});
+        routing->insert(path,{hdr,false,{}});
         return convertPaths({path},targets,false,true,false,false,false,routing)
             ?"Frame queued for conversion.":"Frame saved. See the output queue for the conversion error.";
     });
