@@ -2,6 +2,7 @@
 #include "catalog.hpp"
 #include "jxrc/converter.hpp"
 #include <QColorSpace>
+#include <QColorTransform>
 #include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialog>
@@ -21,9 +22,11 @@
 #include <QPainter>
 #include <QProcess>
 #include <QPushButton>
+#include <QQueue>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QSaveFile>
+#include <QSignalBlocker>
 #include <QSlider>
 #include <QStandardPaths>
 #include <QStyle>
@@ -41,6 +44,8 @@
 namespace jxrc::gui {
 namespace {
 const QSize previewSize(640, 368);
+const QSize playbackPreviewSize(480, 276);
+const QString timestampFilter="settb=AVTB,showinfo=checksum=0";
 const QStringList videoExtensions={"mp4","mkv","mov","m4v","webm","ts","m2ts","mts","avi","hevc","h265",
     "h264","av1","mpg","mpeg","vob","wmv","asf","flv","3gp","3g2","ogv","mxf","m2v","mpv","dv"};
 
@@ -175,27 +180,30 @@ QColorSpace sdrColorSpace(const VideoStream& stream) {
     return color;
 }
 
-QString frameFilter(const VideoStream& stream,const QSize& preview) {
-    const QString fit=QString("w=%1:h=%2:force_original_aspect_ratio=decrease")
-        .arg(preview.width()).arg(preview.height());
+QString frameFilter(const VideoStream& stream,const QSize& preview,const QString& rgbFormat="rgb48be",bool fit=true) {
+    QString scale=preview.isEmpty()?"w=iw:h=ih":QString("w=%1:h=%2").arg(preview.width()).arg(preview.height());
+    if(!preview.isEmpty()&&fit)scale+=":force_original_aspect_ratio=decrease";
     if(stream.dolbyVision) {
         // Profile 5 needs the per-frame RPU reshaping before RGB samples can be tagged as PQ.
-        return "showinfo=checksum=0,libplacebo="+(!preview.isEmpty()?fit+":":QString{})+
+        return "libplacebo="+(!preview.isEmpty()?scale+":":QString{})+
             "format=gbrp16le:colorspace=gbr:color_primaries=bt2020:color_trc=smpte2084:"
-            "range=pc:apply_dolbyvision=true:apply_filmgrain=false,format=rgb48be";
+            "range=pc:apply_dolbyvision=true:apply_filmgrain=false,format="+rgbFormat;
     }
-    QString scale=!preview.isEmpty()?fit:"w=iw:h=ih";
     if(!stream.inputMatrix.isEmpty())scale+=":in_color_matrix="+stream.inputMatrix;
-    return "showinfo=checksum=0,scale="+scale+":out_range=pc:flags=accurate_rnd+full_chroma_int,format=rgb48be";
+    const QString flags=fit?"accurate_rnd+full_chroma_int":"fast_bilinear";
+    return "scale="+scale+":out_range=pc:flags="+flags+",format="+rgbFormat;
 }
 
-QStringList frameArguments(const QString& source,const VideoStream& stream,int position,const QSize& preview,bool thumbnail=false) {
+QStringList frameArguments(const QString& source,const VideoStream& stream,int position,const QSize& preview,
+                           bool thumbnail=false,bool keyframe=false) {
     QStringList args={"-hide_banner","-nostdin","-loglevel",thumbnail?"error":"info"};
     if(thumbnail)args << "-threads" << "1" << "-filter_threads" << "1";
-    if(!thumbnail)args << "-ss" << QString::number(position/1000.0,'f',3) << "-copyts" << "-start_at_zero";
+    if(position||!thumbnail)args << "-ss" << QString::number(position/1000.0,'f',3);
+    if(keyframe)args << "-noaccurate_seek" << "-skip_frame" << "nokey";
+    if(!thumbnail)args << "-copyts" << "-start_at_zero";
     args << "-i" << source << "-map" << QString("0:%1").arg(stream.index);
     if(stream.hdrError.isEmpty()) {
-        args << "-vf" << frameFilter(stream,preview) << "-pix_fmt" << "rgb48be"
+        args << "-vf" << (thumbnail?frameFilter(stream,preview):timestampFilter+","+frameFilter(stream,preview)) << "-pix_fmt" << "rgb48be"
              << "-colorspace" << "rgb" << "-color_range" << "pc";
         if(stream.hdr())args << "-color_primaries" << stream.ffmpegPrimaries() << "-color_trc" << stream.ffmpegTransfer();
     } else {
@@ -204,6 +212,36 @@ QStringList frameArguments(const QString& source,const VideoStream& stream,int p
     }
     args << "-frames:v" << "1" << "-c:v" << "png" << "-threads:v" << "1" << "-f" << "image2pipe" << "pipe:1";
     return args;
+}
+
+QStringList playbackArguments(const QString& source,const VideoStream& stream,int position,const QSize& size) {
+    // Preserve the selected frames' timestamps so Pause can seek to the
+    // actual last displayed frame, including in variable-rate clips.
+    const auto filter="select='isnan(prev_selected_t)+gte(t-prev_selected_t,1/30-0.000001)',"+
+        frameFilter(stream,size,"rgb24",false)+",realtime,"+timestampFilter;
+    return {"-hide_banner","-nostdin","-nostats","-loglevel","info","-filter_threads","1",
+        "-ss",QString::number(position/1000.0,'f',3),"-copyts","-start_at_zero","-i",source,
+        "-map",QString("0:%1").arg(stream.index),"-vf",filter,"-c:v","rawvideo","-threads:v","1",
+        "-pix_fmt","rgb24","-fps_mode","passthrough","-flush_packets","1","-f","rawvideo","pipe:1"};
+}
+
+QColorTransform playbackTransform(const VideoStream& stream) {
+    auto space=sdrColorSpace(stream);
+#if QT_VERSION >= QT_VERSION_CHECK(6, 8, 0)
+    if(stream.hdr()) {
+        using Transfer=QColorSpace::TransferFunction;
+        space.setTransferFunction(stream.transfer==16?Transfer::St2084:Transfer::Hlg);
+        if(stream.dolbyVision)space.setPrimaries(QColorSpace::Primaries::Bt2020);
+    }
+#endif
+    return space.transformationToColorSpace(QColorSpace::SRgb);
+}
+
+qint64 frameTimestampUs(const QString& log) {
+    static const QRegularExpression pts(R"(\bn:\s*\d+\s+pts:\s*(-?\d+)\s+pts_time:)");
+    bool valid=false;
+    const auto microseconds=pts.match(log).captured(1).toLongLong(&valid);
+    return valid&&microseconds>=0&&microseconds<=qint64(std::numeric_limits<int>::max())*1000?microseconds:-1;
 }
 
 void tagFramePng(QByteArray& png,const VideoStream& stream) {
@@ -355,6 +393,29 @@ public:
         seek_->setEnabled(false);
         layout->addWidget(seek_);
 
+        auto* playbackRow=new QHBoxLayout;
+        playbackRow->addStretch();
+        for(const int delta:{-60,-5,-1,0,1,5,60}) {
+            auto* button=new QPushButton(delta?QString("%1%2s").arg(delta>0?"+":"").arg(delta):"Play");
+            button->setAutoDefault(false);
+            button->setEnabled(false);
+            playbackRow->addWidget(button);
+            playbackButtons_.append(button);
+            if(delta) {
+                button->setObjectName("videoFrameJump"+QString::number(delta));
+                connect(button,&QPushButton::clicked,this,[this,delta] {
+                    const qint64 position=qint64(seek_->value())+delta*1000;
+                    seek_->setValue(int(std::clamp(position,qint64(0),qint64(seek_->maximum()))));
+                });
+            } else {
+                play_=button;
+                play_->setObjectName("videoFramePlay");
+                connect(play_,&QPushButton::clicked,this,&VideoFrameDialog::togglePlayback);
+            }
+        }
+        playbackRow->addStretch();
+        layout->addLayout(playbackRow);
+
         auto* timeRow=new QHBoxLayout;
         clock_=new QLabel;
         timeRow->addWidget(clock_,1);
@@ -409,11 +470,15 @@ public:
         connect(seek_,&QSlider::valueChanged,this,[this](int value) {
             time_->setText(timecode(value));
             updateClock();
+            lastSavedPath_.clear();
             invalidatePreview();
-            if(!seek_->isSliderDown())timer_.start();
+            if(playing_)restartPlayback();
+            else if(!seek_->isSliderDown())timer_.start();
         });
+        connect(seek_,&QSlider::sliderPressed,this,[this]{if(playing_)stopPlaybackProcess();});
         connect(seek_,&QSlider::sliderReleased,this,[this] {
-            if(!previewReady_)timer_.start();
+            if(playing_)restartPlayback();
+            else if(!previewReady_)timer_.start();
         });
         connect(time_,&QLineEdit::editingFinished,this,[this] {
             const auto match=timecodePattern().match(time_->text());
@@ -430,15 +495,25 @@ public:
             operation_=Operation::idle;
             errorMessage(operation,"Cannot start "+QFileInfo(process_.program()).fileName()+": "+process_.errorString());
         });
+        connect(&playback_,&QProcess::readyReadStandardOutput,this,&VideoFrameDialog::readPlayback);
+        connect(&playback_,&QProcess::readyReadStandardError,this,&VideoFrameDialog::readPlayback);
+        connect(&playback_,&QProcess::finished,this,[this](int code,QProcess::ExitStatus status) {
+            finishPlaybackProcess(code==0&&status==QProcess::NormalExit);
+        });
+        connect(&playback_,&QProcess::errorOccurred,this,[this](QProcess::ProcessError error) {
+            if(error==QProcess::FailedToStart)finishPlaybackProcess(false);
+        });
         operation_=Operation::probe;
         process_.start(ffprobe,probeArguments(source_));
     }
 
     ~VideoFrameDialog() override {
-        process_.disconnect(this);
-        if(process_.state()!=QProcess::NotRunning) {
-            process_.kill();
-            process_.waitForFinished(1000);
+        for(auto* process:{&playback_,&process_}) {
+            process->disconnect(this);
+            if(process->state()!=QProcess::NotRunning) {
+                process->kill();
+                process->waitForFinished(1000);
+            }
         }
     }
 
@@ -451,13 +526,109 @@ private:
     }
 
     void invalidatePreview() {
-        lastSavedPath_.clear();
         previewReady_=false;
         setSaveEnabled(false);
-        status_->setText("Seeking…");
+        if(!playing_)status_->setText("Seeking…");
         if(operation_==Operation::preview) {
             obsolete_=true;
             process_.kill();
+        }
+    }
+
+    void togglePlayback() {
+        if(playing_) {
+            pausePlayback();
+            return;
+        }
+        playing_=true;
+        playbackFailed_=false;
+        play_->setText("Pause");
+        timer_.stop();
+        invalidatePreview();
+        restartPlayback();
+    }
+
+    void stopPlaybackProcess() {
+        playbackObsolete_=true;
+        if(playback_.state()!=QProcess::NotRunning)playback_.kill();
+    }
+
+    void restartPlayback() {
+        if(playback_.state()!=QProcess::NotRunning) {
+            stopPlaybackProcess();
+            return;
+        }
+        if(seek_->isSliderDown())return;
+        playbackObsolete_=false;
+        playbackBytes_.clear();
+        playbackLog_.clear();
+        playbackTimes_.clear();
+        status_->setText("Playing…");
+        playback_.start(ffmpeg_,playbackArguments(source_,stream_,seek_->value(),playbackSize_));
+    }
+
+    void pausePlayback() {
+        playing_=false;
+        play_->setText("Play");
+        stopPlaybackProcess();
+        if(operation_==Operation::idle)decodeFrame(Operation::preview);
+        else timer_.start();
+    }
+
+    void finishPlaybackProcess(bool succeeded) {
+        readPlayback();
+        if(!playing_)return;
+        if(playbackObsolete_) {
+            restartPlayback();
+            return;
+        }
+        playbackFailed_=!succeeded;
+        pausePlayback();
+    }
+
+    void readPlayback() {
+        const auto bytes=playback_.readAllStandardOutput();
+        const auto log=playback_.readAllStandardError();
+        if(!playing_||playbackObsolete_)return;
+        playbackBytes_+=bytes;
+        playbackLog_+=log;
+        qsizetype start=0;
+        for(qsizetype end;(end=playbackLog_.indexOf('\n',start))>=0;start=end+1) {
+            const auto line=QString::fromLatin1(playbackLog_.constData()+start,end-start);
+            const auto microseconds=frameTimestampUs(line);
+            if(microseconds>=0) {
+                // Seek at or just before the frame PTS. Rounding up can miss
+                // the displayed frame when its timestamp falls between milliseconds.
+                playbackTimes_.enqueue(int(microseconds/1000));
+            }
+        }
+        if(start)playbackLog_.remove(0,start);
+
+        const qsizetype stride=3*playbackSize_.width();
+        const qsizetype frameBytes=stride*playbackSize_.height();
+        const auto frames=std::min(playbackTimes_.size(),playbackBytes_.size()/frameBytes);
+        if(frames) {
+            // If more than one frame arrived in this event, display the newest.
+            for(qsizetype i=1;i<frames;++i)playbackTimes_.dequeue();
+            const int position=std::clamp(playbackTimes_.dequeue(),0,seek_->maximum());
+            const auto* pixels=reinterpret_cast<const uchar*>(playbackBytes_.constData()+(frames-1)*frameBytes);
+            auto image=QImage(pixels,playbackSize_.width(),playbackSize_.height(),stride,QImage::Format_RGB888).copy();
+            playbackBytes_.remove(0,frames*frameBytes);
+            if(!playbackColor_.isIdentity())image.applyColorTransform(playbackColor_);
+            preview_->setImage(std::move(image),stream_.displayAspect);
+            if(position!=seek_->value()) {
+                const QSignalBlocker blocker(seek_);
+                seek_->setValue(position);
+                if(!time_->isModified())time_->setText(timecode(position));
+                updateClock();
+                lastSavedPath_.clear();
+            }
+        }
+        // The timestamp pipe can lead the pixel pipe because each message
+        // is much smaller than a raw frame. Bound both buffers independently.
+        if(playbackTimes_.size()>60||playbackBytes_.size()>12*frameBytes) {
+            playbackFailed_=true;
+            pausePlayback();
         }
     }
 
@@ -489,6 +660,9 @@ private:
                 stream_=readStream(output);
                 if(!stream_.hdrError.isEmpty())throw std::runtime_error(stream_.hdrError.toStdString());
                 if(!std::isfinite(stream_.duration)||stream_.duration<=0)throw std::runtime_error("The video has no seekable duration.");
+                const auto fit=stream_.size.scaled(playbackPreviewSize,Qt::KeepAspectRatio);
+                playbackSize_={std::max(1,fit.width()),std::max(1,fit.height())};
+                playbackColor_=playbackTransform(stream_);
                 durationMs_=int(std::min(stream_.duration*1000.,double(std::numeric_limits<int>::max())));
                 // Accurate seeking returns the first frame at or after the seek point.
                 const auto frameMs=stream_.fps>0?std::clamp(1000./stream_.fps,1.,double(durationMs_)+1):1;
@@ -524,14 +698,13 @@ private:
 
     void showPreview(const QByteArray& png,const QString& log) {
         preview_->setImage(framePreview(png,stream_,previewSize.width()),stream_.displayAspect);
-        const static QRegularExpression pts(R"(\bn:\s*0\s+pts:\s*\S+\s+pts_time:(\S+))");
-        bool valid=false;
-        const auto frameTime=pts.match(log).captured(1).toDouble(&valid);
-        framePosition_=valid&&std::isfinite(frameTime)&&frameTime>=0&&frameTime<=std::numeric_limits<int>::max()/1000.0
-            ?qRound(frameTime*1000):decodePosition_;
+        const auto frameTime=frameTimestampUs(log);
+        framePosition_=frameTime>=0?int((frameTime+500)/1000):decodePosition_;
         const auto transfer=stream_.dolbyVision?"Dolby Vision → PQ":stream_.transfer==16?"PQ":stream_.transfer==18?"HLG":"SDR";
-        status_->setText(QString("Frame %1 · %2 × %3 · %4")
-            .arg(timecode(framePosition_)).arg(stream_.size.width()).arg(stream_.size.height()).arg(transfer));
+        auto text=QString("Frame %1 · %2 × %3 · %4")
+            .arg(timecode(framePosition_)).arg(stream_.size.width()).arg(stream_.size.height()).arg(transfer);
+        if(playbackFailed_)text+=" · Playback unavailable";
+        status_->setText(text);
         previewReady_=true;
         setSaveEnabled(true);
     }
@@ -539,6 +712,7 @@ private:
     void setSeekEnabled(bool enabled) {
         seek_->setEnabled(enabled);
         time_->setEnabled(enabled);
+        for(auto* button:playbackButtons_)button->setEnabled(enabled);
     }
 
     void setSaveEnabled(bool enabled) {
@@ -632,17 +806,23 @@ private:
     const std::function<QString(const QString&,bool,bool)> frameSaved_;
     QString destination_, lastSavedPath_;
     VideoStream stream_;
-    QProcess process_;
+    QProcess process_, playback_;
     QTimer timer_;
+    QSize playbackSize_;
+    QColorTransform playbackColor_;
+    QByteArray playbackBytes_, playbackLog_;
+    QQueue<int> playbackTimes_;
     FramePreview* preview_;
     QLabel *clock_, *status_;
     QSlider* seek_;
     QLineEdit* time_;
-    QPushButton *grab_, *saveAs_, *convert_;
+    QList<QPushButton*> playbackButtons_;
+    QPushButton *grab_, *saveAs_, *convert_, *play_=nullptr;
     Operation operation_=Operation::idle;
     FrameAction frameAction_=FrameAction::save;
     int durationMs_=0, decodePosition_=0, framePosition_=0;
     bool obsolete_=false, previewReady_=false;
+    bool playing_=false, playbackObsolete_=false, playbackFailed_=false;
 };
 }
 
@@ -663,7 +843,15 @@ QImage readVideoThumbnail(const QString& path,int edge,const std::function<bool(
     if(metadata)*metadata=videoMetadata(stream);
     const auto ffmpeg=executable("ffmpeg");
     if(ffmpeg.isEmpty())throw std::runtime_error("Video thumbnails require ffmpeg.");
-    auto png=runVideoProcess(ffmpeg,frameArguments(path,stream,0,QSize(edge,edge),true),cancelled);
+    const QSize size(edge,edge);
+    const int position=std::isfinite(stream.duration)&&stream.duration>0
+        ?int(std::min(stream.duration*150.,double(std::numeric_limits<int>::max()))):0;
+    QByteArray png;
+    if(position>0) {
+        try {png=runVideoProcess(ffmpeg,frameArguments(path,stream,position,size,true,true),cancelled);}
+        catch(const std::exception&) {if(cancelled&&cancelled())throw;}
+    }
+    if(png.isEmpty())png=runVideoProcess(ffmpeg,frameArguments(path,stream,0,size,true),cancelled);
     if(stream.hdrError.isEmpty()) {
         tagFramePng(png,stream);
         return framePreview(png,stream,edge);
