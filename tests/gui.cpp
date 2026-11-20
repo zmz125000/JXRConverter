@@ -405,6 +405,41 @@ private slots:
         {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrAutoShoulder")->isChecked());QVERIFY(restored.findChild<QCheckBox*>("sdrAutoToneCurve")->isChecked());QCOMPARE(restored.findChild<QComboBox*>("sdrColorMapping")->currentIndex(),1);QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentData().toInt(),1);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
         appSettings().clear();
     }
+    void mpcvrTargetPersistsSeparately() {
+        appSettings().clear();
+        appSettings().setValue("controls/sdrShoulder",72);
+        {
+            MainWindow window;
+            auto* slider=window.findChild<QSlider*>("sdrShoulder");
+            auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");
+            QCOMPARE(slider->value(),72);
+            mapper->setCurrentText("MPCVR");
+            QCOMPARE(slider->value(),72);
+            slider->setValue(50);
+            QCOMPARE(window.options().sdr_shoulder,.50f);
+            mapper->setCurrentIndex(mapper->findData(0));
+            QCOMPARE(slider->value(),72);
+            slider->setValue(75);
+            mapper->setCurrentText("MPCVR");
+            QCOMPARE(slider->value(),50);
+        }
+        {
+            MainWindow window;
+            auto* slider=window.findChild<QSlider*>("sdrShoulder");
+            auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");
+            QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::mpcvr);
+            QCOMPARE(slider->value(),50);
+            QVERIFY(!window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());
+            mapper->setCurrentIndex(mapper->findData(0));
+            QCOMPARE(slider->value(),75);
+            QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());
+            window.findChild<QPushButton*>("resetSdrToneMapping")->click();
+            QCOMPARE(slider->value(),67);
+            mapper->setCurrentText("MPCVR");
+            QCOMPARE(slider->value(),67);
+        }
+        appSettings().clear();
+    }
     void pngThumbnailFallback() {
         const auto path=root("preview-only.png");QImage image(96,48,QImage::Format_RGBA8888);image.fill(QColor(180,95,45));QVERIFY(image.save(path,"PNG"));
         QFile file(path);QVERIFY(file.open(QIODevice::ReadOnly));auto bytes=file.readAll();file.close();

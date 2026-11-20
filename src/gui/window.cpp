@@ -69,6 +69,8 @@
 
 namespace jxrc::gui {
 namespace {
+constexpr int mpcvrMapperId = 6;
+
 class ToolbarSeparator : public QWidget {
 public:
     ToolbarSeparator(){setFixedWidth(8);setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Expanding);}
@@ -502,7 +504,7 @@ const char* settingProperty(QWidget* widget) {
 }
 QList<QWidget*> MainWindow::persistentControls() const {
     return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,transparencyBackground_,
-        sdrShadows_,sdrMidtones_,sdrHighlights_,sdrToneMap_,sdrToneMapper_,sdrColorMapping_,sdrShoulder_,sdrRange_,sdrAutoRange_,sdrAutoCurve_,sdrAutoShoulder_,exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
+        sdrShadows_,sdrMidtones_,sdrHighlights_,sdrToneMap_,sdrToneMapper_,sdrColorMapping_,sdrRange_,sdrAutoRange_,sdrAutoCurve_,sdrAutoShoulder_,exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
 }
@@ -511,6 +513,8 @@ QList<QWidget*> MainWindow::filterControls() const {
 }
 void MainWindow::restoreSettings() {
     auto settings=appSettings();
+    sdrShoulderPercent_=std::clamp(settings.value("controls/sdrShoulder",defaultSdrShoulderPercent).toInt(),sdrShoulder_->minimum(),sdrShoulder_->maximum());
+    mpcvrTargetPercent_=std::clamp(settings.value("controls/mpcvrSdrTarget",sdrShoulderPercent_).toInt(),sdrShoulder_->minimum(),sdrShoulder_->maximum());
     loadFilters_->setChecked(settings.value("controls/loadFilters",false).toBool());
     const auto filters=filterControls();
     for(auto* widget:persistentControls()) {
@@ -536,6 +540,8 @@ void MainWindow::restoreSettings() {
 }
 void MainWindow::saveSettings() const {
     auto settings=appSettings();
+    settings.setValue("controls/sdrShoulder",sdrShoulderPercent_);
+    settings.setValue("controls/mpcvrSdrTarget",mpcvrTargetPercent_);
     for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget==sdrToneMapper_?sdrToneMapper_->currentData():widget==sort_?sort_->currentData():widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
     settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
@@ -594,12 +600,12 @@ QWidget* MainWindow::buildControls() {
     connect(sdrAutoShoulder_,&QCheckBox::toggled,this,&MainWindow::updateMode);
     sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights","MPCVR"},"sdrToneMapper");
     // Stable IDs retain selections saved before the visual list was reordered.
-    const int mapperIds[]={3,4,5,0,1,2,6};for(int i=0;i<sdrToneMapper_->count();++i)sdrToneMapper_->setItemData(i,mapperIds[i]);
+    const int mapperIds[]={3,4,5,0,1,2,mpcvrMapperId};for(int i=0;i<sdrToneMapper_->count();++i)sdrToneMapper_->setItemData(i,mapperIds[i]);
     sdrToneMapper_->setCurrentIndex(1);toneForm->addRow("Tone mapper",sdrToneMapper_);
     sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls. SKIV (manual) applies Shadows, Midtones and Highlights to HDR pixels first, then feeds them into SKIV’s curve with Max RGB, Luminance or Per channel replacing its ICtCp color mapping.");
     sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");toneForm->addRow("Color mapping",sdrColorMapping_);
     sdrColorMapping_->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation. In SKIV (manual), this replaces SKIV’s internal ICtCp intensity/chroma mapping; tonal edits run first.");
-    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(67);
+    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(defaultSdrShoulderPercent);
     sdrShoulderLabel_=new QLabel("SDR shoulder");sdrShoulderLabel_->setBuddy(sdrShoulder_);
     sdrShoulderValue_=new QLabel;sdrShoulderValue_->setObjectName("sdrShoulderValue");
     auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow(sdrShoulderLabel_,sdrShoulderRow);
@@ -608,14 +614,20 @@ QWidget* MainWindow::buildControls() {
     sdrRangeInput_->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
     connect(sdrToneMapper_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
     connect(sdrAutoCurve_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrToneMap_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrAutoRange_,&QCheckBox::toggled,this,&MainWindow::updateMode);
-    connect(sdrShoulder_,&QSlider::valueChanged,this,&MainWindow::updateMode);connect(sdrRange_,&QSlider::valueChanged,this,&MainWindow::updateMode);
+    connect(sdrShoulder_,&QSlider::valueChanged,this,[this](int value){
+        if(sdrToneMapper_->currentData().toInt()==mpcvrMapperId)mpcvrTargetPercent_=value;
+        else sdrShoulderPercent_=value;
+        updateMode();
+    });
+    connect(sdrRange_,&QSlider::valueChanged,this,&MainWindow::updateMode);
     sdrShadows_=real(-1,1,0,.05,"sdrShadows");sdrMidtones_=real(-1,1,0,.05,"sdrMidtones");sdrHighlights_=real(-1,1,0,.05,"sdrHighlights");
     toneForm->addRow("Shadows",sliderInput(sdrShadows_,"sdrShadowsSlider"));toneForm->addRow("Midtones",sliderInput(sdrMidtones_,"sdrMidtonesSlider"));toneForm->addRow("Highlights",sliderInput(sdrHighlights_,"sdrHighlightsSlider"));
     for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setToolTip("Adjust tonal exposure before SDR highlight compression. Zero is neutral. Applies only to SDR outputs and new gain-map SDR bases.");
     auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
     connect(resetTone,&QPushButton::clicked,this,[this]{
         sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(false);sdrAutoShoulder_->setChecked(false);
-        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(0);sdrShoulder_->setValue(67);sdrRange_->setValue(2000);
+        sdrShoulderPercent_=mpcvrTargetPercent_=defaultSdrShoulderPercent;
+        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(0);sdrRange_->setValue(2000);
         for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setValue(0.);
         updateMode();
     });
@@ -711,7 +723,7 @@ void MainWindow::updateMode() {
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
     const int mapperId=sdrToneMapper_->currentData().toInt();
-    const bool tone=sdrToneMap_->isChecked(),mpcvr=mapperId==6,adjustableCurve=mapperId<3;
+    const bool tone=sdrToneMap_->isChecked(),mpcvr=mapperId==mpcvrMapperId,adjustableCurve=mapperId<3;
     const bool manualSkiv=mapperId==5,customSkiv=mapperId==4||manualSkiv;
     const bool manual=tone&&(manualSkiv||(adjustableCurve&&!sdrAutoCurve_->isChecked()));
     const bool autoShoulder=adjustableCurve&&sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked();
@@ -722,7 +734,11 @@ void MainWindow::updateMode() {
     sdrAutoRange_->setEnabled(tone&&(mpcvr||adjustableCurve||customSkiv));
     sdrRange_->setEnabled(sdrAutoRange_->isEnabled()&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrRange_->isEnabled());
     sdrAutoCurve_->setEnabled(tone&&adjustableCurve);
-    const int shoulder=sdrShoulder_->value();
+    const int shoulder=mpcvr?mpcvrTargetPercent_:sdrShoulderPercent_;
+    if(sdrShoulder_->value()!=shoulder){
+        const QSignalBlocker blocker(sdrShoulder_);
+        sdrShoulder_->setValue(shoulder);
+    }
     sdrShoulderLabel_->setText(mpcvr?"SDR display target":"SDR shoulder");
     sdrShoulder_->setToolTip(mpcvr?"MPCVR display target as a fraction of 203 nits, with a 25-nit minimum.":"");
     if(mpcvr) sdrShoulderValue_->setText(QString("%1 nits").arg(qRound(jxrc::mpcvr_display_nits(shoulder/100.f))));
