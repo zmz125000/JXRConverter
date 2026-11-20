@@ -1760,6 +1760,43 @@ static void skiv_tone_mapping(const fs::path& dir) {
         o.target=target;const auto enabled=dir/("skiv-hdr-on-"+std::to_string(int(target))),disabled=dir/("skiv-hdr-off-"+std::to_string(int(target)));
         o.sdr_tone_map=true;session.convert(enabled,o);o.sdr_tone_map=false;session.convert(disabled,o);check(bytes(enabled)==bytes(disabled),"SKIV changed HDR output");
     }
+
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::mpcvr;
+    o.target=jxrc::Target::png;
+    o.sdr_tone_map=true;
+    const auto mpcvr=dir/"mpcvr.png";
+    session.convert(mpcvr,o);
+    check(bytes(mpcvr)!=bytes(customPath),"MPCVR reused another mapper's SDR render");
+    o.sdr_auto_tone_curve=false;o.sdr_auto_shoulder=false;o.sdr_color_mapping=jxrc::SdrColorMapping::max_rgb;
+    o.sdr_shadows=0;o.sdr_midtones=0;o.sdr_highlights=0;
+    const auto ignoredMpcvr=dir/"mpcvr-ignored.png";
+    session.convert(ignoredMpcvr,o);
+    check(bytes(mpcvr)==bytes(ignoredMpcvr),"MPCVR used disabled tone controls");
+    o.sdr_shoulder=.3f;
+    const auto lowerTarget=dir/"mpcvr-lower-target.png";
+    session.convert(lowerTarget,o);
+    check(bytes(mpcvr)!=bytes(lowerTarget),"MPCVR ignored the SDR display target");
+    o.sdr_hdr_range_nits=500;
+    const auto lowerCap=dir/"mpcvr-lower-cap.png";
+    session.convert(lowerCap,o);
+    check(bytes(lowerTarget)!=bytes(lowerCap),"MPCVR ignored the HDR range cap");
+    const auto mpcvrBase=decode_sdr(lowerCap);
+    for(auto target:{jxrc::Target::jpeg_gainmap,jxrc::Target::avif_gainmap}) {
+        o.target=target;
+        const auto gain=dir/("mpcvr-gain-"+std::to_string(int(target)));
+        check(session.convert(gain,o).gainmap,"MPCVR gain-map export failed");
+        jxrc::Options base;base.target=jxrc::Target::png;
+        const auto basePath=gain.string()+"-base.png";
+        jxrc::convert(gain,basePath,base);
+        const auto actualBase=decode_sdr(basePath);
+        for(unsigned x:{2u,6u,10u,14u})check(std::abs(actualBase[x*4]-mpcvrBase[x*4])<.04,"MPCVR gain-map base differs from SDR output");
+    }
+    o.target=jxrc::Target::png_hdr;
+    const auto pqWithMpcvr=dir/"mpcvr-pq.png",pqWithoutMpcvr=dir/"mpcvr-pq-off.png";
+    session.convert(pqWithMpcvr,o);
+    o.sdr_tone_map=false;
+    session.convert(pqWithoutMpcvr,o);
+    check(bytes(pqWithMpcvr)==bytes(pqWithoutMpcvr),"MPCVR changed PQ output");
 }
 
 int main(int argc,char** argv) try {

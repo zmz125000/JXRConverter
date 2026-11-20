@@ -347,7 +347,7 @@ private slots:
     }
     void skivToneMapControls() {
         appSettings().clear();MainWindow window;
-        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),6);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
+        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),7);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
         QVERIFY(window.options().sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom);QVERIFY(!window.options().sdr_auto_tone_curve);
         auto* shoulder=window.findChild<QSlider*>("sdrShoulder");auto* range=window.findChild<QSpinBox*>("sdrHdrRangeInput");
         auto* autoRange=window.findChild<QCheckBox*>("sdrAutoHdrRange");QVERIFY(shoulder->isEnabled());QVERIFY(autoRange->isEnabled());
@@ -366,6 +366,12 @@ private slots:
         window.findChild<QCheckBox*>("sdrAutoToneCurve")->setChecked(false);
         mapper->setCurrentIndex(mapper->findData(0));QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());QVERIFY(autoRange->isEnabled());
         QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());QVERIFY(window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
+        mapper->setCurrentText("MPCVR");QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::mpcvr);
+        QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());QVERIFY(autoRange->isEnabled());
+        QVERIFY(!window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());QVERIFY(!window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
+        auto* shoulderValue=window.findChild<QLabel*>("sdrShoulderValue");
+        QCOMPARE(shoulderValue->text(),QString("136 nits"));
+        shoulder->setValue(0);QCOMPARE(shoulderValue->text(),QString("25 nits"));
         mapper->setCurrentIndex(1);window.findChild<QCheckBox*>("sdrToneMap")->setChecked(false);QVERIFY(!mapper->isEnabled());
         window.findChild<QPushButton*>("resetSdrToneMapping")->click();QCOMPARE(mapper->currentIndex(),1);QVERIFY(shoulder->isEnabled());
     }

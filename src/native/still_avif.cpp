@@ -1,5 +1,5 @@
 #include "image_size.h"
-// Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
+// Derived from LocalViewer; see NOTICE. Android entry points removed.
 #include "codec_api.h"
 #include "render_analysis.h"
 #include "hdr_parallel.h"

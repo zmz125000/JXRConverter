@@ -1,7 +1,7 @@
 #include "image_size.h"
 #include "tonal_zones.h"
 #include <memory>
-// Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
+// Derived from LocalViewer; see NOTICE. Android entry points removed.
 /*
  * Camera RAW (DNG / CR2 / NEF / …).
  *

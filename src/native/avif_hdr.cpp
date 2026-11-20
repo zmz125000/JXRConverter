@@ -3,7 +3,7 @@
 #include "render_analysis.h"
 #include "heif_decode.h"
 #include "gain_map.h"
-// Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
+// Derived from LocalViewer; see NOTICE. Android entry points removed.
 /*
  * AVIF still decode via libavif → Ultra HDR JPEG (libultrahdr).
  *

@@ -2,7 +2,7 @@ JXRConverter contains image-processing code derived from LocalViewer.
 LocalViewer reference commit: e74a70c2811a1e6a80841ea975ba171e219cf306
 Reference snapshot: LocalViewer/app/src/main/cpp in this workspace.
 The author confirms that the image-processing code ported here was written by
-Jingxuan Zhou and authorizes its release under MIT; see LICENSE.
+Jingxuan Zhou and authorizes its release under MIT; see LICENSE-MIT.
 LocalViewer's broader EhViewer lineage does not by itself determine the license
 of this author-owned image-processing code. Third-party code retains its notices
 and licenses.
@@ -22,8 +22,8 @@ OpenEXR/Imath (BSD-3-Clause), and OpenEXR's bundled libdeflate (MIT),
 OpenJPH (BSD-2-Clause), and Zstandard (BSD-3-Clause).
 Consult each dependency's license files when distributing binaries and source.
 
-COPYING retains GPL version 3 for distributions combined with Exiv2; it is not
-the license of the project's original source code.
+This branch combines JXRConverter with the MPC Video Renderer tone mapper
+under GPL version 3; see LICENSE.
 The native converter links Exiv2 (GPL and accompanying dependency notices) for
 photographic metadata. The optional desktop links Qt 6 Widgets
 (LGPL/GPL/commercial licensing). The pinned Ultra HDR CPU-count
@@ -50,3 +50,10 @@ include/utility/image.h, and resources/shaders/tone_mapping.hlsli. Copyright
 warranty notices are retained in src/native/skiv_tone_map.h. The portable
 implementation handles 203-nit working pixels and non-BT.709 source gamuts;
 SKIV (custom) anchors the ICtCp curve at the SDR shoulder and white point.
+
+The MPCVR SDR tone mapper in src/native/mpcvr_tone_map.h is a modified CPU
+port of the HDR-to-SDR Metadata spline by adipose in MPC Video Renderer,
+licensed under GPL version 3.
+https://github.com/zmz125000/VideoRenderer/blob/70811bc1ea738b7033e89ebc6392b47dd5befaaa/Shaders/convert/hdr_tone_mapping_spline.hlsl
+The still-image port uses the image peak, an optional HDR cap, and a display
+target derived from JXRConverter's SDR shoulder setting.

@@ -1,6 +1,6 @@
 #include "image_size.h"
 #include "working_pixels.h"
-// Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
+// Derived from LocalViewer; see NOTICE. Android entry points removed.
 /*
  * JPEG XL → one linear RGBA_F16 working contract via libjxl's CMS.
  *

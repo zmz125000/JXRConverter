@@ -592,14 +592,17 @@ QWidget* MainWindow::buildControls() {
     sdrAutoShoulder_=check("Auto shoulder","sdrAutoShoulder");
     sdrAutoShoulder_->setToolTip("With Auto tone curve, choose a shoulder from the median visible pixel, bounded to 50–67%. Off uses the SDR shoulder slider.");toneForm->addRow(sdrAutoShoulder_);
     connect(sdrAutoShoulder_,&QCheckBox::toggled,this,&MainWindow::updateMode);
-    sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
+    sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights","MPCVR"},"sdrToneMapper");
     // Stable IDs retain selections saved before the visual list was reordered.
-    const int mapperIds[]={3,4,5,0,1,2};for(int i=0;i<6;++i)sdrToneMapper_->setItemData(i,mapperIds[i]);
+    const int mapperIds[]={3,4,5,0,1,2,6};for(int i=0;i<sdrToneMapper_->count();++i)sdrToneMapper_->setItemData(i,mapperIds[i]);
     sdrToneMapper_->setCurrentIndex(1);toneForm->addRow("Tone mapper",sdrToneMapper_);
     sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls. SKIV (manual) applies Shadows, Midtones and Highlights to HDR pixels first, then feeds them into SKIV’s curve with Max RGB, Luminance or Per channel replacing its ICtCp color mapping.");
     sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");toneForm->addRow("Color mapping",sdrColorMapping_);
     sdrColorMapping_->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation. In SKIV (manual), this replaces SKIV’s internal ICtCp intensity/chroma mapping; tonal edits run first.");
-    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(67);sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
+    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(67);
+    sdrShoulderLabel_=new QLabel("SDR shoulder");sdrShoulderLabel_->setBuddy(sdrShoulder_);
+    sdrShoulderValue_=new QLabel;sdrShoulderValue_->setObjectName("sdrShoulderValue");
+    auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow(sdrShoulderLabel_,sdrShoulderRow);
     sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(2000);sdrRangeInput_=spin(204,10000,2000,"sdrHdrRangeInput");sdrRangeInput_->setSingleStep(50);sdrRangeInput_->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeInput_);toneForm->addRow("HDR range cap",rangeRow);
     connect(sdrRange_,&QSlider::valueChanged,sdrRangeInput_,&QSpinBox::setValue);connect(sdrRangeInput_,&QSpinBox::valueChanged,sdrRange_,&QSlider::setValue);
     sdrRangeInput_->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
@@ -707,15 +710,23 @@ void MainWindow::updateMode() {
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
-    const bool tone=sdrToneMap_->isChecked(),skiv=sdrToneMapper_->currentData().toInt()>=3,customSkiv=sdrToneMapper_->currentData().toInt()==4||sdrToneMapper_->currentData().toInt()==5,manualSkiv=sdrToneMapper_->currentData().toInt()==5;
-    const bool manual=tone&&(manualSkiv||(!skiv&&!sdrAutoCurve_->isChecked()));
-    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(tone);sdrColorMapping_->setEnabled(tone&&(!skiv||manualSkiv));
+    const int mapperId=sdrToneMapper_->currentData().toInt();
+    const bool tone=sdrToneMap_->isChecked(),mpcvr=mapperId==6,adjustableCurve=mapperId<3;
+    const bool manualSkiv=mapperId==5,customSkiv=mapperId==4||manualSkiv;
+    const bool manual=tone&&(manualSkiv||(adjustableCurve&&!sdrAutoCurve_->isChecked()));
+    const bool autoShoulder=adjustableCurve&&sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked();
+    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(tone);sdrColorMapping_->setEnabled(tone&&(adjustableCurve||manualSkiv));
     for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->parentWidget()->setEnabled(manual);
-    sdrAutoShoulder_->setEnabled(tone&&!skiv&&sdrAutoCurve_->isChecked());
-    sdrShoulder_->setEnabled(tone&&(customSkiv||(!skiv&&!(sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked()))));
-    sdrRange_->setEnabled(tone&&(!skiv||customSkiv)&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrRange_->isEnabled());
-    sdrAutoRange_->setEnabled(tone&&(!skiv||customSkiv));sdrAutoCurve_->setEnabled(tone&&!skiv);
-    sdrShoulderValue_->setText((!skiv&&sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked())?QString("Auto"):QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
+    sdrAutoShoulder_->setEnabled(tone&&adjustableCurve&&sdrAutoCurve_->isChecked());
+    sdrShoulder_->setEnabled(tone&&(mpcvr||customSkiv||(adjustableCurve&&!autoShoulder)));
+    sdrAutoRange_->setEnabled(tone&&(mpcvr||adjustableCurve||customSkiv));
+    sdrRange_->setEnabled(sdrAutoRange_->isEnabled()&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrRange_->isEnabled());
+    sdrAutoCurve_->setEnabled(tone&&adjustableCurve);
+    const int shoulder=sdrShoulder_->value();
+    sdrShoulderLabel_->setText(mpcvr?"SDR display target":"SDR shoulder");
+    sdrShoulder_->setToolTip(mpcvr?"MPCVR display target as a fraction of 203 nits, with a 25-nit minimum.":"");
+    if(mpcvr) sdrShoulderValue_->setText(QString("%1 nits").arg(qRound(jxrc::mpcvr_display_nits(shoulder/100.f))));
+    else sdrShoulderValue_->setText(autoShoulder?QString("Auto"):QString("%1% (%2 nits)").arg(shoulder).arg(qRound(shoulder*2.03)));
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);cameraLook_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     rawProtectHighlights_->setEnabled(process&&rawAutoExposure_->isChecked());
@@ -746,7 +757,7 @@ Options MainWindow::optionsForTarget(Target target) const {
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()==0?10:avifDepth_->currentIndex()==1?12:8;o.quality.downsize_gainmap=downsize_->isChecked();o.quality.auto_bit_depth=autoBitDepth_->isChecked();o.quality.png_depth=pngDepth_->currentIndex()?16:8;
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isChecked()&&target==Target::jxl&&(o.mode==Mode::preserve||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     if(o.mode==Mode::process) {
-        o.sdr_shadows=float(sdrShadows_->value());o.sdr_midtones=float(sdrMidtones_->value());o.sdr_highlights=float(sdrHighlights_->value());o.sdr_color_mapping=static_cast<SdrColorMapping>(sdrColorMapping_->currentIndex());const SdrToneMapper mappers[]={SdrToneMapper::logarithmic,SdrToneMapper::extended_reinhard,SdrToneMapper::reinhard,SdrToneMapper::skiv,SdrToneMapper::skiv_custom,SdrToneMapper::skiv_manual};o.sdr_tone_mapper=mappers[std::clamp(sdrToneMapper_->currentData().toInt(),0,5)];o.sdr_tone_map=sdrToneMap_->isChecked();o.sdr_shoulder=sdrShoulder_->value()/100.f;o.sdr_hdr_range_nits=sdrRange_->value();o.sdr_auto_hdr_range=sdrAutoRange_->isChecked();o.sdr_auto_tone_curve=sdrAutoCurve_->isChecked();o.sdr_auto_shoulder=sdrAutoShoulder_->isChecked();
+        o.sdr_shadows=float(sdrShadows_->value());o.sdr_midtones=float(sdrMidtones_->value());o.sdr_highlights=float(sdrHighlights_->value());o.sdr_color_mapping=static_cast<SdrColorMapping>(sdrColorMapping_->currentIndex());const SdrToneMapper mappers[]={SdrToneMapper::logarithmic,SdrToneMapper::extended_reinhard,SdrToneMapper::reinhard,SdrToneMapper::skiv,SdrToneMapper::skiv_custom,SdrToneMapper::skiv_manual,SdrToneMapper::mpcvr};o.sdr_tone_mapper=mappers[std::clamp(sdrToneMapper_->currentData().toInt(),0,6)];o.sdr_tone_map=sdrToneMap_->isChecked();o.sdr_shoulder=sdrShoulder_->value()/100.f;o.sdr_hdr_range_nits=sdrRange_->value();o.sdr_auto_hdr_range=sdrAutoRange_->isChecked();o.sdr_auto_tone_curve=sdrAutoCurve_->isChecked();o.sdr_auto_shoulder=sdrAutoShoulder_->isChecked();
         o.srgb_clamp=srgbClamp_->isChecked();o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.convert_gamut=convertGamut_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.auto_exposure=rawAutoExposure_->isChecked();o.raw.auto_exposure_protect_highlights=rawProtectHighlights_->isChecked();o.raw.shoulder=static_cast<float>(shoulder_->value());
         if(o.raw.hdr_mode!=RawHdrMode::source)o.raw.target_nits=static_cast<float>(nits_->value());
         if(o.raw.hdr_mode==RawHdrMode::custom){o.raw.exposure=static_cast<float>(rawExposure_->value());o.raw.white_balance=wb_->currentIndex();o.raw.kelvin=kelvin_->value();o.raw.highlight_stops=static_cast<float>(highlight_->value());o.raw.shoulder=static_cast<float>(shoulder_->value());o.raw.target_nits=static_cast<float>(nits_->value());o.raw.shadows=static_cast<float>(shadows_->value());o.raw.midtones=static_cast<float>(midtones_->value());o.raw.highlights=static_cast<float>(highlights_->value());o.raw.camera_look=cameraLook_->isChecked();o.raw.linear_hdr=linearHdr_->isChecked();if(disableRawBoost_->isChecked())o.raw.shoulder=0.f;}

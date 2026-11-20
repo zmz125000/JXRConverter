@@ -14,7 +14,8 @@ enum class GainMapReconstruction { off, automatic, full_image };
 // Append targets to retain saved GUI target identifiers.
 enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg };
 enum class SdrColorMapping { max_rgb, luminance, per_channel };
-enum class SdrToneMapper { reinhard, extended_reinhard, logarithmic, skiv, skiv_custom, skiv_manual };
+enum class SdrToneMapper { reinhard, extended_reinhard, logarithmic, skiv, skiv_custom, skiv_manual, mpcvr };
+JXRC_API float mpcvr_display_nits(float shoulder);
 enum class Preset { lossless, high, medium, low, custom };
 struct Quality {
     Preset preset = Preset::high;
@@ -50,7 +51,7 @@ struct Options {
     SdrToneMapper sdr_tone_mapper = SdrToneMapper::skiv_custom; // SKIV with the manual SDR shoulder/range.
     SdrColorMapping sdr_color_mapping = SdrColorMapping::max_rgb;
     float sdr_shadows = 0, sdr_midtones = 0, sdr_highlights = 0; // SDR-only tonal adjustments, -1..1.
-    float sdr_shoulder = 0.67f; // Linear fraction of 203-nit SDR white left unchanged.
+    float sdr_shoulder = 0.67f; // Fraction of 203 nits used as the shoulder or MPCVR display target.
     int sdr_hdr_range_nits = 2000; // Ceiling in nits; a lower image peak maps to SDR white.
     bool sdr_auto_tone_curve = false; // Cap source first, then fit the adjusted SDR curve endpoint.
     bool sdr_auto_shoulder = false; // Auto tone curve: adapt the shoulder within 50–67%; otherwise use sdr_shoulder.

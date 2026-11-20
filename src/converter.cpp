@@ -6,6 +6,7 @@
 #include "render_analysis.h"
 #include "native/sdr_tone_map.h"
 #include "native/skiv_tone_map.h"
+#include "native/mpcvr_tone_map.h"
 #include "working_pixels.h"
 #include "input_format.h"
 #include "heif_decode.h"
@@ -36,6 +37,10 @@ bool export_pixels_capture() { return true; }
 bool retain_reader_pixels(std::vector<uint8_t>&) { return false; }
 bool retain_reader_pixels(std::vector<uint16_t>&) { return false; }
 namespace jxrc {
+float mpcvr_display_nits(float shoulder) {
+    return std::max(25.f, shoulder * kSdrWhiteNits);
+}
+
 namespace {
 void require(bool condition,const std::string& message) { if(!condition) throw std::runtime_error(message); }
 void range(double value,double low,double high,const char* name) {
@@ -161,7 +166,7 @@ void validate(const Options& o) {
     if(o.quality.png_depth!=8&&o.quality.png_depth!=16)throw std::invalid_argument("PNG depth must be 8 or 16");
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
-    range(static_cast<int>(o.sdr_tone_mapper),0,5,"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
+    range(static_cast<int>(o.sdr_tone_mapper),0,static_cast<int>(SdrToneMapper::mpcvr),"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
     range(o.sdr_shoulder,0,0.99,"SDR shoulder");range(o.sdr_hdr_range_nits,204,10000,"SDR HDR range");
     range(o.sdr_shadows,-1,1,"SDR shadows");range(o.sdr_midtones,-1,1,"SDR midtones");range(o.sdr_highlights,-1,1,"SDR highlights");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
@@ -240,8 +245,9 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
     const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png;
     const bool base_only=cache.gainmap&&!full_gainmap&&sdr_target;
+    const bool mpcvr=o.sdr_tone_mapper==SdrToneMapper::mpcvr;
     const bool manual_tones=o.sdr_tone_mapper==SdrToneMapper::skiv_manual||
-        (!skiv_tone_mapper(o.sdr_tone_mapper)&&!o.sdr_auto_tone_curve);
+        (!mpcvr&&!skiv_tone_mapper(o.sdr_tone_mapper)&&!o.sdr_auto_tone_curve);
     const bool tonal_edits=o.sdr_tone_map&&manual_tones&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights);
     if(cache.gainmap&&!full_gainmap) {
         const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
@@ -416,6 +422,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         // either encoded plane's depth. Quantize it at the selected export depth.
         q.source_bits=full_gainmap?32:cache.bits;
         q.analysis=&cache.analysis;
+        const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
@@ -433,11 +440,13 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                     // than the pre-adjustment content peak, as its manual cap.
                     const float curve_range=(o.sdr_auto_tone_curve||adjust_zones)&&!o.sdr_auto_hdr_range?
                         float(o.sdr_hdr_range_nits):range;
-                    if(o.sdr_tone_mapper==SdrToneMapper::skiv_manual) {
-                        cache.mapped_sdr=tone_map_skiv_manual(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
+                    if(mpcvr) {
+                        cache.mapped_sdr=tone_map_mpcvr_base(linear,cg,range,mpcvr_display_nits(o.sdr_shoulder));
+                    } else if(o.sdr_tone_mapper==SdrToneMapper::skiv_manual) {
+                        cache.mapped_sdr=tone_map_skiv_manual(linear,cg,
                             o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones);
                     } else if(skiv_tone_mapper(o.sdr_tone_mapper)) {
-                        cache.mapped_sdr=tone_map_skiv_base(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
+                        cache.mapped_sdr=tone_map_skiv_base(linear,cg,
                             o.sdr_tone_mapper==SdrToneMapper::skiv_custom,o.sdr_shoulder,
                             o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits));
                     } else cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,curve_range,o.sdr_tone_mapper,o.sdr_color_mapping,luma,zones,o.sdr_auto_hdr_range,o.sdr_auto_tone_curve,o.sdr_auto_shoulder);
@@ -447,7 +456,6 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         }
         const float* export_pixels=sdr_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():linear.data();
         const float* export_base=gain_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():sdr_base.empty()?nullptr:sdr_base.data();
-        const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
         int rc;
         if(cache.scrgb) {
             StillSourceColor color;color.bits=cache.half_jxr?16:32;color.exponent_bits=cache.half_jxr?5:8;
