@@ -256,17 +256,24 @@ private slots:
         auto* table=window.findChild<FileTableView*>();QVERIFY(table);
         QVERIFY(!table->isColumnHidden(Catalog::Name));
         for(int column=1;column<Catalog::ColumnCount;++column)QVERIFY(table->isColumnHidden(column));
+        auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");QVERIFY(automatic);
+        automatic->setChecked(false);
+        auto* sort=window.findChild<QComboBox*>("sortField");QVERIFY(sort);
+        const int dimensions=sort->findData(Catalog::Dimensions);QVERIFY(dimensions>=0);
+        // Keep background inspection enabled through the browser settings even
+        // when the hidden window recalculates its presentation.
+        sort->setCurrentIndex(dimensions);
         const auto directory=root("detail-columns");QDir().mkpath(directory);
         const auto plainPath=directory+"/plain.png";
         QImage raster(32,24,QImage::Format_RGB32);raster.fill(Qt::red);QVERIFY(raster.save(plainPath));
         // Match the catalog's canonical paths, including macOS /private/var.
         const auto plain=QFileInfo(plainPath).canonicalFilePath();QVERIFY(!plain.isEmpty());
-        window.catalog()->setBackgroundMetadata(true);window.addPaths({plain});
+        window.addPaths({plain});
         QTRY_COMPARE(window.catalog()->rowCount(),1);QTRY_VERIFY(inspected(*window.catalog()));
         QTRY_VERIFY(!table->isColumnHidden(Catalog::Dimensions));
         QTRY_VERIFY(!table->isColumnHidden(Catalog::Size));
         QVERIFY(table->isColumnHidden(Catalog::Camera));QVERIFY(table->isColumnHidden(Catalog::Iso));QVERIFY(table->isColumnHidden(Catalog::Error));
-        const auto photo=makeImage(directory,"photo.jpg",64,48,400);
+        const auto photo=makeImage(directory,"photo.jpg",64,48,400);QVERIFY(!photo.isEmpty());
         window.addPaths({photo});QTRY_COMPARE(window.catalog()->rowCount(),2);QTRY_VERIFY(inspected(*window.catalog()));
         QTRY_VERIFY(!table->isColumnHidden(Catalog::Camera));QTRY_VERIFY(!table->isColumnHidden(Catalog::Iso));
         window.catalog()->setStatus(plain,"Failed","Example failure");
