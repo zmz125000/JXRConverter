@@ -30,13 +30,14 @@ A C++17 image conversion library and CLI extracted from LocalViewer.
 https://github.com/zmz125000/LocalViewer  
 
 JXRConverter is a HDR image converter that  
-renders accurate SDR base images,  
+renders accurate SDR base images from HDR sources,    
 while preserving wide color gamut, with built-in color management  
 then outputs to JPG/AVIF Gain Map Ultra HDR and more.   
 
 Supported HDR formats: JPG, PNG, JXR, JXL, HEIF, AVIF, OpenEXR, Radiance HDR, PFM, TIFF and RAW.  
 
-It also supports outputting 16-bit PNG, JXL and AVIF with Linear, scRGB, HLG and PQ transfers   
+It also supports HDR video frame grab using FFmpeg,
+outputting 16-bit PNG, JXL and AVIF with Linear, scRGB, HLG and PQ transfers   
 and comes with a Qt6 GUI for Windows, Linux and macOS.
 
 special thanks to  [MPCVR](https://github.com/Aleksoid1978/VideoRenderer/) and [SKIV](https://github.com/SpecialKO/SKIV) for the best HDR to SDR tone mappers.
@@ -68,7 +69,6 @@ See the [conversion matrix](docs/conversion-matrix.md) for input classes, output
 <img width="2587" height="1726" alt="Screenshot 2026-11-18 200403_result" src="https://github.com/user-attachments/assets/1387bd0d-26b7-4b2d-b5b9-9dfd3db69a77" />
 <img width="1920" height="1080" alt="JXRConverter JXR JPG HDR sample" src="https://github.com/zmz125000/LocalViewer-art/blob/master/Screenshots/PRAGMATA%204_21_2026%2010_24_50%20PM_low_gainmap.jpg?raw=true" />
 <img width="1920" height="1080" alt="JXRConverter JXR JPG HDR sample" src="https://github.com/zmz125000/LocalViewer-art/blob/master/Screenshots/S.T.A.L.K.E.R.%202_%20Heart%20of%20Chornobyl%20%20%2011_23_2025%2010_04_32%20AM_low_gainmap.jpg?raw=true" />
-
 
 ## Build
 
@@ -130,6 +130,7 @@ For supported formats and conversion paths, see the [conversion matrix](docs/con
 - [stb_image](https://github.com/nothings/stb)
 - [Exiv2](https://github.com/Exiv2/exiv2)
 - [Qt](https://www.qt.io/)
+- [SKIV](https://github.com/SpecialKO/SKIV)
 
 ## links
 Those links are unrelated to the project.

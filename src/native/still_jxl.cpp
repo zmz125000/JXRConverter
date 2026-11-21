@@ -1,3 +1,4 @@
+#include "output_file.h"
 #include "image_size.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "hdr_encode.h"
@@ -23,7 +24,7 @@ struct JxlFileCloser {
 }
 
 static int write_jxl_output(JxlEncoder* encoder, const char* path) {
-    std::unique_ptr<FILE, JxlFileCloser> file(fopen(path, "wb"));
+    std::unique_ptr<FILE, JxlFileCloser> file(open_output_file(path));
     if (!file) return -65;
     // Stream encoded bytes directly to disk; no second complete compressed file.
     std::array<uint8_t, 65536> output{};

@@ -1,3 +1,4 @@
+#include "output_file.h"
 #include "image_size.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "codec_api.h"
@@ -383,7 +384,7 @@ int write_avif_source(avifImage* image,const char* path,StillEncodeQuality quali
     avifRWData bytes=AVIF_DATA_EMPTY;
     const auto rc=avifEncoderWrite(encoder.get(),image,&bytes);
     if(rc!=AVIF_RESULT_OK) {avifRWDataFree(&bytes);return -82;}
-    FILE* f=fopen(path,"wb");bool good=false;
+    FILE* f=open_output_file(path);bool good=false;
     if(f){good=fwrite(bytes.data,1,bytes.size,f)==bytes.size;if(fclose(f)!=0)good=false;}
     avifRWDataFree(&bytes);return good?1:-83;
 }
@@ -536,7 +537,7 @@ int write_rgb_jpeg(unsigned w,unsigned h,const void* pixels,const StillSourceCol
     std::vector<uint8_t> structural;
     if(!quality.exif_size && color.orientation!=1) {structural=orientation_exif(color.orientation);quality.exif=structural.data();quality.exif_size=structural.size();}
     if(!insert_jpeg_exif(encoded,quality))return -87;
-    FILE* file=fopen(path,"wb");if(!file)return -83;
+    FILE* file=open_output_file(path);if(!file)return -83;
     const bool wrote=fwrite(encoded.data(),1,encoded.size(),file)==encoded.size();
     const bool closed=fclose(file)==0;return wrote&&closed?1:-83;
 }
@@ -554,7 +555,7 @@ int write_source_jpeg(const avifImage* image,const char* path,StillEncodeQuality
     std::vector<uint8_t> encoded;
     if(!jpeg_compress(image,quality.jpeg(),true,encoded))return -86;
     if(!insert_jpeg_exif(encoded,quality))return -87;
-    FILE* file=fopen(path,"wb");if(!file)return -83;
+    FILE* file=open_output_file(path);if(!file)return -83;
     const bool wrote=fwrite(encoded.data(),1,encoded.size(),file)==encoded.size();
     const bool closed=fclose(file)==0;return wrote&&closed?1:-83;
 }
@@ -582,7 +583,7 @@ int write_gainmap_jpeg(avifImage* image,const char* path,StillEncodeQuality qual
     const auto status=uhdr_encode(enc.get());
     if(!ok(status)){std::fprintf(stderr,"Gain-map JPEG packaging failed: %s\n",status.has_detail?status.detail:"no codec detail");return -88;}
     const auto* bytes=uhdr_get_encoded_stream(enc.get());if(!bytes)return -88;
-    FILE* f=fopen(path,"wb");if(!f)return -83;
+    FILE* f=open_output_file(path);if(!f)return -83;
     const bool wrote=fwrite(bytes->data,1,bytes->data_sz,f)==bytes->data_sz;
     const bool closed=fclose(f)==0;return wrote&&closed?1:-83;
 }

@@ -1,3 +1,4 @@
+#include "output_file.h"
 #include "image_size.h"
 #include "codec_api.h"
 #include "render_analysis.h"
@@ -70,7 +71,7 @@ int write_png(unsigned w,unsigned h,unsigned depth,unsigned channels,bool gray,
     const auto light=cached?*cached:hdr?png_light_levels(w,h,depth,channels,gray,color,row,fill):PngLightLevels{};
     if(analysis&&color.transfer==18&&!cached)analysis->record_hlg(depth,light);
     PngWriter writer;
-    writer.file=std::fopen(path,"wb");if(!writer.file)return -101;
+    writer.file=open_output_file(path);if(!writer.file)return -101;
     writer.png=png_create_write_struct(PNG_LIBPNG_VER_STRING,nullptr,nullptr,nullptr);
     if(!writer.png)return -102;
     writer.info=png_create_info_struct(writer.png);if(!writer.info)return -102;

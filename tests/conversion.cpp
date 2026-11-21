@@ -48,7 +48,7 @@ static std::vector<uint16_t> fixture(float peak=6) {
 }
 static void encode(const fs::path& path,int mode,bool hdr=true) {
     auto p=fixture(hdr?6:1);
-    check(encode_still_export(reinterpret_cast<uint8_t*>(p.data()),p.size()*2,64,48,true,2,mode,false,path.string().c_str(),0,StillEncodeQuality(0),false)==0,"Fixture encode");
+    check(encode_still_export(reinterpret_cast<uint8_t*>(p.data()),p.size()*2,64,48,true,2,mode,false,path.u8string().c_str(),0,StillEncodeQuality(0),false)==0,"Fixture encode");
 }
 template<class F>static void fails(F f) {bool failed=false;try{f();}catch(const std::exception&){failed=true;}check(failed,"Expected rejection");}
 // Uncompressed, single-strip Bayer DNG with explicit sensor calibration.
@@ -1762,10 +1762,34 @@ static void skiv_tone_mapping(const fs::path& dir) {
     }
 }
 
+static void unicode_paths(const fs::path& dir) {
+    const auto destination=dir/fs::u8path(u8"\u8f38\u51fa-\u65e5\u672c\u8a9e-\ud55c\uae00");
+    fs::create_directory(destination);
+    const auto source=dir/fs::u8path(u8"\u539f\u672c.jpg");
+    encode(source,0,false);
+    jxrc::ConversionSession session(source);
+    jxrc::Options o;
+    for(const auto target:{jxrc::Target::jpeg,jxrc::Target::png,jxrc::Target::jxl,jxrc::Target::avif,jxrc::Target::jpeg_gainmap}) {
+        o.target=target;
+        const auto output=destination/fs::u8path(u8"\u5199\u771f-"+std::to_string(int(target)));
+        if(target!=jxrc::Target::jpeg_gainmap) {
+            o.mode=jxrc::Mode::preserve;
+            check(session.convert(output,o).width==64&&jxrc::inspect(output).height==48,"Unicode source-preserving output");
+        }
+        o.mode=jxrc::Mode::process;
+        o.exposure=1.f; // Exercise the F32 output writers, including Ultra HDR.
+        o.overwrite=true;
+        check(session.convert(output,o).width==64&&jxrc::inspect(output).height==48,"Unicode processed output");
+        o.exposure=0.f;
+        o.overwrite=false;
+    }
+}
+
 int main(int argc,char** argv) try {
     if(argc==3&&std::string(argv[1])=="--fixture") { encode(fs::u8path(argv[2]),0,false);return 0; }
     const auto dir=fs::temp_directory_path()/("jxrc-tests-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directory(dir);
     struct Clean {fs::path p;~Clean(){std::error_code e;fs::remove_all(p,e);}} clean{dir};
+    if(argc==2 && std::string(argv[1])=="--unicode-paths") {unicode_paths(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--heif") {const auto gain=dir/"gain.jpg";encode(gain,1,true);heif_gainmaps(dir,gain);std::cout<<"HEIC tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--jpeg-inputs") {jpeg_inputs(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-inputs") {hdr_input_tests(dir);return 0;}

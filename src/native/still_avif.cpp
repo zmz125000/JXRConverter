@@ -1,3 +1,4 @@
+#include "output_file.h"
 #include "image_size.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 #include "codec_api.h"
@@ -85,7 +86,7 @@ int write_avif(avifImage* image, const char* path, StillEncodeQuality quality,co
         
         return -72;
     }
-    FILE* file = fopen(path, "wb");
+    FILE* file = open_output_file(path);
     if (!file) return -73;
     const bool written = fwrite(output.data.data, 1, output.data.size, file) == output.data.size;
     const bool closed = fclose(file) == 0;

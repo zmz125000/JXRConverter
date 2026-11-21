@@ -4,6 +4,7 @@
 #include <map>
 #include <stdexcept>
 #include <string>
+#include <vector>
 namespace {
 void help() {
     std::cout << "jxrconvert " << jxrc::version() << R"( - LocalViewer image conversion library/CLI
@@ -70,13 +71,14 @@ int integer(const std::string& s) {
 template<class T> T choice(const std::string& s,const std::map<std::string,T>& values) {
     auto it=values.find(s);if(it==values.end())throw std::invalid_argument("Unknown selection: "+s);return it->second;
 }
-int run(int argc,char** argv) {
-    if(argc==2&&std::string(argv[1])=="--help"){help();return 0;}
-    if(argc==2&&std::string(argv[1])=="--version"){std::cout<<jxrc::version()<<'\n';return 0;}
+int run(const std::vector<std::string>& argv) {
+    const auto argc=argv.size();
+    if(argc==2&&argv[1]=="--help"){help();return 0;}
+    if(argc==2&&argv[1]=="--version"){std::cout<<jxrc::version()<<'\n';return 0;}
     if(argc<3){help();return 2;}
     jxrc::Options o;bool target=false,custom=false,preset=false,raw_custom=false,raw_mode=false;
-    for(int i=3;i<argc;++i) {
-        const std::string arg=argv[i];
+    for(size_t i=3;i<argc;++i) {
+        const auto& arg=argv[i];
         if(arg.rfind("--raw-",0)==0&&arg!="--raw-mode")raw_custom=true;
         auto value=[&]()->std::string{if(++i>=argc)throw std::invalid_argument("Missing value for "+arg);return argv[i];};
         using T=jxrc::Target;using P=jxrc::Preset;
@@ -137,9 +139,18 @@ int run(int argc,char** argv) {
     std::cout<<result.width<<'x'<<result.height<<" "<<result.encoding<<" -> "<<argv[2]<<'\n';return 0;
 }
 }
-int main(int argc,char** argv) {
-    try {return run(argc,argv);}
-    catch(const std::invalid_argument& e){std::cerr<<"Invalid arguments: "<<e.what()<<'\n';return 2;}
-    catch(const std::out_of_range& e){std::cerr<<"Invalid numeric argument: "<<e.what()<<'\n';return 2;}
-    catch(const std::exception& e){std::cerr<<"Conversion failed: "<<e.what()<<'\n';return 1;}
+#ifdef _WIN32
+int wmain(int argc,wchar_t** argv) try {
+    std::vector<std::string> args;
+    args.reserve(argc);
+    for(int i=0;i<argc;++i)args.push_back(std::filesystem::path(argv[i]).u8string());
+    return run(args);
 }
+#else
+int main(int argc,char** argv) try {
+    return run(std::vector<std::string>(argv,argv+argc));
+}
+#endif
+catch(const std::invalid_argument& e){std::cerr<<"Invalid arguments: "<<e.what()<<'\n';return 2;}
+catch(const std::out_of_range& e){std::cerr<<"Invalid numeric argument: "<<e.what()<<'\n';return 2;}
+catch(const std::exception& e){std::cerr<<"Conversion failed: "<<e.what()<<'\n';return 1;}

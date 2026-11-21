@@ -1,3 +1,4 @@
+#include "output_file.h"
 #include "image_size.h"
 #include "working_pixels.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
@@ -16,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <limits>
 #include <memory>
@@ -857,7 +859,7 @@ bool decode_jxr_to_rgba_f16(const char* path, std::vector<uint16_t>& out_rgba, u
 }  // namespace
 
 static bool write_file(const char* path, const void* data, size_t size) {
-    std::ofstream out(path, std::ios::binary);
+    std::ofstream out(std::filesystem::u8path(path), std::ios::binary);
     if (!out) return false;
     out.write(static_cast<const char*>(data), static_cast<std::streamsize>(size));
     return static_cast<bool>(out);
@@ -925,7 +927,7 @@ int encode_baseline_sdr_jpeg(unsigned w, unsigned h, const uint16_t* rgba, const
         }
     });
 
-    FILE* fp = fopen(out_path, "wb");
+    FILE* fp = open_output_file(out_path);
     if (!fp) {
         ALOGE("fopen baseline JPEG failed: %s", out_path);
         return -31;
@@ -1315,7 +1317,7 @@ void unpremultiply_u8(uint8_t* rgba, size_t pixels) {
 int encode_srgb_jpeg_u8(unsigned w, unsigned h, const uint8_t* rgba, const char* out_path,
                         uhdr_color_gamut_t cg, StillEncodeQuality quality, JpegMemory* memory) {
     if (!rgba || (!out_path && !memory) || w == 0 || h == 0) return -40;
-    FILE* fp = memory ? nullptr : fopen(out_path, "wb");
+    FILE* fp = memory ? nullptr : open_output_file(out_path);
     if (!memory && !fp) return -41;
     jpeg_compress_struct cinfo{};
     JpegErr jerr{};

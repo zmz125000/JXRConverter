@@ -1,3 +1,4 @@
+#include "output_file.h"
 #include "image_size.h"
 #include "regular_decode.h"
 #include "skcms.h"
@@ -103,7 +104,7 @@ int encode_cmyk_jpeg(unsigned w,unsigned h,const uint8_t* pixels,const StillSour
     encoder.err=jpeg_std_error(&state->error);state->error.error_exit=jpeg_write_failure;encoder.client_data=state.get();
     if(setjmp(state->jump))return -86;
     jpeg_create_compress(&encoder);
-    state->file=std::fopen(path,"wb");if(!state->file)return -83;
+    state->file=open_output_file(path);if(!state->file)return -83;
     jpeg_stdio_dest(&encoder,state->file);
     encoder.image_width=w;encoder.image_height=h;encoder.input_components=4;encoder.in_color_space=JCS_CMYK;
     jpeg_set_defaults(&encoder);jpeg_set_quality(&encoder,quality.jpeg(),TRUE);
