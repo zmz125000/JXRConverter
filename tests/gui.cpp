@@ -26,6 +26,7 @@
 #include <QSemaphore>
 #include <QSlider>
 #include <QSpinBox>
+#include <QSplitter>
 #include <QStandardPaths>
 #include <QStandardItemModel>
 #include <QScrollBar>
@@ -744,6 +745,62 @@ private slots:
         QCOMPARE(panel->width(),conversion->parentWidget()->width());
         tabs->setCurrentIndex(0);
         QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());QCOMPARE(progress->width(),destination->width());
+
+        auto* splitter=qobject_cast<QSplitter*>(window.centralWidget());QVERIFY(splitter);
+        auto* handle=splitter->handle(1);
+        const auto dragHandle=[&](int x) {
+            const QPoint center=handle->rect().center();
+            QTest::mousePress(handle,Qt::LeftButton,Qt::NoModifier,center);
+            const QPoint target=splitter->mapToGlobal(QPoint(x,handle->geometry().center().y()));
+            QTest::mouseMove(handle,handle->mapFromGlobal(target));
+            QTest::mouseRelease(handle,Qt::LeftButton,Qt::NoModifier,handle->mapFromGlobal(target));
+        };
+        const int originalWidth=tabs->width();
+        dragHandle(splitter->width()-std::max(510,originalWidth+100));
+        QTRY_VERIFY(tabs->width()>std::max(460,originalWidth));
+        QTRY_COMPARE(output->width(),conversion->width());
+        QTRY_COMPARE(progress->width(),destination->width());
+        dragHandle(splitter->width()-1);
+        QTRY_VERIFY(tabs->width()<=qRound(originalWidth*0.85));
+        QVERIFY(tabs->width()>=tabs->minimumWidth());
+        QVERIFY(output->isVisible());
+        QTRY_COMPARE(output->width(),conversion->width());
+        QCOMPARE(conversion->horizontalScrollBar()->maximum(),0);
+        QCOMPARE(output->horizontalScrollBar()->maximum(),0);
+        QCOMPARE(destination->width(),formats->width());
+        QCOMPARE(progress->width(),destination->width());
+        QCOMPARE(toggle->width(),progress->width());
+        auto* convertSelected=window.findChild<QPushButton*>("convertSelected");
+        QVERIFY(convertSelected->width()>=convertSelected->minimumSizeHint().width());
+    }
+    void thumbnailSizeSliderKeepsWidthAndAlignment() {
+        appSettings().clear();MainWindow window;window.resize(1800,850);window.show();
+        auto* splitter=qobject_cast<QSplitter*>(window.centralWidget());QVERIFY(splitter);
+        auto* slider=window.findChild<QSlider*>("thumbnailSize");
+        auto* label=window.findChild<QLabel*>("thumbnailSizeLabel");
+        auto* value=window.findChild<QLabel*>("thumbnailSizeValue");
+        auto* viewScroll=window.findChild<QScrollArea*>("libraryViewScroll");
+        QVERIFY(slider&&label&&value&&viewScroll);
+        const int preferredWidth=100;
+        QTRY_COMPARE(slider->width(),preferredWidth);
+        QVERIFY(qAbs(slider->geometry().center().y()-label->geometry().center().y())<=1);
+        const int margins=splitter->widget(0)->width()-viewScroll->width();
+        const int compactWidth=slider->parentWidget()->minimumSizeHint().width()+margins+20;
+        window.resize(window.width()+compactWidth-splitter->widget(0)->width(),window.height());
+        QTRY_COMPARE(slider->width(),preferredWidth);
+        QVERIFY(value->geometry().left()>slider->geometry().right());
+        slider->setValue(500);
+        QCOMPARE(value->text(),QString("500 dp"));
+        QVERIFY(value->width()>=value->sizeHint().width());
+
+        splitter->setSizes({compactWidth-100,splitter->width()-compactWidth+100-splitter->handleWidth()});
+        auto* scrollBar=viewScroll->horizontalScrollBar();
+        QTRY_VERIFY(scrollBar->isVisible());
+        QCOMPARE(slider->width(),preferredWidth);
+        QVERIFY(qAbs(slider->geometry().center().y()-label->geometry().center().y())<=1);
+        scrollBar->setValue(scrollBar->maximum());
+        const QRect valueInViewport(value->mapTo(viewScroll->viewport(),QPoint()),value->size());
+        QVERIFY(viewScroll->viewport()->rect().contains(valueInViewport));
     }
     void aspectRatioMenuAndAutoSampling() {
         appSettings().clear();MainWindow window;window.show();auto* aspect=window.findChild<QToolButton*>("thumbnailAspect");auto* automatic=window.findChild<QCheckBox*>("autoThumbnailAspect");

@@ -42,6 +42,7 @@
 #include <QFrame>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QItemSelectionModel>
 #include <QLabel>
@@ -169,12 +170,26 @@ protected:
 };
 const QStringList aspectNames={"16:9","4:3","1:1","9:16 (portrait)","3:4 (portrait)"};
 const double aspectRatios[]={16.0/9,4.0/3,1,9.0/16,3.0/4};
-class WidthMatchedWidget : public QWidget {
-    QWidget* reference_;
+class SidebarLayout : public QGridLayout {
+    QWidget* pageStack_;
 public:
-    explicit WidthMatchedWidget(QWidget* reference):reference_(reference){reference->installEventFilter(this);setFixedWidth(reference->width());}
+    SidebarLayout(QWidget* parent,QWidget* pageStack):QGridLayout(parent),pageStack_(pageStack) {
+        setContentsMargins(0,0,0,0);
+        setHorizontalSpacing(0);
+        setColumnStretch(1,1);
+        pageStack_->installEventFilter(this);
+    }
 protected:
-    bool eventFilter(QObject* object,QEvent* event) override {if(object==reference_&&event->type()==QEvent::Resize)setFixedWidth(reference_->width());return QWidget::eventFilter(object,event);}
+    bool eventFilter(QObject* object,QEvent* event) override {
+        if(object==pageStack_&&(event->type()==QEvent::Move||event->type()==QEvent::Resize||event->type()==QEvent::Show)) {
+            // Match the tab frame insets without feeding the pane width back into the splitter.
+            const auto page=pageStack_->geometry();
+            const int left=page.left(),right=pageStack_->parentWidget()->width()-page.right()-1;
+            if(columnMinimumWidth(0)!=left)setColumnMinimumWidth(0,left);
+            if(columnMinimumWidth(2)!=right)setColumnMinimumWidth(2,right);
+        }
+        return QGridLayout::eventFilter(object,event);
+    }
 };
 class HeightMatchedButton : public QPushButton {
     QWidget* reference_;
@@ -280,7 +295,8 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* date:{dateFrom_,dateTo_}){date->setDisplayFormat("yyyy-MM-dd");date->setCalendarPopup(true);date->setEnabled(false);}
     dates->addWidget(dateEnabled_);dates->addWidget(dateFrom_);dates->addWidget(new QLabel("to"));dates->addWidget(dateTo_);
     auto* reset=new QPushButton("Reset filters");filters->addWidget(reset);dates->addStretch();
-    auto* viewBar=new QHBoxLayout;viewMode_=new QButtonGroup(this);viewMode_->setObjectName("viewMode");viewMode_->setExclusive(true);
+    auto* viewControls=new QWidget;auto* viewBar=new QHBoxLayout(viewControls);viewBar->setContentsMargins(0,0,0,0);
+    viewMode_=new QButtonGroup(this);viewMode_->setObjectName("viewMode");viewMode_->setExclusive(true);
     const QStringList viewNames={"Grid","List","Details"};for(int i=0;i<viewNames.size();++i){auto* button=new QPushButton(viewNames[i]);button->setCheckable(true);viewMode_->addButton(button,i);viewBar->addWidget(button);}viewMode_->button(0)->setChecked(true);sort_=new QComboBox;sort_->setObjectName("sortField");
     const int sortColumns[]={Catalog::Name,Catalog::Modified,Catalog::Created,Catalog::Size,Catalog::Format,
         Catalog::Dimensions,Catalog::Width,Catalog::Height,Catalog::MaxEdge,Catalog::Megapixels,Catalog::AspectRatio,Catalog::Path,
@@ -301,11 +317,14 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     aspectTimer_=new QTimer(this);aspectTimer_->setSingleShot(true);aspectTimer_->setInterval(50);connect(aspectTimer_,&QTimer::timeout,this,&MainWindow::updateAutoThumbnailAspect);
     thumbnailFit_=new QPushButton("Fit");thumbnailFit_->setObjectName("thumbnailFit");thumbnailFit_->setCheckable(true);
     thumbnailFit_->setToolTip("Fit shows the whole image. Fill crops the image to fill its thumbnail cell. Click to switch.");viewBar->addWidget(thumbnailFit_);
-    viewBar->addWidget(new QLabel("Minimum size"));
-    size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(100,500);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(200);size_->setFixedWidth(140);
-    size_->setToolTip("Minimum grid cell width in dp (100–500). Like LocalViewer, columns adapt to this minimum plus fixed gaps, and cells stretch evenly to fill the available width.");viewBar->addWidget(size_);
-    auto* sizeValue=new QLabel("200 dp");sizeValue->setObjectName("thumbnailSizeValue");sizeValue->setMinimumWidth(48);viewBar->addWidget(sizeValue);
-    connect(size_,&QSlider::valueChanged,this,[this,sizeValue](int value){const int snapped=((value+5)/10)*10;if(value!=snapped){size_->setValue(snapped);return;}sizeValue->setText(QString::number(value)+" dp");});layout->addLayout(viewBar);
+    size_=new QSlider(Qt::Horizontal);size_->setObjectName("thumbnailSize");size_->setRange(100,500);size_->setSingleStep(10);size_->setPageStep(10);size_->setValue(200);size_->setFixedWidth(100);
+    auto* sizeLabel=new QLabel("Minimum size");sizeLabel->setObjectName("thumbnailSizeLabel");sizeLabel->setBuddy(size_);viewBar->addWidget(sizeLabel);
+    size_->setToolTip("Minimum grid cell width in dp (100–500). Like LocalViewer, columns adapt to this minimum plus fixed gaps, and cells stretch evenly to fill the available width.");viewBar->addWidget(size_,0,Qt::AlignVCenter);
+    auto* sizeValue=new QLabel("200 dp");sizeValue->setObjectName("thumbnailSizeValue");sizeValue->setMinimumWidth(48);sizeValue->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);viewBar->addWidget(sizeValue);
+    connect(size_,&QSlider::valueChanged,this,[this,sizeValue](int value){const int snapped=((value+5)/10)*10;if(value!=snapped){size_->setValue(snapped);return;}sizeValue->setText(QString::number(value)+" dp");});
+    auto* viewScroll=new QScrollArea;viewScroll->setObjectName("libraryViewScroll");viewScroll->setFrameShape(QFrame::NoFrame);viewScroll->setWidgetResizable(true);
+    viewScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);viewScroll->setWidget(viewControls);
+    layout->addWidget(viewScroll);
     views_=new QStackedWidget;list_=new FileListView;table_=new FileTableView;delegate_=new ThumbnailDelegate(list_);list_->setItemDelegate(delegate_);
     list_->setModel(proxy_);table_->setModel(proxy_);list_->setSelectionModel(selection_);table_->setSelectionModel(selection_);
     table_->verticalHeader()->hide();table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Interactive);table_->setColumnWidth(Catalog::Name,260);table_->setColumnWidth(Catalog::Camera,190);for(int column:{Catalog::Captured,Catalog::Created,Catalog::Modified,Catalog::ExifDate})table_->setColumnWidth(column,170);for(int column:{Catalog::Path,Catalog::Error,Catalog::MetadataWarning})table_->setColumnWidth(column,300);table_->sortByColumn(Catalog::Name,Qt::AscendingOrder);
@@ -346,11 +365,14 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     remove_=new QPushButton("Remove selected");remove_->setObjectName("removeSelected");actionsLayout->addWidget(remove_);connect(remove_,&QPushButton::clicked,this,&MainWindow::removeImageSelection);
     clear_=new QPushButton("Clear");clear_->setObjectName("clearLibrary");actionsLayout->addWidget(clear_);connect(clear_,&QPushButton::clicked,this,&MainWindow::clearCurrentTab);auto* footerScroll=new QScrollArea;footerScroll->setObjectName("libraryFooterScroll");footerScroll->setFrameShape(QFrame::NoFrame);footerScroll->setWidgetResizable(true);footerScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);footerScroll->setWidget(libraryActions);footerScroll->setFixedHeight(libraryActions->sizeHint().height()+style()->pixelMetric(QStyle::PM_ScrollBarExtent)+2);layout->addWidget(footerScroll);
 
-    auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");sidebar->setMinimumWidth(330);sidebar->setMaximumWidth(460);
+    auto* sidebar=new QTabWidget;sidebar->setObjectName("settingsTabs");
     auto* scroll=new QScrollArea;scroll->setObjectName("conversionScroll");scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);scroll->setWidgetResizable(true);scroll->setFrameShape(QFrame::NoFrame);scroll->setWidget(buildControls());scroll->setMinimumHeight(150);
-    // Leave room for the controls, scrollbar and tab frame at the narrowest
-    // sidebar size, keeping conversion and output groups aligned.
-    sidebar->setMinimumWidth(std::max(330,scroll->widget()->minimumSizeHint().width()+scroll->verticalScrollBar()->sizeHint().width()+8));
+    const auto paneWidthFor=[](QScrollArea* area) {
+        return area->widget()->minimumSizeHint().width()+area->verticalScrollBar()->sizeHint().width()+8;
+    };
+    const int fullControlsWidth=std::max(330,paneWidthFor(scroll));
+    // Keep the existing startup width and wrap label/field rows as the pane narrows.
+    for(auto* form:scroll->widget()->findChildren<QFormLayout*>())form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     sidebar->addTab(scroll,"Conversion");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
     auto* logPanel=new QWidget;auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(0,0,0,0);
@@ -358,12 +380,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto* clearLog=new FloatingClearButton(outputLog_);clearLog->setObjectName("clearLog");connect(clearLog,&QPushButton::clicked,outputLog_,&QPlainTextEdit::clear);
     connect(OutputCapture::instance(),&OutputCapture::textReady,this,[this](const QString& text){auto* bar=outputLog_->verticalScrollBar();const bool follow=bar->value()==bar->maximum();QTextCursor cursor(outputLog_->document());cursor.movePosition(QTextCursor::End);cursor.insertText(text);if(follow){outputLog_->setTextCursor(cursor);outputLog_->ensureCursorVisible();}});
     logMessage("JXRConverter "+QString::fromStdString(jxrc::version()));
-    auto* sidePanel=new QWidget;sidePanel->setMinimumWidth(sidebar->minimumWidth());sidePanel->setMaximumWidth(460);auto* sideLayout=new QVBoxLayout(sidePanel);sideLayout->setContentsMargins(0,0,0,0);sideLayout->addWidget(sidebar,1);
-    auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);auto* outputHeader=new WidthMatchedWidget(scroll->parentWidget());auto* headerLayout=new QHBoxLayout(outputHeader);headerLayout->setContentsMargins(14,0,14+scroll->verticalScrollBar()->sizeHint().width(),0);headerLayout->addWidget(outputToggle);sideLayout->addWidget(outputHeader,0,Qt::AlignHCenter);
-    auto* outputPanel=new WidthMatchedWidget(scroll->parentWidget());outputPanel->setObjectName("outputPanel");auto* outputLayout=new QVBoxLayout(outputPanel);outputLayout->setContentsMargins(0,0,0,0);
+    auto* sidePanel=new QWidget;auto* sideLayout=new SidebarLayout(sidePanel,scroll->parentWidget());
+    sideLayout->addWidget(sidebar,0,0,1,3);sideLayout->setRowStretch(0,1);
+    auto* outputToggle=new QPushButton("▾ Output queue");outputToggle->setObjectName("toggleOutput");outputToggle->setCheckable(true);outputToggle->setChecked(true);auto* outputHeader=new QWidget;auto* headerLayout=new QHBoxLayout(outputHeader);headerLayout->setContentsMargins(14,0,14+scroll->verticalScrollBar()->sizeHint().width(),0);headerLayout->addWidget(outputToggle);sideLayout->addWidget(outputHeader,1,1);
+    auto* outputPanel=new QWidget;outputPanel->setObjectName("outputPanel");auto* outputLayout=new QVBoxLayout(outputPanel);outputLayout->setContentsMargins(0,0,0,0);
     auto* startButtons=new QHBoxLayout;startButtons->setContentsMargins(14,0,14+scroll->verticalScrollBar()->sizeHint().width(),0);startButtons->setSpacing(6);
     auto* openQueueOutput=new QPushButton;openQueueOutput->setObjectName("openQueueOutputFolder");openQueueOutput->setIcon(style()->standardIcon(QStyle::SP_DirOpenIcon));openQueueOutput->setToolTip("Open output folder");openQueueOutput->ensurePolished();openQueueOutput->setFixedWidth(openQueueOutput->sizeHint().height());startButtons->addWidget(openQueueOutput);startButtons->addWidget(visible_,1);connect(openQueueOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
-    for(auto* button:{visible_,selected_})button->setSizePolicy(QSizePolicy::Ignored,QSizePolicy::Fixed);
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,10);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1,Qt::AlignBottom);
@@ -371,9 +393,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
-    connect(progressStop_,&QPushButton::clicked,this,&MainWindow::stopQueue);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,0,Qt::AlignHCenter);
+    connect(progressStop_,&QPushButton::clicked,this,&MainWindow::stopQueue);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,2,1);
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
-    splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setStretchFactor(0,1);splitter->setSizes({1050,370});
+    splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setChildrenCollapsible(false);splitter->setStretchFactor(0,1);splitter->setSizes({1050,std::max(370,fullControlsWidth)});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
     auto* appearance=addToolBar("Appearance");appearance->setObjectName("appearanceToolbar");appearance->setMovable(false);appearance->setFloatable(false);appearance->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
     auto* appearanceSpacer=new QWidget;appearanceSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);appearance->addWidget(appearanceSpacer);
@@ -389,6 +411,14 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(updater_,&Updater::busyChanged,this,[this,updateButton](bool busy){updateButton->setEnabled(!busy);updateCounts();});
     appearance->addWidget(theme);appearance->ensurePolished();appearance->setMinimumWidth(appearance->sizeHint().width());
     theme->setCurrentIndex(appSettings().value("appearance/theme",0).toInt());applyDesktopStyle(theme->currentIndex());
+    sidebar->setMinimumWidth(std::max({qRound(fullControlsWidth*0.75),paneWidthFor(scroll),paneWidthFor(outputScroll)}));
+    const auto fitViewBar=[viewScroll,viewControls](int minimum,int maximum) {
+        const int gutter=maximum>minimum?viewScroll->horizontalScrollBar()->sizeHint().height():0;
+        viewScroll->setFixedHeight(viewControls->sizeHint().height()+gutter);
+    };
+    auto* viewBarScroll=viewScroll->horizontalScrollBar();
+    connect(viewBarScroll,&QScrollBar::rangeChanged,viewScroll,fitViewBar);
+    fitViewBar(viewBarScroll->minimum(),viewBarScroll->maximum());
     connect(theme,&QComboBox::currentIndexChanged,this,[theme]{appSettings().setValue("appearance/theme",theme->currentIndex());applyDesktopStyle(theme->currentIndex());});
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
     connect(qApp->styleHints(),&QStyleHints::colorSchemeChanged,this,[theme]{if(theme->currentIndex()==0)applyDesktopStyle(0);});
@@ -708,9 +738,9 @@ QWidget* MainWindow::buildControls() {
     connect(resetRaw,&QPushButton::clicked,this,[this]{for(auto* widget:raw_->findChildren<QWidget*>())if(widget->property("rawDefault").isValid())widget->setProperty(settingProperty(widget),widget->property("rawDefault"));updateMode();});
     queuePanel_=new QWidget;auto* queueLayout=new QVBoxLayout(queuePanel_);queueLayout->setContentsMargins(14,0,14,10);queueLayout->setSpacing(8);
     auto* destination=new QGroupBox("Output queue");destination->setObjectName("outputDestination");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
-    auto* folderButtons=new QHBoxLayout;
-    auto* browse=new QPushButton("Choose folder…");browse->setObjectName("chooseOutputFolder");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});folderButtons->addWidget(browse);
-    auto* openOutput=new QPushButton("Open output folder");openOutput->setObjectName("openOutputFolder");folderButtons->addWidget(openOutput);destinationLayout->addLayout(folderButtons);
+    auto* folderButtons=new QFormLayout;folderButtons->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    auto* browse=new QPushButton("Choose folder…");browse->setObjectName("chooseOutputFolder");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});
+    auto* openOutput=new QPushButton("Open output folder");openOutput->setObjectName("openOutputFolder");folderButtons->addRow(browse,openOutput);destinationLayout->addLayout(folderButtons);
     connect(openOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
     convertedFolder_=check("Create converted subfolder","convertedSubfolder",true);destinationLayout->addWidget(convertedFolder_);
     convertedFolder_->setToolTip("When saving to the original folder, put outputs in its Converted/ subfolder. Other folder rules go inside it; flattening does not merge this folder.");
