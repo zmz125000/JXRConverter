@@ -332,9 +332,9 @@ private slots:
     }
     void autoToneControlsAndReset() {
         appSettings().clear();MainWindow window;
-        auto* automatic=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(automatic);QVERIFY(!automatic->isChecked());
+        auto* automatic=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(automatic);QVERIFY(automatic->isChecked());
         auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QVERIFY(mapper);mapper->setCurrentIndex(mapper->findData(2));
-        automatic->setChecked(true);QVERIFY(mapper->isEnabled());
+        QVERIFY(mapper->isEnabled());
         QVERIFY(window.findChild<QSlider*>("sdrShoulder")->isEnabled());
         for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"}) {
             const bool enabled=QString(name)!="sdrMidtones";
@@ -345,7 +345,7 @@ private slots:
         window.findChild<QDoubleSpinBox*>("sdrShadows")->setValue(.5);
         window.findChild<QSlider*>("sdrShoulder")->setValue(40);
         auto* reset=window.findChild<QPushButton*>("resetSdrToneMapping");QVERIFY(reset);reset->click();
-        const auto options=window.options();QVERIFY(!options.sdr_auto_tone_curve);QCOMPARE(options.sdr_tone_mapper,jxrc::SdrToneMapper::skiv_custom);QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
+        const auto options=window.options();QVERIFY(options.sdr_auto_tone_curve);QCOMPARE(options.sdr_tone_mapper,jxrc::SdrToneMapper::skiv_custom);QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
         QVERIFY(window.findChild<QSlider*>("sdrShoulder")->isEnabled());
         QCOMPARE(options.sdr_shoulder,.50f);QCOMPARE(options.sdr_hdr_range_nits,2000);QCOMPARE(options.sdr_shadows,0.f);
         QCOMPARE(window.findChild<QSlider*>("sdrShadowsSlider")->value(),0);
@@ -354,7 +354,7 @@ private slots:
     void skivToneMapControls() {
         appSettings().clear();MainWindow window;
         auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),6);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
-        QVERIFY(window.options().sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom);QVERIFY(!window.options().sdr_auto_tone_curve);
+        QVERIFY(window.options().sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom);QVERIFY(window.options().sdr_auto_tone_curve);
         auto* shoulder=window.findChild<QSlider*>("sdrShoulder");auto* range=window.findChild<QSpinBox*>("sdrHdrRangeInput");
         QCOMPARE(shoulder->value(),50);
         auto* autoRange=window.findChild<QCheckBox*>("sdrAutoHdrRange");QVERIFY(shoulder->isEnabled());QVERIFY(autoRange->isEnabled());
@@ -383,7 +383,7 @@ private slots:
             MainWindow window;window.show();
             auto* color=window.findChild<QComboBox*>("sdrColorMapping");
             QVERIFY(color);QCOMPARE(color->count(),3);QCOMPARE(color->currentIndex(),1);
-            auto* autoCurve=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(autoCurve);QVERIFY(!autoCurve->isChecked());autoCurve->setChecked(true);
+            auto* autoCurve=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(autoCurve);QVERIFY(autoCurve->isChecked());autoCurve->setChecked(false);
             auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");
             QVERIFY(mapper);mapper->setCurrentIndex(mapper->findData(1));
             auto* enabled=window.findChild<QCheckBox*>("sdrToneMap");
@@ -397,13 +397,13 @@ private slots:
             shoulder->setValue(76);range->setValue(1600);QCOMPARE(rangeInput->value(),1600);
             shoulder->setValue(75);rangeInput->setValue(1500);automatic->setChecked(true);
             const auto options=window.options();QVERIFY(options.sdr_tone_map&&options.sdr_auto_hdr_range);
-            QVERIFY(options.sdr_auto_tone_curve);
+            QVERIFY(!options.sdr_auto_tone_curve);
             QVERIFY(options.sdr_color_mapping==jxrc::SdrColorMapping::luminance);
             QVERIFY(options.sdr_tone_mapper==jxrc::SdrToneMapper::extended_reinhard);
             QCOMPARE(options.sdr_shoulder,.75f);QCOMPARE(options.sdr_hdr_range_nits,1500);
             QVERIFY(!range->isEnabled());QVERIFY(!rangeInput->isEnabled());
         }
-        {MainWindow restored;QVERIFY(restored.findChild<QCheckBox*>("sdrAutoToneCurve")->isChecked());QCOMPARE(restored.findChild<QComboBox*>("sdrColorMapping")->currentIndex(),1);QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentData().toInt(),1);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
+        {MainWindow restored;QVERIFY(!restored.findChild<QCheckBox*>("sdrAutoToneCurve")->isChecked());QCOMPARE(restored.findChild<QComboBox*>("sdrColorMapping")->currentIndex(),1);QCOMPARE(restored.findChild<QComboBox*>("sdrToneMapper")->currentData().toInt(),1);QVERIFY(restored.findChild<QCheckBox*>("sdrToneMap")->isChecked());QCOMPARE(restored.findChild<QSlider*>("sdrShoulder")->value(),75);QCOMPARE(restored.findChild<QSlider*>("sdrHdrRangeNits")->value(),1500);QCOMPARE(restored.findChild<QSpinBox*>("sdrHdrRangeInput")->value(),1500);}
         appSettings().clear();
     }
     void pngThumbnailFallback() {

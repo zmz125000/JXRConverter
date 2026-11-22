@@ -1539,7 +1539,7 @@ static void transparency_background(const fs::path& dir) {
 }
 
 static void sdr_tone_mapping(const fs::path& dir) {
-    check(!jxrc::Options{}.sdr_auto_tone_curve&&jxrc::Options{}.sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom,"Default SDR mapper should be SKIV custom");
+    check(jxrc::Options{}.sdr_auto_tone_curve,"Auto tone curve should default to on");
     check(jxrc::Options{}.sdr_color_mapping==jxrc::SdrColorMapping::luminance,"Default SDR color mapping");
     const std::array<float,3> luma={.2126f,.7152f,.0722f};
     const std::vector<float> dim={.14f,.14f,.14f,1.f,4.f,4.f,4.f,0.f};
@@ -1670,7 +1670,7 @@ static void sdr_tone_mapping(const fs::path& dir) {
 }
 
 static void skiv_tone_mapping(const fs::path& dir) {
-    check(jxrc::Options{}.sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom&&!jxrc::Options{}.sdr_auto_tone_curve,"Default SDR mapper is not SKIV custom");
+    check(jxrc::Options{}.sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom,"Default SDR mapper is not SKIV custom");
     const std::vector<float> input={.18f,.18f,.18f,1,1,1,1,1,4,2,1,1,12,4,.5f,1};
     // Independent scalar reference from SKIV's SDR export, including PQ,
     // ICtCp chroma scaling and the 65536-bin luminance histogram.
@@ -1727,11 +1727,11 @@ static void skiv_tone_mapping(const fs::path& dir) {
     jxrc::ConversionSession session(source);jxrc::Options o;o.mode=jxrc::Mode::process;o.sdr_tone_map=true;o.sdr_auto_hdr_range=false;o.sdr_hdr_range_nits=1000;o.target=jxrc::Target::png;o.quality.preset=jxrc::Preset::lossless;
     const auto customPath=dir/"skiv-custom.png";session.convert(customPath,o);o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv;
     const auto stockPath=dir/"skiv-stock.png";session.convert(stockPath,o);check(bytes(customPath)!=bytes(stockPath),"SKIV mode change reused stale SDR render");
-    o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;o.sdr_auto_tone_curve=true;o.sdr_shadows=1;o.sdr_midtones=-1;o.sdr_highlights=.5;o.sdr_shoulder=.1;o.sdr_hdr_range_nits=204;
+    o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;o.sdr_auto_tone_curve=false;o.sdr_shadows=1;o.sdr_midtones=-1;o.sdr_highlights=.5;o.sdr_shoulder=.1;o.sdr_hdr_range_nits=204;
     const auto ignored=dir/"skiv-stock-ignored.png";session.convert(ignored,o);check(bytes(ignored)==bytes(stockPath),"Stock SKIV used disabled controls");
     o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_custom;o.sdr_shoulder=jxrc::Options{}.sdr_shoulder;o.sdr_hdr_range_nits=1000;
     const auto customIgnored=dir/"skiv-custom-ignored.png";session.convert(customIgnored,o);check(bytes(customIgnored)==bytes(customPath),"SKIV custom used disabled color/auto/tonal controls");
-    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_manual;
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_manual;o.sdr_auto_tone_curve=true;
     const auto manualPath=dir/"skiv-manual.png";session.convert(manualPath,o);
     o.sdr_shadows=-.6f;o.sdr_midtones=.4f;o.sdr_highlights=-.3f;
     const auto manualEdited=dir/"skiv-manual-edited.png";session.convert(manualEdited,o);

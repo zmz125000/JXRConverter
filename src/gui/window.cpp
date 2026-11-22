@@ -678,7 +678,7 @@ QWidget* MainWindow::buildControls() {
     toneMap_=new QGroupBox("SDR tone mapping");auto* toneForm=new QFormLayout(toneMap_);
     sdrToneMap_=check("Tone map HDR to SDR","sdrToneMap",true);sdrToneMap_->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(sdrToneMap_);
     sdrAutoRange_=check("Auto HDR range","sdrAutoHdrRange",true);sdrAutoRange_->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(sdrAutoRange_);
-    sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve");
+    sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve",Options{}.sdr_auto_tone_curve);
     sdrAutoCurve_->setToolTip("Adjust midtones based on how much of the source exceeds SDR white. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(sdrAutoCurve_);
     sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
     // Stable IDs retain selections saved before the visual list was reordered.
@@ -699,7 +699,7 @@ QWidget* MainWindow::buildControls() {
     for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setToolTip("Adjust tonal exposure before SDR highlight compression. Zero is neutral. Applies only to SDR outputs and new gain-map SDR bases.");
     auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
     connect(resetTone,&QPushButton::clicked,this,[this]{
-        sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(false);
+        sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(Options{}.sdr_auto_tone_curve);
         sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(int(Options{}.sdr_color_mapping));sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrRange_->setValue(2000);
         for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setValue(0.);
         updateMode();
