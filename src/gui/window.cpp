@@ -69,11 +69,24 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <optional>
 #include <stdexcept>
 
 namespace jxrc::gui {
 namespace {
 constexpr int VideoTab = 6;
+
+bool isHdrTarget(Target target) {
+    return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png;
+}
+Target sdrEquivalent(Target target) {
+    switch(target) {
+    case Target::jpeg_gainmap:return Target::jpeg;
+    case Target::png_hdr:case Target::png_hlg:return Target::png;
+    case Target::avif_pq:case Target::avif_gainmap:case Target::avif_hlg:return Target::avif;
+    default:return Target::jxl;
+    }
+}
 
 QStringList imagePaths(QStringList paths) {
     paths.erase(std::remove_if(paths.begin(),paths.end(),supportedVideoFile),paths.end());
@@ -266,7 +279,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     loadJobs_=check("Load jobs","loadPreviousJobs");loadJobs_->setToolTip("Restore saved job lists on startup. Job images load only when you select a job.");toolbar->addWidget(loadJobs_);
     loadFilters_=check("Load filters","loadFilters");loadFilters_->setToolTip("Restore saved search and image filters at startup. Off starts with no search or image filters.");toolbar->addWidget(loadFilters_);
     clearJobs_=toolbar->addAction("Clear jobs");clearJobs_->setObjectName("clearJobs");clearJobs_->setToolTip("Clear saved jobs and reset job numbering. Images already in the library stay available.");connect(clearJobs_,&QAction::triggered,this,&MainWindow::clearJobs);
-    auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
+    auto* clearHistory=toolbar->addAction("Clear history");connect(clearHistory,&QAction::triggered,this,[this]{recentFolders_.clear();recentOutputFolders_.clear();recentFiles_.clear();lastFiles_.clear();saveHistory();});
     recursive_=check("Include subfolders","recursive",true);toolbar->addWidget(recursive_);
     includeVideos_=check("Include videos","includeVideos",true);includeVideos_->setToolTip("Include videos when importing folders");toolbar->addWidget(includeVideos_);
     toolbar->addSeparator();wheelChanges_=check("Wheel changes controls","wheelChanges");
@@ -666,16 +679,16 @@ QWidget* MainWindow::buildControls() {
     sdrToneMap_=check("Tone map HDR to SDR","sdrToneMap",true);sdrToneMap_->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(sdrToneMap_);
     sdrAutoRange_=check("Auto HDR range","sdrAutoHdrRange",true);sdrAutoRange_->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(sdrAutoRange_);
     sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve");
-    sdrAutoCurve_->setToolTip("Automatically use a logarithmic curve. Uses the SDR shoulder slider unless Auto shoulder is enabled. Manual curve, shadows, midtones and highlights are ignored while enabled. The HDR range cap is applied first; Auto HDR range uses the full source range. Luminance mode compresses out-of-gamut colors.");toneForm->addRow(sdrAutoCurve_);
+    sdrAutoCurve_->setToolTip("Adjust midtones based on how much of the source exceeds SDR white. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(sdrAutoCurve_);
     sdrAutoShoulder_=check("Auto shoulder","sdrAutoShoulder");
-    sdrAutoShoulder_->setToolTip("With Auto tone curve, choose a shoulder from the median visible pixel, bounded to 50–67%. Off uses the SDR shoulder slider.");toneForm->addRow(sdrAutoShoulder_);
+    sdrAutoShoulder_->setToolTip("With Auto tone curve, lower the shoulder as more of the visible image exceeds 203 nits. The automatic range is 20–95%.");toneForm->addRow(sdrAutoShoulder_);
     connect(sdrAutoShoulder_,&QCheckBox::toggled,this,&MainWindow::updateMode);
     sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
     // Stable IDs retain selections saved before the visual list was reordered.
     const int mapperIds[]={3,4,5,0,1,2};for(int i=0;i<6;++i)sdrToneMapper_->setItemData(i,mapperIds[i]);
     sdrToneMapper_->setCurrentIndex(1);toneForm->addRow("Tone mapper",sdrToneMapper_);
     sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls. SKIV (manual) applies Shadows, Midtones and Highlights to HDR pixels first, then feeds them into SKIV’s curve with Max RGB, Luminance or Per channel replacing its ICtCp color mapping.");
-    sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");toneForm->addRow("Color mapping",sdrColorMapping_);
+    sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");sdrColorMapping_->setCurrentIndex(int(Options{}.sdr_color_mapping));toneForm->addRow("Color mapping",sdrColorMapping_);
     sdrColorMapping_->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation. In SKIV (manual), this replaces SKIV’s internal ICtCp intensity/chroma mapping; tonal edits run first.");
     sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
     sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(2000);sdrRangeInput_=spin(204,10000,2000,"sdrHdrRangeInput");sdrRangeInput_->setSingleStep(50);sdrRangeInput_->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeInput_);toneForm->addRow("HDR range cap",rangeRow);
@@ -690,7 +703,7 @@ QWidget* MainWindow::buildControls() {
     auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
     connect(resetTone,&QPushButton::clicked,this,[this]{
         sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(false);sdrAutoShoulder_->setChecked(false);
-        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(0);sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrRange_->setValue(2000);
+        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(int(Options{}.sdr_color_mapping));sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrRange_->setValue(2000);
         for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setValue(0.);
         updateMode();
     });
@@ -739,7 +752,24 @@ QWidget* MainWindow::buildControls() {
     queuePanel_=new QWidget;auto* queueLayout=new QVBoxLayout(queuePanel_);queueLayout->setContentsMargins(14,0,14,10);queueLayout->setSpacing(8);
     auto* destination=new QGroupBox("Output queue");destination->setObjectName("outputDestination");auto* destinationLayout=new QVBoxLayout(destination);output_=new QLineEdit;output_->setObjectName("outputDirectory");output_->setPlaceholderText("Output folder");destinationLayout->addWidget(output_);
     auto* folderButtons=new QFormLayout;folderButtons->setRowWrapPolicy(QFormLayout::WrapLongRows);
-    auto* browse=new QPushButton("Choose folder…");browse->setObjectName("chooseOutputFolder");connect(browse,&QPushButton::clicked,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());if(!path.isEmpty())output_->setText(path);});
+    auto* browse=new QPushButton("Choose folder…");browse->setObjectName("chooseOutputFolder");
+    auto chooseOutputFolder=[this] {
+        const auto path=QFileDialog::getExistingDirectory(this,"Output folder",output_->text());
+        if(!path.isEmpty()){output_->setText(path);rememberOutputFolder(path);}
+    };
+    connect(browse,&QPushButton::clicked,this,chooseOutputFolder);
+    connect(output_,&QLineEdit::editingFinished,this,[this]{rememberOutputFolder(output_->text());});
+    auto* history=new QMenu(browse);history->setObjectName("outputFolderHistory");
+    connect(history,&QMenu::aboutToShow,this,[this,history,chooseOutputFolder] {
+        history->clear();
+        history->addAction("Choose folder…",this,chooseOutputFolder);
+        history->addSeparator();
+        for(const auto& path:recentOutputFolders_) {
+            auto* action=history->addAction(QString(path).replace("&","&&"));
+            connect(action,&QAction::triggered,this,[this,path]{output_->setText(path);rememberOutputFolder(path);});
+        }
+    });
+    browse->installEventFilter(this);
     auto* openOutput=new QPushButton("Open output folder");openOutput->setObjectName("openOutputFolder");folderButtons->addRow(browse,openOutput);destinationLayout->addLayout(folderButtons);
     connect(openOutput,&QPushButton::clicked,this,&MainWindow::openOutputFolder);
     convertedFolder_=check("Create converted subfolder","convertedSubfolder",true);destinationLayout->addWidget(convertedFolder_);
@@ -756,7 +786,7 @@ QWidget* MainWindow::buildControls() {
     jumpToJob_=check("Jump to job tab","jumpToJobTab");destinationLayout->addWidget(jumpToJob_);jumpToJob_->setToolTip("Show a conversion’s job when it is queued. Off keeps the current image-list tab and job.");
     sourceFolder_=check("Save to original folder","saveToSourceFolder");destinationLayout->addWidget(sourceFolder_);
     sourceFolder_->setToolTip("Save beside each source image. Enabled subfolder rules are applied there.");
-    renameConflicts_=check("Rename if conflict","renameConflicts");destinationLayout->addWidget(renameConflicts_);
+    renameConflicts_=check("Rename if conflict","renameConflicts",true);destinationLayout->addWidget(renameConflicts_);
     renameConflicts_->setToolTip("Choose an unused numbered filename instead of replacing existing output files.");
     preserveOriginalDate_=check("Preserve original date","preserveOriginalDate");destinationLayout->addWidget(preserveOriginalDate_);
     preserveOriginalDate_->setToolTip("Set output file dates from the source EXIF capture date, falling back to its file modification time.");
@@ -786,14 +816,18 @@ void MainWindow::updateMode() {
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
     const bool tone=sdrToneMap_->isChecked(),skiv=sdrToneMapper_->currentData().toInt()>=3,customSkiv=sdrToneMapper_->currentData().toInt()==4||sdrToneMapper_->currentData().toInt()==5,manualSkiv=sdrToneMapper_->currentData().toInt()==5;
-    const bool manual=tone&&(manualSkiv||(!skiv&&!sdrAutoCurve_->isChecked()));
-    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(tone);sdrColorMapping_->setEnabled(tone&&(!skiv||manualSkiv));
-    for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->parentWidget()->setEnabled(manual);
-    sdrAutoShoulder_->setEnabled(tone&&!skiv&&sdrAutoCurve_->isChecked());
-    sdrShoulder_->setEnabled(tone&&(customSkiv||(!skiv&&!(sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked()))));
+    const bool tonalControls=tone&&(!skiv||manualSkiv);
+    const bool autoCurve=tonalControls&&sdrAutoCurve_->isChecked();
+    const bool autoShoulder=autoCurve&&sdrAutoShoulder_->isChecked();
+    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(tone);sdrColorMapping_->setEnabled(tonalControls);
+    sdrShadows_->parentWidget()->setEnabled(tonalControls);
+    sdrMidtones_->parentWidget()->setEnabled(tonalControls&&!autoCurve);
+    sdrHighlights_->parentWidget()->setEnabled(tonalControls);
+    sdrAutoShoulder_->setEnabled(autoCurve);
+    sdrShoulder_->setEnabled(tone&&(!skiv||customSkiv)&&!autoShoulder);
     sdrRange_->setEnabled(tone&&(!skiv||customSkiv)&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrRange_->isEnabled());
-    sdrAutoRange_->setEnabled(tone&&(!skiv||customSkiv));sdrAutoCurve_->setEnabled(tone&&!skiv);
-    sdrShoulderValue_->setText((!skiv&&sdrAutoCurve_->isChecked()&&sdrAutoShoulder_->isChecked())?QString("Auto"):QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
+    sdrAutoRange_->setEnabled(tone&&(!skiv||customSkiv));sdrAutoCurve_->setEnabled(tonalControls);
+    sdrShoulderValue_->setText(autoShoulder?QString("Auto"):QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);cameraLook_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     rawProtectHighlights_->setEnabled(process&&rawAutoExposure_->isChecked());
@@ -1059,7 +1093,8 @@ OutputLayout MainWindow::outputLayout(qint64 batch,bool quick) const {
     OutputLayout layout;
     for(const auto& job:savedJobs_)if(job.number==batch)quick|=job.quick;
     if(jobFolders_->isChecked())layout.job_subfolder=batch==0?"Temporary":(quick?"Quick-Job-":"Job-")+QString::number(batch);
-    layout.parent_subfolders=parentFolders_->isChecked()&&!sourceFolder_->isChecked();layout.date_subfolders=dateFolders_->isChecked();
+    layout.parent_subfolders=parentFolders_->isChecked()&&!sourceFolder_->isChecked();
+    if(dateFolders_->isChecked())layout.date_subfolder=outputDateFolder();
     layout.format_subfolders=formatFolders_->isChecked();layout.flatten_subfolders=flattenFolders_->isChecked();
     layout.converted_subfolder=convertedFolder_->isChecked();
     layout.source_folder=sourceFolder_->isChecked();layout.rename_conflicts=renameConflicts_->isChecked();layout.preserve_original_date=preserveOriginalDate_->isChecked();
@@ -1089,17 +1124,26 @@ void MainWindow::resetFilters() {
     dateFrom_->setDate(QDate::currentDate().addDays(-1));dateTo_->setDate(QDate::currentDate());
     statusFilter_->button(0)->setChecked(true);updateFilter();
 }
+void MainWindow::rememberOutputFolder(const QString& path) {
+    if(path.trimmed().isEmpty())return;
+    const auto folder=QDir(path.trimmed()).absolutePath();
+    if(!recentOutputFolders_.isEmpty()&&recentOutputFolders_.first()==folder)return;
+    recentOutputFolders_.removeAll(folder);
+    recentOutputFolders_.prepend(folder);
+    while(recentOutputFolders_.size()>30)recentOutputFolders_.removeLast();
+    saveHistory();
+}
 void MainWindow::loadHistory() {
     QFile file(configDirectory()+"/history.json");
     if(!file.open(QIODevice::ReadOnly))return;
     const auto object=QJsonDocument::fromJson(file.readAll()).object();
     auto strings=[](const QJsonValue& value){QStringList result;for(const auto& entry:value.toArray())if(entry.isString()&&!entry.toString().isEmpty())result.append(entry.toString());return result;};
-    recentFolders_=strings(object.value("folders"));recentFiles_=strings(object.value("files"));lastFiles_=strings(object.value("lastFiles"));
+    recentFolders_=strings(object.value("folders"));recentOutputFolders_=strings(object.value("outputFolders"));recentFiles_=strings(object.value("files"));lastFiles_=strings(object.value("lastFiles"));
 }
 void MainWindow::saveHistory() {
     const auto directory=configDirectory();
     QDir().mkpath(directory);QSaveFile file(directory+"/history.json");
-    QJsonObject object;object.insert("version",1);object.insert("folders",QJsonArray::fromStringList(recentFolders_));object.insert("files",QJsonArray::fromStringList(recentFiles_));object.insert("lastFiles",QJsonArray::fromStringList(lastFiles_));
+    QJsonObject object;object.insert("version",1);object.insert("folders",QJsonArray::fromStringList(recentFolders_));object.insert("outputFolders",QJsonArray::fromStringList(recentOutputFolders_));object.insert("files",QJsonArray::fromStringList(recentFiles_));object.insert("lastFiles",QJsonArray::fromStringList(lastFiles_));
     if(!file.open(QIODevice::WriteOnly)){showLibraryMessage("Cannot save recent history",5000);return;}
     const auto data=QJsonDocument(object).toJson();if(file.write(data)!=data.size()||!file.commit())showLibraryMessage("Cannot save recent history",5000);
 }
@@ -1306,107 +1350,178 @@ void MainWindow::convertFiles(bool selected) {
     const bool quick=!paths.isEmpty()&&paths.size()<quickJobLimit&&!reuse;
     convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
 }
-bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing,qint64 contextJob) {
-    if(reuseJob&&contextJob<0)contextJob=viewedJob_;
+bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing) {
     if(routingToken_||paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return false;
     try {
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
-        const QString directory=output_->text().trimmed();if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
-        QMap<int,QStringList> inputsByTarget;QHash<int,QSet<QString>> inputsSeen;
-        const bool needsHdr=std::any_of(targets.cbegin(),targets.cend(),[](Target target){return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png;});
-        if(needsHdr&&!routing) {
-            auto prepared=std::make_shared<Routing>();QStringList missing;
-            for(int row=0;row<catalog_->rowCount();++row) {
-                const auto& record=catalog_->record(row);
-                if(record.inspected&&!record.transfer.isEmpty())prepared->insert(record.path,{record.raw||record.format=="JXR"||record.hdr||record.transfer=="Linear",record.gainmap,{}});
-            }
-            for(const auto& path:paths)if(!prepared->contains(path)) {
-                if(needsHdrInspection(path))missing.append(path);
-                else prepared->insert(path,{hdrInput(path),false,{}});
-            }
-            if(!missing.isEmpty()) {
-                // Routing inspects headers, never pixels. Uncached sources can
-                // still involve slow file reads, so keep them off the UI thread.
-                auto token=std::make_shared<std::atomic_bool>(true);routingToken_=token;
-                queueState_->setText("Checking source HDR/SDR metadata…");updateCounts();
-                routingWorkers_.start([this,paths,targets,exactTargets,priority,append,reuseJob,quick,contextJob,missing,prepared,token] {
-                    for(const auto& path:missing) {
-                        if(!token->load())break;
-                        SourceRouting info;
-                        try {
-#ifdef _WIN32
-                            const auto source=inspect(std::filesystem::path(path.toStdWString()),[token]{return !token->load();});
-#else
-                            const auto source=inspect(std::filesystem::u8path(path.toUtf8().constData()),[token]{return !token->load();});
-#endif
-                            info.hdr=source.raw||source.format=="JXR"||source.hdr||source.transfer=="Linear";info.gainmap=source.gainmap;
-                        }catch(const std::exception& e){info.error=QString::fromUtf8(e.what());}
-                        catch(...){info.error="Unknown source inspection failure";}
-                        prepared->insert(path,info);
-                    }
-                    QMetaObject::invokeMethod(this,[this,paths,targets,exactTargets,priority,append,reuseJob,quick,contextJob,prepared,token] {
-                        if(routingToken_!=token)return;
-                        routingToken_.reset();
-                        if(token->load())convertPaths(paths,targets,exactTargets,priority,append,reuseJob,quick,prepared,contextJob);
-                        updateCounts();
-                    },Qt::QueuedConnection);
-                });
-                return true;
-            }
-            routing=prepared;
-        }
-        for(const auto& path:paths) {
-            const auto source=routing?routing->value(path):SourceRouting{};
-            const bool gainMap=needsHdr&&source.gainmap;
-            const bool hdrGroup=!needsHdr||exactTargets||source.hdr||!source.error.isEmpty();
-            for(auto target:targets) {
-                const bool hdrTarget=target==Target::jpeg_gainmap||target==Target::jxl_linear||target==Target::jxl_scrgb||target==Target::jxl_pq||target==Target::avif_pq||target==Target::avif_gainmap||target==Target::png_hdr||target==Target::png_hlg||target==Target::jxl_hlg||target==Target::avif_hlg;
-                if(hdrTarget&&gainMap&&reconstruction_->currentIndex()!=int(GainMapReconstruction::full_image)) {
-                    if(target==Target::jpeg_gainmap)target=Target::jpeg;
-                    else if(target==Target::png_hdr||target==Target::png_hlg)target=Target::png;
-                    else if(target==Target::avif_pq||target==Target::avif_gainmap||target==Target::avif_hlg)target=Target::avif;
-                    else target=Target::jxl;
-                }
-                if(hdrTarget&&!hdrGroup&&!exactTargets) {
-                    if(!acceptSdr_->isChecked())continue;
-                    if(target==Target::jpeg_gainmap)target=Target::jpeg;
-                    else if(target==Target::jxl_linear||target==Target::jxl_pq||target==Target::jxl_hlg)target=Target::jxl;
-                    else if(target==Target::png_hdr||target==Target::png_hlg)target=Target::png;
-                    else if(target!=Target::jxl_scrgb)target=Target::avif;
-                }
-                auto& seen=inputsSeen[int(target)];if(!seen.contains(path)){seen.insert(path);inputsByTarget[int(target)].append(path);}
-            }
-        }
-        if(reuseJob&&contextJob>0&&std::none_of(savedJobs_.cbegin(),savedJobs_.cend(),[contextJob](const SavedJob& saved){return saved.number==contextJob;}))
-            throw std::invalid_argument("The selected job no longer exists");
+        const QString directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
+        if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
+        const bool acceptSdr=acceptSdr_->isChecked();
+        const bool full=reconstruction_->currentIndex()==int(GainMapReconstruction::full_image);
+        const bool needsHdr=std::any_of(targets.cbegin(),targets.cend(),isHdrTarget);
+        const auto route=[=](Target target,const SourceRouting& source)->std::optional<Target> {
+            if(!isHdrTarget(target))return target;
+            if(source.gainmap&&!full)return sdrEquivalent(target);
+            if(exactTargets||source.hdr||!source.error.isEmpty())return target;
+            if(!acceptSdr)return {};
+            return target==Target::jxl_scrgb?target:sdrEquivalent(target);
+        };
         const bool reuseQuick=quick&&quickJob_>=0;
-        const qint64 batch=reuseJob?contextJob:reuseQuick?quickJob_:priority?0:nextJob_;
+        const qint64 batch=reuseJob?viewedJob_:reuseQuick?quickJob_:priority?0:nextJob_;
         auto layout=outputLayout(batch,quick);
-        if(reuseJob)for(const auto& saved:savedJobs_)if(saved.number==contextJob&&saved.quick&&jobFolders_->isChecked())layout.job_subfolder="Quick-Job-"+QString::number(batch);
-        for(int row=0;row<catalog_->rowCount();++row){const auto& record=catalog_->record(row);if(record.raw)layout.raw_inputs.insert(record.path);}
-        QVector<Job> jobs;for(auto it=inputsByTarget.cbegin();it!=inputsByTarget.cend();++it)jobs+=makeJobs(it.value(),directory,optionsForTarget(Target(it.key())),layout);
-        if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");
-        QSet<QString> inputs;for(const auto& path:paths)inputs.insert(QFileInfo(path).absoluteFilePath().toCaseFolded());
-        for(const auto& job:jobs) {
-            if(inputs.contains(QFileInfo(job.output).absoluteFilePath().toCaseFolded()))throw std::invalid_argument("Output would replace an input file");
+        auto prepared=std::make_shared<Routing>();
+        if(routing)*prepared=*routing;
+        for(int row=0;row<catalog_->rowCount();++row) {
+            const auto& record=catalog_->record(row);
+            if(record.raw)layout.raw_inputs.insert(record.path);
+            if(needsHdr&&!routing&&record.inspected&&!record.transfer.isEmpty())
+                prepared->insert(record.path,{record.raw||record.format=="JXR"||record.hdr||record.transfer=="Linear",record.gainmap,{}});
         }
-        // Discard stale results for rerun inputs without changing job identity.
-        if(reuseJob&&!queue_->hasRunningBatch(batch)&&!queue_->hasPendingBatch(batch)) {
-            QSet<QString> rerun;for(const auto& job:jobs)rerun.insert(job.input);
-            for(auto& saved:savedJobs_)if(saved.number==batch) {
-                for(auto it=saved.outputs.begin();it!=saved.outputs.end();)if(rerun.contains(it->input))it=saved.outputs.erase(it);else ++it;
-                break;
+        QStringList missing;
+        if(needsHdr)for(const auto& path:paths)if(!prepared->contains(path)) {
+            if(needsHdrInspection(path))missing.append(path);
+            else prepared->insert(path,{hdrInput(path),false,{}});
+        }
+        QMap<Target,Options> options;
+        for(auto target:targets) {
+            options.insert(target,optionsForTarget(target));
+            if(isHdrTarget(target)&&(!full||(!exactTargets&&acceptSdr)))
+                options.insert(sdrEquivalent(target),optionsForTarget(sdrEquivalent(target)));
+        }
+
+        const auto makeRoutedJobs=[=](const QSet<QString>& conflicts) {
+            QMap<Target,QStringList> groups;
+            QSet<QString> inputs;
+            for(const auto& path:paths) {
+                const auto source=prepared->value(path);
+                QSet<int> seen;
+                for(auto requested:targets)if(const auto target=route(requested,source);target&&!seen.contains(int(*target))) {
+                    seen.insert(int(*target));groups[*target].append(path);
+                }
+                inputs.insert(QFileInfo(path).absoluteFilePath().toCaseFolded());
             }
-        }
-        for(auto& job:jobs){job.batch=batch;if(routing)job.preparation_error=routing->value(job.input).error;}
-        recordJob(jobs,priority,reuseJob||reuseQuick,quick);
-        if(quick)quickJob_=batch;
-        if(priority||reuseJob||quick)queue_->enqueueNext(std::move(jobs),workers_->value());
-        else if(append)queue_->enqueue(std::move(jobs),workers_->value());
-        else queue_->start(std::move(jobs),workers_->value());
-        refreshJobs();updateCounts();
+            QVector<Job> jobs;
+            for(auto it=groups.cbegin();it!=groups.cend();++it)
+                jobs+=makeJobs(it.value(),directory,options.value(it.key()),layout);
+            if(jobs.isEmpty())throw std::invalid_argument("No inputs match the selected targets. Enable Accept SDR formats to include SDR sources with SDR output equivalents.");
+            for(auto& job:jobs) {
+                if(inputs.contains(QFileInfo(job.output).absoluteFilePath().toCaseFolded()))
+                    throw std::invalid_argument("Output would replace an input file");
+                job.preparation_error=prepared->value(job.input).error;
+                job.skip_existing=conflicts.contains(job.input);
+            }
+            return jobs;
+        };
+        if(missing.isEmpty())return startConversion(makeRoutedJobs({}),batch,priority,append,reuseJob,reuseQuick,quick,directory);
+
+        const bool skipMode=!layout.rename_conflicts&&!options.cbegin().value().overwrite;
+        auto token=std::make_shared<std::atomic_bool>(true);routingToken_=token;
+        queueState_->setText(skipMode?"Checking output conflicts…":"Checking source HDR/SDR metadata…");updateCounts();
+        routingWorkers_.start([this,paths,targets,exactTargets,priority,append,reuseJob,reuseQuick,quick,
+                               directory,batch,layout,options,skipMode,token,missing,prepared,
+                               acceptSdr,full,route,makeRoutedJobs] {
+            QVector<Job> jobs;
+            QString error;
+            try {
+                QSet<QString> conflicts;
+                if(skipMode) {
+                    // Until inspection, an uncached image could route to HDR,
+                    // an SDR equivalent, or neither. Skip its probe only when
+                    // every possible output name already exists.
+                    const QSet<QString> unknown(missing.cbegin(),missing.cend());
+                    QMap<Target,QStringList> candidates;
+                    for(const auto& path:paths) {
+                        if(!token->load())return;
+                        QSet<int> seen;
+                        const auto add=[&](const SourceRouting& source) {
+                            for(auto requested:targets)if(const auto target=route(requested,source);target&&!seen.contains(int(*target))){
+                                seen.insert(int(*target));candidates[*target].append(path);
+                            }
+                        };
+                        if(unknown.contains(path)) {
+                            add({true,false,{}});
+                            if(acceptSdr&&!exactTargets)add({});
+                            if(!full&&mayHaveGainMap(path))add({true,true,{}});
+                        } else add(prepared->value(path));
+                    }
+                    conflicts=unknown;
+                    for(auto it=candidates.cbegin();it!=candidates.cend();++it) {
+                        if(!token->load())return;
+                        bool numbered=false;
+                        QVector<Job> possible;
+                        try {possible=makeJobs(it.value(),directory,options.value(it.key()),layout,&numbered);}
+                        catch(const std::invalid_argument&) {
+                            // A possible route can have a filename conflict
+                            // with an input that disappears after routing.
+                            for(const auto& path:it.value())conflicts.remove(path);
+                            continue;
+                        }
+                        for(const auto& job:possible) {
+                            if(!token->load())return;
+                            if(conflicts.contains(job.input)&&(numbered||!outputExists(job.output)))conflicts.remove(job.input);
+                        }
+                    }
+                    QMetaObject::invokeMethod(this,[this,token] {
+                        if(routingToken_==token)queueState_->setText("Checking source HDR/SDR metadata…");
+                    },Qt::QueuedConnection);
+                }
+                for(const auto& path:missing) {
+                    if(!token->load())return;
+                    SourceRouting info;
+                    if(conflicts.contains(path)) {
+                        // All possible targets can be skipped. Use the
+                        // requested HDR target to report the conflict.
+                        info.hdr=true;
+                    } else try {
+#ifdef _WIN32
+                        const auto source=inspect(std::filesystem::path(path.toStdWString()),[token]{return !token->load();});
+#else
+                        const auto source=inspect(std::filesystem::u8path(path.toUtf8().constData()),[token]{return !token->load();});
+#endif
+                        info.hdr=source.raw||source.format=="JXR"||source.hdr||source.transfer=="Linear";info.gainmap=source.gainmap;
+                    }catch(const std::exception& e){info.error=QString::fromUtf8(e.what());}
+                    catch(...){info.error="Unknown source inspection failure";}
+                    prepared->insert(path,info);
+                }
+                if(!token->load())return;
+                jobs=makeRoutedJobs(conflicts);
+            }catch(const std::exception& e){error=QString::fromUtf8(e.what());}
+            catch(...){error="Unknown conversion preparation failure";}
+            QMetaObject::invokeMethod(this,[this,token,error,paths,batch,priority,append,reuseJob,reuseQuick,
+                                            quick,directory,jobs=std::move(jobs)]() mutable {
+                if(routingToken_!=token)return;
+                routingToken_.reset();
+                try {
+                    if(!error.isEmpty())throw std::runtime_error(error.toStdString());
+                    startConversion(std::move(jobs),batch,priority,append,reuseJob,reuseQuick,quick,directory);
+                }catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);}
+                updateCounts();
+            },Qt::QueuedConnection);
+        });
         return true;
-    } catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);return false;}
+    }catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);return false;}
+}
+
+bool MainWindow::startConversion(QVector<Job> jobs,qint64 batch,bool priority,bool append,bool reuseJob,bool reuseQuick,bool quick,const QString& directory) {
+    if(reuseJob&&batch>0&&std::none_of(savedJobs_.cbegin(),savedJobs_.cend(),[batch](const SavedJob& saved){return saved.number==batch;}))
+        throw std::invalid_argument("The selected job no longer exists");
+    // Discard stale results for rerun inputs without changing job identity.
+    if(reuseJob&&!queue_->hasRunningBatch(batch)&&!queue_->hasPendingBatch(batch)) {
+        QSet<QString> rerun;for(const auto& job:jobs)rerun.insert(job.input);
+        for(auto& saved:savedJobs_)if(saved.number==batch) {
+            for(auto it=saved.outputs.begin();it!=saved.outputs.end();)if(rerun.contains(it->input))it=saved.outputs.erase(it);else ++it;
+            break;
+        }
+    }
+    for(auto& job:jobs)job.batch=batch;
+    recordJob(jobs,priority,reuseJob||reuseQuick,quick);
+    if(!directory.isEmpty())rememberOutputFolder(directory);
+    if(quick)quickJob_=batch;
+    if(priority||reuseJob||quick)queue_->enqueueNext(std::move(jobs),workers_->value());
+    else if(append)queue_->enqueue(std::move(jobs),workers_->value());
+    else queue_->start(std::move(jobs),workers_->value());
+    refreshJobs();updateCounts();
+    return true;
 }
 void MainWindow::reportError(const QString& message,const QStringList& paths) {
     catalog_->beginStatusUpdates();
@@ -1415,7 +1530,7 @@ void MainWindow::reportError(const QString& message,const QStringList& paths) {
     queueState_->setText(message);logMessage(message);
 }
 void MainWindow::stopQueue() {
-    if(routingToken_){routingToken_->store(false);routingToken_.reset();queueState_->setText("Source metadata check cancelled");}
+    if(routingToken_){routingToken_->store(false);routingToken_.reset();queueState_->setText("Conversion preparation cancelled");}
     queue_->cancelPending();updateCounts();
 }
 void MainWindow::logMessage(const QString& message) {
@@ -1435,8 +1550,15 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     event->accept();
 }
 bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
-
-
+    if(event->type()==QEvent::Enter&&watched->objectName()=="chooseOutputFolder") {
+        auto* button=static_cast<QPushButton*>(watched);
+        QTimer::singleShot(350,button,[this,button] {
+            if(!button->underMouse()||!button->isVisible()||!button->isEnabled()||button->isDown()||
+               recentOutputFolders_.isEmpty()||QApplication::activeModalWidget())return;
+            auto* menu=button->findChild<QMenu*>("outputFolderHistory");
+            if(!menu->isVisible())menu->popup(button->mapToGlobal(QPoint(0,button->height())));
+        });
+    }
     if(targets_&&watched==targets_->viewport()&&event->type()==QEvent::MouseButtonRelease) {
         auto* mouse=static_cast<QMouseEvent*>(event);
         if(mouse->button()==Qt::LeftButton) {

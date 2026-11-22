@@ -240,9 +240,10 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
     const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png;
     const bool base_only=cache.gainmap&&!full_gainmap&&sdr_target;
-    const bool manual_tones=o.sdr_tone_mapper==SdrToneMapper::skiv_manual||
-        (!skiv_tone_mapper(o.sdr_tone_mapper)&&!o.sdr_auto_tone_curve);
-    const bool tonal_edits=o.sdr_tone_map&&manual_tones&&(o.sdr_shadows||o.sdr_midtones||o.sdr_highlights);
+    const bool tonal_controls=o.sdr_tone_mapper==SdrToneMapper::skiv_manual||!skiv_tone_mapper(o.sdr_tone_mapper);
+    const std::array<float,3> zones=tonal_controls?std::array<float,3>{
+        o.sdr_shadows,o.sdr_auto_tone_curve?0.f:o.sdr_midtones,o.sdr_highlights}:std::array<float,3>{};
+    const bool tonal_edits=o.sdr_tone_map&&zones!=std::array<float,3>{};
     if(cache.gainmap&&!full_gainmap) {
         const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
         // Off/Auto can edit the stored SDR base, but rebuilding a gain map
@@ -419,9 +420,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
-            const std::array<float,3> zones=manual_tones?std::array<float,3>{o.sdr_shadows,o.sdr_midtones,o.sdr_highlights}:std::array<float,3>{};
-            const bool adjust_zones=zones!=std::array<float,3>{};
-            if(peak>1.f||adjust_zones) {
+            if(peak>1.f||tonal_edits) {
                 // The manual range is a ceiling. Fit a dimmer source to its
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
@@ -431,11 +430,11 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                         gamut==UHDR_CG_DISPLAY_P3?std::array<float,3>{.2289746f,.6917385f,.0792869f}:std::array<float,3>{.2126f,.7152f,.0722f};
                     // An adjusted render needs the selected ceiling, rather
                     // than the pre-adjustment content peak, as its manual cap.
-                    const float curve_range=(o.sdr_auto_tone_curve||adjust_zones)&&!o.sdr_auto_hdr_range?
+                    const float curve_range=tonal_edits&&!o.sdr_auto_hdr_range?
                         float(o.sdr_hdr_range_nits):range;
                     if(o.sdr_tone_mapper==SdrToneMapper::skiv_manual) {
                         cache.mapped_sdr=tone_map_skiv_manual(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
-                            o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones);
+                            o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones,o.sdr_auto_tone_curve,o.sdr_auto_shoulder);
                     } else if(skiv_tone_mapper(o.sdr_tone_mapper)) {
                         cache.mapped_sdr=tone_map_skiv_base(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
                             o.sdr_tone_mapper==SdrToneMapper::skiv_custom,o.sdr_shoulder,

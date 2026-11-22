@@ -60,6 +60,10 @@ void orderJobs(QVector<Job>& jobs) {
 }
 
 }
+bool outputExists(const QString& path) {
+    std::error_code error;
+    return std::filesystem::exists(std::filesystem::symlink_status(nativePath(path),error));
+}
 QString outputDateFolder() {
     QString name=QLocale().toString(QDate::currentDate(),QLocale::ShortFormat);
     // Locale date separators such as '/' cannot be used in a single folder name.
@@ -82,9 +86,12 @@ bool hdrInput(const QString& path) {
     static const QSet<QString> sdrExtensions={"jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","webp","tif","tiff","bmp","gif"};
     return !sdrExtensions.contains(extension);
 }
-bool gainMapInput(const QString& path) {
+bool mayHaveGainMap(const QString& path) {
     static const QSet<QString> formats={"jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif"};
-    return formats.contains(QFileInfo(path).suffix().toLower())&&inspect(nativePath(path)).gainmap;
+    return formats.contains(QFileInfo(path).suffix().toLower());
+}
+bool gainMapInput(const QString& path) {
+    return mayHaveGainMap(path)&&inspect(nativePath(path)).gainmap;
 }
 int coreCount() { return std::max(1,QThread::idealThreadCount()); }
 int recommendedWorkers(int cores) {
@@ -100,7 +107,7 @@ QString outputFolder(const QString& input,const QString& directory,Target target
         const auto parent=QDir(source.absolutePath()).dirName();
         if(!QDir(source.absolutePath()).isRoot()&&!parent.isEmpty())parts.append(parent);
     }
-    if(layout.date_subfolders)parts.append(outputDateFolder());
+    if(!layout.date_subfolder.isEmpty())parts.append(layout.date_subfolder);
     if(!layout.job_subfolder.isEmpty())parts.append(layout.job_subfolder);
     if(layout.format_subfolders) {
         switch(target) {
@@ -116,8 +123,9 @@ QString outputFolder(const QString& input,const QString& directory,Target target
     else for(const auto& part:parts)folder=QDir(folder).filePath(part);
     return QDir(folder).absolutePath();
 }
-QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const Options& options,const OutputLayout& layout) {
+QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const Options& options,const OutputLayout& layout,bool* numbered) {
     validate(options);QVector<Job> result;QSet<QString> outputs;QHash<QString,int> nextSuffix;
+    if(numbered)*numbered=false;
     const int target=int(options.target);
     const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl","sdr.png","hdr.png","hlg.png","hlg.jxl","hlg.avif"};
     QString quality;
@@ -150,8 +158,10 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         QString filename=stem+"_"+suffix;int n=nextSuffix.value(namingKey,2);
         auto outputPath=[&]{return QDir(folder).absoluteFilePath(filename);};
         while(outputs.contains(pathKey(outputPath())) ||
-              (layout.rename_conflicts && (QFileInfo::exists(outputPath()) || sources.contains(pathKey(outputPath())))))
+              (layout.rename_conflicts && (outputExists(outputPath()) || sources.contains(pathKey(outputPath()))))) {
+            if(numbered)*numbered=true;
             filename=stem+"_"+QString::number(n++)+"_"+suffix;
+        }
         nextSuffix.insert(namingKey,n);
         const QString output=outputPath();outputs.insert(pathKey(output));
         if(sources.contains(pathKey(output)))throw std::invalid_argument("Output would replace an input file");
@@ -252,9 +262,7 @@ void ConversionQueue::pump() {
         // Rotate rather than swap so each source retains its render-family order.
         std::rotate(jobs_.begin()+next_,jobs_.begin()+candidate,jobs_.begin()+candidate+1);
         const Job job=jobs_[next_++];
-        std::error_code outputError;
-        const auto outputStatus=std::filesystem::symlink_status(nativePath(job.output),outputError);
-        if(!job.options.overwrite && std::filesystem::exists(outputStatus)) {
+        if(job.skip_existing||(!job.options.overwrite&&outputExists(job.output))) {
             ++skipped_;++finished_;finishFile(job,{},false,true);continue;
         }
         ++active_;activeInputs_.insert(job.input);activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);

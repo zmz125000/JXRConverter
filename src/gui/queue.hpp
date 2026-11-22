@@ -10,17 +10,18 @@
 #include <functional>
 
 namespace jxrc::gui {
-struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; };
+struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; bool skip_existing = false; };
 int coreCount();
 int recommendedWorkers(int cores);
 bool hdrInput(const QString& path);
 bool needsHdrInspection(const QString& path);
+bool mayHaveGainMap(const QString& path);
 bool gainMapInput(const QString& path);
 QString outputDateFolder();
 struct OutputLayout {
     bool converted_subfolder = true;
     bool format_subfolders = false;
-    bool date_subfolders = false;
+    QString date_subfolder;
     bool parent_subfolders = false;
     bool flatten_subfolders = false;
     QString job_subfolder;
@@ -30,7 +31,8 @@ struct OutputLayout {
     QSet<QString> raw_inputs; // Catalog-identified RAW, including TIFF sensor containers.
 };
 QString outputFolder(const QString& input, const QString& directory, Target target, const OutputLayout& layout);
-QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options, const OutputLayout& layout = {});
+QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options, const OutputLayout& layout = {}, bool* numbered = nullptr);
+bool outputExists(const QString& path);
 class ConversionQueue : public QObject {
     Q_OBJECT
 public:

@@ -54,6 +54,7 @@ private:
     void importVideoFrame(const QString& source);
     void updateVideoTab();
     void addDroppedPaths(const QStringList& paths);
+    void rememberOutputFolder(const QString& path);
     void loadHistory();
     void saveHistory();
     void applySearch();
@@ -103,7 +104,8 @@ private:
     void convertFiles(bool selected);
     struct SourceRouting { bool hdr = false, gainmap = false; QString error; };
     using Routing = QHash<QString, SourceRouting>;
-    bool convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false, std::shared_ptr<const Routing> routing = {}, qint64 contextJob = -1);
+    bool convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false, std::shared_ptr<const Routing> routing = {});
+    bool startConversion(QVector<Job>, qint64 batch, bool priority, bool append, bool reuseJob, bool reuseQuick, bool quick, const QString& directory);
     void reportError(const QString&, const QStringList& paths = {});
     void stopQueue();
     void checkForUpdates();
@@ -155,7 +157,7 @@ private:
     int aspectIndex_ = 2;
     QPushButton* running_;
     QProgressBar* progress_;
-    QStringList recentFolders_, recentFiles_, lastFiles_;
+    QStringList recentFolders_, recentOutputFolders_, recentFiles_, lastFiles_;
     QString appliedSearch_, lastOutputFolder_;
     QSet<QString> loggedWarnings_, selectedImages_, selectedTabImages_, rememberedImages_;
     QHash<qint64,QSet<QString>> jobSelections_;

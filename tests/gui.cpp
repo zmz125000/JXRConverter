@@ -340,8 +340,9 @@ private slots:
         autoShoulder->setChecked(true);QVERIFY(!window.findChild<QSlider*>("sdrShoulder")->isEnabled());
         QVERIFY(window.options().sdr_auto_shoulder);
         for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"}) {
-            auto* input=window.findChild<QDoubleSpinBox*>(name);QVERIFY(!input->isEnabled());
-            QVERIFY(!window.findChild<QSlider*>(QString(name)+"Slider")->isEnabled());
+            const bool enabled=QString(name)!="sdrMidtones";
+            auto* input=window.findChild<QDoubleSpinBox*>(name);QCOMPARE(input->isEnabled(),enabled);
+            QCOMPARE(window.findChild<QSlider*>(QString(name)+"Slider")->isEnabled(),enabled);
         }
         automatic->setChecked(false);QVERIFY(mapper->isEnabled());QCOMPARE(mapper->currentData().toInt(),2);
         window.findChild<QDoubleSpinBox*>("sdrShadows")->setValue(.5);
@@ -369,9 +370,10 @@ private slots:
         mapper->setCurrentIndex(mapper->findData(5));QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::skiv_manual);
         QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());
         QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());
-        QVERIFY(!window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
+        QVERIFY(window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
         window.findChild<QCheckBox*>("sdrAutoToneCurve")->setChecked(true);
-        for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})QVERIFY(window.findChild<QDoubleSpinBox*>(name)->isEnabled());
+        for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})
+            QCOMPARE(window.findChild<QDoubleSpinBox*>(name)->isEnabled(),QString(name)!="sdrMidtones");
         window.findChild<QCheckBox*>("sdrAutoToneCurve")->setChecked(false);
         mapper->setCurrentIndex(mapper->findData(0));QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());QVERIFY(autoRange->isEnabled());
         QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());QVERIFY(window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
@@ -383,7 +385,7 @@ private slots:
         {
             MainWindow window;window.show();
             auto* color=window.findChild<QComboBox*>("sdrColorMapping");
-            QVERIFY(color);QCOMPARE(color->count(),3);QCOMPARE(color->currentIndex(),0);color->setCurrentIndex(1);
+            QVERIFY(color);QCOMPARE(color->count(),3);QCOMPARE(color->currentIndex(),1);
             auto* autoCurve=window.findChild<QCheckBox*>("sdrAutoToneCurve");QVERIFY(autoCurve);QVERIFY(!autoCurve->isChecked());autoCurve->setChecked(true);
             window.findChild<QCheckBox*>("sdrAutoShoulder")->setChecked(true);
             auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");
@@ -1316,6 +1318,7 @@ private slots:
         appSettings().clear();const auto a=makeImage(root("job-history"),"a.jpg",64,48,100),b=makeImage(root("job-history"),"b.jpg",64,48,100),c=makeImage(root("job-history"),"c.jpg",64,48,100);
         {
             MainWindow window;window.findChild<QCheckBox*>("jumpToJobTab")->setChecked(true);window.findChild<QCheckBox*>("loadPreviousJobs")->setChecked(true);window.show();window.addPaths({a,b});QTRY_COMPARE(window.catalog()->rowCount(),2);
+            window.findChild<QCheckBox*>("renameConflicts")->setChecked(false);
             window.findChild<QLineEdit*>("outputDirectory")->setText(root("job-history-output"));QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
             window.findChild<QPushButton*>("selectAllImages")->click();
             auto* draftView=window.findChild<FileListView*>();bool drafted=false;
@@ -1475,7 +1478,7 @@ private slots:
             window.findChild<QLineEdit*>("outputDirectory")->setText(destination);
             window.findChild<QCheckBox*>("saveToSourceFolder")->setChecked(original);
             window.findChild<QCheckBox*>("flattenSubfolders")->setChecked(flatten);
-            OutputLayout layout;layout.parent_subfolders=!original;layout.date_subfolders=true;layout.format_subfolders=true;
+            OutputLayout layout;layout.parent_subfolders=!original;layout.date_subfolder=outputDateFolder();layout.format_subfolders=true;
             layout.job_subfolder="Job-"+QString::number(++batch);layout.flatten_subfolders=flatten;layout.source_folder=original;
             const auto expected=outputFolder(files.first(),destination,jxrc::Target::avif,layout);
             window.findChild<QPushButton*>("convertVisible")->click();QTRY_COMPARE(done.count(),batch);QCOMPARE(done.last()[1].toInt(),0);
@@ -1586,12 +1589,12 @@ private slots:
         jxrc::Options options;options.target=jxrc::Target::avif;
         OutputLayout layout;layout.parent_subfolders=true;
         QCOMPARE(QFileInfo(makeJobs({input},destination,options,layout).first().output).absolutePath(),destination+"/iphone");
-        layout.date_subfolders=true;layout.job_subfolder="Job-3";layout.format_subfolders=true;
+        layout.date_subfolder=outputDateFolder();layout.job_subfolder="Job-3";layout.format_subfolders=true;
         const QStringList parts={"iphone",outputDateFolder(),"Job-3","avif"};
         QCOMPARE(outputFolder(input,destination,options.target,layout),destination+"/"+parts.join('/'));
         layout.flatten_subfolders=true;
         QCOMPARE(outputFolder(input,destination,options.target,layout),destination+"/"+parts.join('-'));
-        layout.date_subfolders=false;layout.format_subfolders=false;
+        layout.date_subfolder.clear();layout.format_subfolders=false;
         QCOMPARE(outputFolder(input,destination,options.target,layout),destination+"/iphone-Job-3");
         layout.source_folder=true;
         QCOMPARE(outputFolder(input,{},options.target,layout),QFileInfo(input).absolutePath()+"/Converted/Job-3");
@@ -1773,7 +1776,7 @@ private slots:
             QLocale::setDefault(locale);
             auto expected=locale.toString(QDate::currentDate(),QLocale::ShortFormat);expected.replace('/','-');
             QCOMPARE(outputDateFolder(),expected);
-            OutputLayout layout;layout.date_subfolders=true;layout.format_subfolders=true;
+            OutputLayout layout;layout.date_subfolder=outputDateFolder();layout.format_subfolders=true;
             jxrc::Options options;options.target=jxrc::Target::avif;
             const auto source=root("dated/source.jpg");
             const auto jobs=makeJobs({source},root("dated/output"),options,layout);
@@ -2095,6 +2098,76 @@ private slots:
         QVERIFY(makeJobs({raw},root("layout/output"),options)[0].output.endsWith("_gainmap.avif"));
         MainWindow window;auto* rename=window.findChild<QCheckBox*>("renameConflicts");auto* overwrite=window.findChild<QCheckBox*>("overwrite");
         QVERIFY(rename && overwrite);rename->setChecked(true);QVERIFY(!overwrite->isEnabled());rename->setChecked(false);QVERIFY(overwrite->isEnabled());
+    }
+    void outputFolderHistory() {
+        appSettings().clear();
+        QFile::remove(configDirectory()+"/history.json");
+        const auto first=root("output history & one"),second=root("output history two");
+        {
+            MainWindow window;
+            auto* output=window.findChild<QLineEdit*>("outputDirectory");
+            output->setText(first);emit output->editingFinished();
+            output->setText(second);emit output->editingFinished();
+        }
+        MainWindow window;
+        auto* output=window.findChild<QLineEdit*>("outputDirectory");
+        auto* choose=window.findChild<QPushButton*>("chooseOutputFolder");
+        QVERIFY(choose&&!choose->menu());
+        auto* history=choose->findChild<QMenu*>("outputFolderHistory");
+        QVERIFY(history);
+        window.show();
+        window.findChild<QScrollArea*>("outputQueueScroll")->ensureWidgetVisible(choose);
+        const QPoint local=choose->rect().center();
+        QEnterEvent enter(local,choose->mapTo(&window,local),choose->mapToGlobal(local));
+        choose->setAttribute(Qt::WA_UnderMouse);
+        QCoreApplication::sendEvent(choose,&enter);
+        QTRY_VERIFY_WITH_TIMEOUT(history->isVisible(),2000);
+        QCOMPARE(history->actions().size(),4);
+        QCOMPARE(history->actions()[2]->text(),second);
+        history->actions()[3]->trigger();history->hide();QCOMPARE(output->text(),first);
+        QAction* clear=nullptr;
+        for(auto* action:window.findChildren<QAction*>())if(action->text()=="Clear history")clear=action;
+        QVERIFY(clear);clear->trigger();
+        emit history->aboutToShow();QCOMPARE(history->actions().size(),2);
+        QCOMPARE(output->text(),first);
+    }
+    void skipConflictsBeforeHdrRouting() {
+        appSettings().clear();
+        const auto directory=root("routing-conflicts");
+        QVERIFY(QDir().mkpath(directory));
+        const auto source=directory+"/existing.png",newSource=directory+"/new.png";
+        QImage raster(32,24,QImage::Format_RGB32);raster.fill(Qt::gray);
+        QVERIFY(raster.save(source)&&raster.save(newSource));
+        const auto output=directory+"/existing_hdr.png";
+        QFile existing(output);
+        QVERIFY(existing.open(QIODevice::WriteOnly));existing.write("keep");existing.close();
+        MainWindow window;
+        window.findChild<QCheckBox*>("autoThumbnailAspect")->setChecked(false);
+        auto* rename=window.findChild<QCheckBox*>("renameConflicts");
+        QVERIFY(rename->isChecked());
+        rename->setChecked(false);
+        window.findChild<QCheckBox*>("acceptSdr")->setChecked(false);
+        window.findChild<QLineEdit*>("outputDirectory")->setText(directory);
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        for(int i=0;i<targets->count();++i) {
+            auto* item=targets->item(i);
+            item->setCheckState(item->data(Qt::UserRole).toInt()==int(jxrc::Target::png_hdr)?Qt::Checked:Qt::Unchecked);
+        }
+        window.addPaths({source,newSource});QTRY_COMPARE(window.catalog()->rowCount(),2);
+        QVERIFY(!window.catalog()->record(0).inspected&&!window.catalog()->record(1).inspected);
+        QSignalSpy done(window.queue(),&ConversionQueue::batchFinished);
+        window.findChild<QPushButton*>("convertVisible")->click();
+        QTRY_COMPARE(done.count(),1);
+        QCOMPARE(window.queue()->skipped(),1);
+        QVERIFY(!QFileInfo::exists(directory+"/new_hdr.png"));
+
+        // An enabled fallback with a free output path still needs routing.
+        window.findChild<QCheckBox*>("acceptSdr")->setChecked(true);
+        window.findChild<QPushButton*>("convertVisible")->click();
+        QTRY_COMPARE(done.count(),2);
+        QCOMPARE(done.last()[0].toInt(),2);
+        QVERIFY(QFileInfo::exists(directory+"/existing_sdr_tm.png"));
+        QVERIFY(existing.open(QIODevice::ReadOnly));QCOMPARE(existing.readAll(),QByteArray("keep"));
     }
     void existingOutputsSkipBeforeConversion() {
         const QString output=root("existing-output.avif");QFile file(output);

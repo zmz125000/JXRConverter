@@ -1540,30 +1540,31 @@ static void transparency_background(const fs::path& dir) {
 
 static void sdr_tone_mapping(const fs::path& dir) {
     check(!jxrc::Options{}.sdr_auto_tone_curve&&jxrc::Options{}.sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom,"Default SDR mapper should be SKIV custom");
-    // A dark median must not lower the automatic shoulder below 50%.
-    const std::vector<float> darkMedian={.1f,.1f,.1f,1.f,.4f,.4f,.4f,1.f,4.f,4.f,4.f,1.f};
-    const auto darkMapped=tone_map_sdr_base(darkMedian,.1f,812.f,jxrc::SdrToneMapper::logarithmic,
-        jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},true,true,true);
-    check(darkMapped[4]==.4f,"Auto shoulder fell below 50%");
-    const std::vector<float> autoSource={8,4,2,.4f,.5f,.3f,.2f,.8f};
-    for(auto mapping:{jxrc::SdrColorMapping::max_rgb,jxrc::SdrColorMapping::luminance,jxrc::SdrColorMapping::per_channel}) {
-        const auto automatic=tone_map_sdr_base(autoSource,.67f,406.f,jxrc::SdrToneMapper::logarithmic,mapping,{.2126f,.7152f,.0722f},{.2f,.3f,.7f},false,true);
-        for(size_t i=0;i<automatic.size();++i) {
-            check(std::isfinite(automatic[i])&&automatic[i]>=0&&automatic[i]<=1,"Auto tone curve exceeded SDR range");
-            if(i%4==3)check(automatic[i]==autoSource[i],"Auto tone curve changed alpha");
-        }
-    }
-    const auto autoDefault=tone_map_sdr_base(autoSource,.67f,406.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},false,true,true);
-    const auto fixedShoulder=tone_map_sdr_base(darkMedian,.67f,812.f,jxrc::SdrToneMapper::logarithmic,
-        jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},true,true,false);
-    const auto lowerShoulder=tone_map_sdr_base(darkMedian,.3f,812.f,jxrc::SdrToneMapper::logarithmic,
-        jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{},true,true,false);
-    check(fixedShoulder[4]==.4f&&lowerShoulder[4]<.4f,"Auto curve ignored manual shoulder with Auto shoulder off");
+    check(jxrc::Options{}.sdr_color_mapping==jxrc::SdrColorMapping::luminance,"Default SDR color mapping");
     check(!jxrc::Options{}.sdr_auto_shoulder,"Auto shoulder should default off");
-    const auto autoManual=tone_map_sdr_base(autoSource,.2f,406.f,jxrc::SdrToneMapper::reinhard,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{1,-1,.7f},false,true,true);
-    check(autoDefault==autoManual,"Auto curve used disabled manual settings");
-    const auto capped=tone_map_sdr_base({8,4,2,1},.67f,406.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{0,0,.7f},false,true);
-    check(capped[0]>.9999f&&std::abs(capped[1]-.5f)<1e-6f,"Auto tone curve failed to fit adjusted peak or preserve RGB ratios");
+    const std::array<float,3> luma={.2126f,.7152f,.0722f};
+    const std::vector<float> dim={.14f,.14f,.14f,1.f,4.f,4.f,4.f,0.f};
+    const std::vector<float> halfHdr={.4f,.4f,.4f,1.f,4.f,4.f,4.f,1.f};
+    const std::vector<float> bright={4.f,4.f,4.f,1.f};
+    std::array<float,3> zones={.2f,.3f,.7f};
+    float shoulder=.5f;
+    apply_auto_sdr_tone(dim,luma,zones,shoulder,true);
+    check(zones[1]==0.f&&shoulder==.95f,"Dim SDR scene or invisible HDR changed automatic midtones");
+    apply_auto_sdr_tone(halfHdr,luma,zones,shoulder,true);
+    check(zones==std::array<float,3>{.2f,-.72f,.7f}&&std::abs(shoulder-.575f)<1e-6f,"Half-frame HDR tone settings");
+    apply_auto_sdr_tone(bright,luma,zones,shoulder,true);
+    check(std::abs(shoulder-.20f)<1e-6f,"All-HDR scene did not reach minimum shoulder");
+    const auto mapper=jxrc::SdrToneMapper::reinhard;
+    const auto mapping=jxrc::SdrColorMapping::max_rgb;
+    const auto automatic=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,.3f,.7f},false,true);
+    const auto manual=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,-.72f,.7f});
+    check(automatic==manual,"Auto curve changed settings beyond midtones");
+    const auto autoShoulder=tone_map_sdr_base(halfHdr,.5f,812.f,mapper,mapping,luma,{},true,true,true);
+    const auto manualShoulder=tone_map_sdr_base(halfHdr,.575f,812.f,mapper,mapping,luma,{0,-.72f,0},true);
+    check(autoShoulder==manualShoulder,"Auto shoulder was not applied");
+    const auto automaticSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,.3f,.7f},true);
+    const auto manualSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,-.72f,.7f});
+    check(automaticSkiv==manualSkiv,"SKIV manual did not use the automatic midtone setting");
     const std::vector<float> zoneInput={.03f,.02f,.01f,.4f,.4f,.3f,.2f,.8f,4.f,3.f,2.f,1.f};
     const auto neutralZones=tone_map_sdr_base(zoneInput,.67f,1000.f);
     const auto shadowZones=tone_map_sdr_base(zoneInput,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{.5f,0,0},true);
@@ -1654,8 +1655,8 @@ static void sdr_tone_mapping(const fs::path& dir) {
         check(fullPixels[12*4]>3.f,"Tone-mapped gain-map base lost HDR reconstruction");
     }
     o.target=jxrc::Target::png;o.sdr_auto_hdr_range=true;
-    const auto automatic=dir/"tone-auto.png";session.convert(automatic,o);
-    const auto autoPixels=decode_sdr(automatic);
+    const auto autoRangePath=dir/"tone-auto.png";session.convert(autoRangePath,o);
+    const auto autoPixels=decode_sdr(autoRangePath);
     check(std::abs(autoPixels[12*4]-1.f)<.02f&&autoPixels[8*4]<after[8*4],"Automatic HDR range did not fit the F32 peak");
     o.sdr_auto_hdr_range=false;o.sdr_hdr_range_nits=2000;
     const auto cappedAbovePeak=dir/"tone-cap-above-peak.png";session.convert(cappedAbovePeak,o);
