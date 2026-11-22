@@ -185,7 +185,7 @@ struct ConversionSession::Impl {
     SdrToneMapper mapped_mapper=SdrToneMapper::extended_reinhard;
     SdrColorMapping mapped_color_mapping=SdrColorMapping::max_rgb;
     std::array<float,3> mapped_zones{};
-    bool mapped_auto_range=false,mapped_auto_curve=false,mapped_auto_shoulder=false;
+    bool mapped_auto_range=false,mapped_auto_curve=false;
     int mapped_cap=0;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
@@ -425,7 +425,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
                     std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
-                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping||cache.mapped_zones!=zones||cache.mapped_auto_range!=o.sdr_auto_hdr_range||cache.mapped_cap!=o.sdr_hdr_range_nits||cache.mapped_auto_curve!=o.sdr_auto_tone_curve||cache.mapped_auto_shoulder!=o.sdr_auto_shoulder) {
+                if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping||cache.mapped_zones!=zones||cache.mapped_auto_range!=o.sdr_auto_hdr_range||cache.mapped_cap!=o.sdr_hdr_range_nits||cache.mapped_auto_curve!=o.sdr_auto_tone_curve) {
                     const std::array<float,3> luma=gamut==UHDR_CG_BT_2100?std::array<float,3>{.2627f,.6780f,.0593f}:
                         gamut==UHDR_CG_DISPLAY_P3?std::array<float,3>{.2289746f,.6917385f,.0792869f}:std::array<float,3>{.2126f,.7152f,.0722f};
                     // An adjusted render needs the selected ceiling, rather
@@ -434,13 +434,13 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                         float(o.sdr_hdr_range_nits):range;
                     if(o.sdr_tone_mapper==SdrToneMapper::skiv_manual) {
                         cache.mapped_sdr=tone_map_skiv_manual(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
-                            o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones,o.sdr_auto_tone_curve,o.sdr_auto_shoulder);
+                            o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones,o.sdr_auto_tone_curve);
                     } else if(skiv_tone_mapper(o.sdr_tone_mapper)) {
                         cache.mapped_sdr=tone_map_skiv_base(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
                             o.sdr_tone_mapper==SdrToneMapper::skiv_custom,o.sdr_shoulder,
                             o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits));
-                    } else cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,curve_range,o.sdr_tone_mapper,o.sdr_color_mapping,luma,zones,o.sdr_auto_hdr_range,o.sdr_auto_tone_curve,o.sdr_auto_shoulder);
-                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;cache.mapped_zones=zones;cache.mapped_auto_range=o.sdr_auto_hdr_range;cache.mapped_cap=o.sdr_hdr_range_nits;cache.mapped_auto_curve=o.sdr_auto_tone_curve;cache.mapped_auto_shoulder=o.sdr_auto_shoulder;
+                    } else cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,curve_range,o.sdr_tone_mapper,o.sdr_color_mapping,luma,zones,o.sdr_auto_hdr_range,o.sdr_auto_tone_curve);
+                    cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;cache.mapped_zones=zones;cache.mapped_auto_range=o.sdr_auto_hdr_range;cache.mapped_cap=o.sdr_hdr_range_nits;cache.mapped_auto_curve=o.sdr_auto_tone_curve;
                 }
             } else cache.mapped_sdr.clear();
         }

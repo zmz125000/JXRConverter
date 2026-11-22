@@ -1541,27 +1541,16 @@ static void transparency_background(const fs::path& dir) {
 static void sdr_tone_mapping(const fs::path& dir) {
     check(!jxrc::Options{}.sdr_auto_tone_curve&&jxrc::Options{}.sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom,"Default SDR mapper should be SKIV custom");
     check(jxrc::Options{}.sdr_color_mapping==jxrc::SdrColorMapping::luminance,"Default SDR color mapping");
-    check(!jxrc::Options{}.sdr_auto_shoulder,"Auto shoulder should default off");
     const std::array<float,3> luma={.2126f,.7152f,.0722f};
     const std::vector<float> dim={.14f,.14f,.14f,1.f,4.f,4.f,4.f,0.f};
     const std::vector<float> halfHdr={.4f,.4f,.4f,1.f,4.f,4.f,4.f,1.f};
-    const std::vector<float> bright={4.f,4.f,4.f,1.f};
-    std::array<float,3> zones={.2f,.3f,.7f};
-    float shoulder=.5f;
-    apply_auto_sdr_tone(dim,luma,zones,shoulder,true);
-    check(zones[1]==0.f&&shoulder==.95f,"Dim SDR scene or invisible HDR changed automatic midtones");
-    apply_auto_sdr_tone(halfHdr,luma,zones,shoulder,true);
-    check(zones==std::array<float,3>{.2f,-.72f,.7f}&&std::abs(shoulder-.575f)<1e-6f,"Half-frame HDR tone settings");
-    apply_auto_sdr_tone(bright,luma,zones,shoulder,true);
-    check(std::abs(shoulder-.20f)<1e-6f,"All-HDR scene did not reach minimum shoulder");
+    check(auto_sdr_midtones(dim,luma)==0.f,"Invisible HDR changed automatic midtones");
+    check(auto_sdr_midtones(halfHdr,luma)==-.72f,"Visible HDR did not adjust automatic midtones");
     const auto mapper=jxrc::SdrToneMapper::reinhard;
     const auto mapping=jxrc::SdrColorMapping::max_rgb;
     const auto automatic=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,.3f,.7f},false,true);
     const auto manual=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,-.72f,.7f});
     check(automatic==manual,"Auto curve changed settings beyond midtones");
-    const auto autoShoulder=tone_map_sdr_base(halfHdr,.5f,812.f,mapper,mapping,luma,{},true,true,true);
-    const auto manualShoulder=tone_map_sdr_base(halfHdr,.575f,812.f,mapper,mapping,luma,{0,-.72f,0},true);
-    check(autoShoulder==manualShoulder,"Auto shoulder was not applied");
     const auto automaticSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,.3f,.7f},true);
     const auto manualSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,-.72f,.7f});
     check(automaticSkiv==manualSkiv,"SKIV manual did not use the automatic midtone setting");
@@ -1738,7 +1727,7 @@ static void skiv_tone_mapping(const fs::path& dir) {
     jxrc::ConversionSession session(source);jxrc::Options o;o.mode=jxrc::Mode::process;o.sdr_tone_map=true;o.sdr_auto_hdr_range=false;o.sdr_hdr_range_nits=1000;o.target=jxrc::Target::png;o.quality.preset=jxrc::Preset::lossless;
     const auto customPath=dir/"skiv-custom.png";session.convert(customPath,o);o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv;
     const auto stockPath=dir/"skiv-stock.png";session.convert(stockPath,o);check(bytes(customPath)!=bytes(stockPath),"SKIV mode change reused stale SDR render");
-    o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;o.sdr_auto_tone_curve=true;o.sdr_auto_shoulder=true;o.sdr_shadows=1;o.sdr_midtones=-1;o.sdr_highlights=.5;o.sdr_shoulder=.1;o.sdr_hdr_range_nits=204;
+    o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;o.sdr_auto_tone_curve=true;o.sdr_shadows=1;o.sdr_midtones=-1;o.sdr_highlights=.5;o.sdr_shoulder=.1;o.sdr_hdr_range_nits=204;
     const auto ignored=dir/"skiv-stock-ignored.png";session.convert(ignored,o);check(bytes(ignored)==bytes(stockPath),"Stock SKIV used disabled controls");
     o.sdr_tone_mapper=jxrc::SdrToneMapper::skiv_custom;o.sdr_shoulder=jxrc::Options{}.sdr_shoulder;o.sdr_hdr_range_nits=1000;
     const auto customIgnored=dir/"skiv-custom-ignored.png";session.convert(customIgnored,o);check(bytes(customIgnored)==bytes(customPath),"SKIV custom used disabled color/auto/tonal controls");

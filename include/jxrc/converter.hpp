@@ -53,7 +53,7 @@ struct Options {
     float sdr_shoulder = 0.50f; // Linear fraction of 203-nit SDR white left unchanged.
     int sdr_hdr_range_nits = 2000; // Ceiling in nits; a lower image peak maps to SDR white.
     bool sdr_auto_tone_curve = false; // Choose midtones from the visible HDR area.
-    bool sdr_auto_shoulder = false; // Auto tone curve: adapt the shoulder within 20–95% using visible HDR area.
+    bool : 8; // Preserve the shared-library layout after removing the old option.
     bool sdr_auto_hdr_range = false; // Use the prepared F32 image peak instead.
     unsigned max_edge = 0;
     unsigned threads = 0; // Per-conversion codec budget; 0 uses automatic defaults.

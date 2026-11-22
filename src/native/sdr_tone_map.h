@@ -13,9 +13,9 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                                             jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
                                             jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
                                             std::array<float,3> luma = {.2126f,.7152f,.0722f},
-                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false, bool auto_shoulder = false) {
+                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
     std::vector<float> sdr=hdr;
-    if(auto_curve)apply_auto_sdr_tone(hdr,luma,zones,shoulder,auto_shoulder);
+    if(auto_curve)zones[1]=auto_sdr_midtones(hdr,luma);
     if(zones!=std::array<float,3>{}) {
         float peak=0.f;
         for(size_t i=0;i<sdr.size();i+=4) {

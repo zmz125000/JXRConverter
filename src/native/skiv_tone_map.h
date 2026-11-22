@@ -162,9 +162,9 @@ inline std::vector<float> tone_map_skiv_base(const std::vector<float>& hdr,int g
 // with the selected working-RGB metric while retaining its intensity curve.
 inline std::vector<float> tone_map_skiv_manual(const std::vector<float>& hdr,int gamut,
         float shoulder,float cap_nits,jxrc::SdrColorMapping mapping,
-        std::array<float,3> luma,std::array<float,3> zones,bool auto_curve=false,bool auto_shoulder=false) {
+        std::array<float,3> luma,std::array<float,3> zones,bool auto_curve=false) {
     using namespace skiv;
-    if(auto_curve)apply_auto_sdr_tone(hdr,luma,zones,shoulder,auto_shoulder);
+    if(auto_curve)zones[1]=auto_sdr_midtones(hdr,luma);
     auto adjusted=hdr;
     const size_t pixels=adjusted.size()/4;
     hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned) {
