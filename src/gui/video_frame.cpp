@@ -378,8 +378,12 @@ public:
                      std::function<QString()> outputDirectory,std::function<QString(const QString&,bool,bool)> frameSaved)
         : QDialog(parent), source_(std::move(source)), ffmpeg_(std::move(ffmpeg)),
           outputDirectory_(std::move(outputDirectory)), frameSaved_(std::move(frameSaved)) {
+#ifdef Q_OS_MACOS
+        // A parented tool window floats above the main window while remaining modeless.
+        setWindowFlags((windowFlags() & ~Qt::WindowType_Mask) | Qt::Tool);
+#endif
         setAttribute(Qt::WA_DeleteOnClose);
-        setWindowTitle("Grab video frame - "+QFileInfo(source_).fileName());
+        setWindowTitle(QFileInfo(source_).fileName());
         setObjectName("videoFrameDialog");
         auto* layout=new QVBoxLayout(this);
 
@@ -773,7 +777,11 @@ private:
         });
         setSeekEnabled(false);
         setSaveEnabled(false);
+#ifdef Q_OS_MACOS
+        dialog->open(); // Attach the save panel to the floating frame window.
+#else
         dialog->show();
+#endif
     }
 
     void publishFrame(const QString& path,bool convert) {

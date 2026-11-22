@@ -13,7 +13,6 @@ int main(int argc,char** argv) {
         return 0;
     }
     QApplication app(argc,argv);app.setOrganizationName("JXRConverter");app.setApplicationName("JXRConverter");app.setApplicationVersion(QString::fromStdString(jxrc::version()));
-    app.setApplicationDisplayName("JXRConverter v"+QString::fromStdString(jxrc::version()));
 #ifdef Q_OS_MACOS
     app.setWindowIcon(QIcon(":/icons/jxrconverter-macos.png"));
 #else
