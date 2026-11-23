@@ -34,7 +34,7 @@ Processing controls (PQ/HLG targets require process mode):
   --sdr-shadows -1..1 --sdr-midtones -1..1 --sdr-highlights -1..1  Default: 0
   --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.50)
   --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 2000)
-  --sdr-auto-tone-curve         Choose midtones automatically (default on; supported in SKIV manual)
+  --sdr-auto-tone-curve         Dim bright HDR midtones automatically (default on; supported in SKIV manual)
   --no-sdr-auto-tone-curve      Use the manual midtones control
   --sdr-auto-hdr-range          Use the F32 image peak instead of fixed nits
   --exposure -3..3              Non-RAW linear-light exposure in stops

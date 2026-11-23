@@ -15,13 +15,16 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                                             std::array<float,3> luma = {.2126f,.7152f,.0722f},
                                             std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
     std::vector<float> sdr=hdr;
-    if(auto_curve)zones[1]=auto_sdr_midtones(hdr,luma);
-    if(zones!=std::array<float,3>{}) {
+    const AutoSdrTone auto_tone=auto_curve?analyze_auto_sdr_tone(hdr,luma):AutoSdrTone{};
+    if(auto_curve)zones[1]=0.f;
+    const bool has_zones=zones!=std::array<float,3>{};
+    if(auto_tone.active()||has_zones) {
         float peak=0.f;
         for(size_t i=0;i<sdr.size();i+=4) {
             if(!std::isfinite(sdr[i+3])||sdr[i+3]<=0.f)continue;
-            for(unsigned c=0;c<3;++c)if(!std::isfinite(sdr[i+c]))sdr[i+c]=0.f;
-            apply_tonal_zones(sdr[i],sdr[i+1],sdr[i+2],zones[0],zones[1],zones[2],luma);
+            for(unsigned c=0;c<3;++c)sdr[i+c]=std::max(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f);
+            if(auto_tone.active())apply_auto_sdr_tone(sdr[i],sdr[i+1],sdr[i+2],auto_tone,luma);
+            if(has_zones)apply_tonal_zones(sdr[i],sdr[i+1],sdr[i+2],zones[0],zones[1],zones[2],luma);
             peak=std::max({peak,sdr[i],sdr[i+1],sdr[i+2]});
         }
         range_nits=auto_range?peak*203.f:std::min(range_nits,peak*203.f);

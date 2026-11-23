@@ -679,7 +679,7 @@ QWidget* MainWindow::buildControls() {
     sdrToneMap_=check("Tone map HDR to SDR","sdrToneMap",true);sdrToneMap_->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(sdrToneMap_);
     sdrAutoRange_=check("Auto HDR range","sdrAutoHdrRange",true);sdrAutoRange_->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(sdrAutoRange_);
     sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve",Options{}.sdr_auto_tone_curve);
-    sdrAutoCurve_->setToolTip("Adjust midtones based on how much of the source exceeds SDR white. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(sdrAutoCurve_);
+    sdrAutoCurve_->setToolTip("Automatically dim bright HDR midtones in bright daylight scenes while preserving shadows and peak highlights. Dark, backlit, and SDR scenes remain neutral. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(sdrAutoCurve_);
     sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
     // Stable IDs retain selections saved before the visual list was reordered.
     const int mapperIds[]={3,4,5,0,1,2};for(int i=0;i<6;++i)sdrToneMapper_->setItemData(i,mapperIds[i]);

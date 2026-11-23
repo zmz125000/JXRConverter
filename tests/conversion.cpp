@@ -1543,17 +1543,61 @@ static void sdr_tone_mapping(const fs::path& dir) {
     check(jxrc::Options{}.sdr_color_mapping==jxrc::SdrColorMapping::luminance,"Default SDR color mapping");
     const std::array<float,3> luma={.2126f,.7152f,.0722f};
     const std::vector<float> dim={.14f,.14f,.14f,1.f,4.f,4.f,4.f,0.f};
+    const std::vector<float> brightSdr={.9f,.9f,.9f,1.f,.85f,.85f,.85f,1.f};
+    std::vector<float> darkBacklit;
+    for(int i=0;i<60;++i)darkBacklit.insert(darkBacklit.end(),{.02f,.02f,.02f,1.f});
+    for(int i=0;i<40;++i)darkBacklit.insert(darkBacklit.end(),{1.2f,1.2f,1.2f,1.f});
+    std::vector<float> nightNeon;
+    for(int i=0;i<85;++i)nightNeon.insert(nightNeon.end(),{.015f,.015f,.015f,1.f});
+    for(int i=0;i<15;++i)nightNeon.insert(nightNeon.end(),{5.f,5.f,5.f,1.f});
+    std::vector<float> mildSunny;
+    for(int i=0;i<30;++i)mildSunny.insert(mildSunny.end(),{.08f,.08f,.08f,1.f});
+    for(int i=0;i<50;++i)mildSunny.insert(mildSunny.end(),{.35f,.35f,.35f,1.f});
+    for(int i=0;i<20;++i)mildSunny.insert(mildSunny.end(),{1.6f,1.6f,1.6f,1.f});
     const std::vector<float> halfHdr={.4f,.4f,.4f,1.f,4.f,4.f,4.f,1.f};
-    check(auto_sdr_midtones(dim,luma)==0.f,"Invisible HDR changed automatic midtones");
-    check(auto_sdr_midtones(halfHdr,luma)==-.72f,"Visible HDR did not adjust automatic midtones");
+    check(!analyze_auto_sdr_tone(dim,luma).active(),"Invisible HDR triggered automatic tone curve");
+    check(!analyze_auto_sdr_tone(brightSdr,luma).active(),"Pure SDR scene triggered automatic tone curve");
+    check(!analyze_auto_sdr_tone(darkBacklit,luma).active(),"Dark backlit scene triggered automatic tone curve");
+    check(!analyze_auto_sdr_tone(nightNeon,luma).active(),"Dark night scene with HDR lights triggered automatic tone curve");
+    const auto mildTone=analyze_auto_sdr_tone(mildSunny,luma);
+    const auto brightTone=analyze_auto_sdr_tone(halfHdr,luma);
+    check(mildTone.active()&&brightTone.active()&&brightTone.strength_ev>mildTone.strength_ev,"Auto tone curve did not scale with daylight HDR brightness");
+    // Preserve deep shadows and extreme highlights while strictly increasing across 0..10000 nits.
+    {
+        float sr=.005f,sg=.005f,sb=.005f;
+        apply_auto_sdr_tone(sr,sg,sb,brightTone,luma);
+        check(sr==.005f&&sg==.005f&&sb==.005f,"Auto tone curve altered deep shadows");
+        float hr=25.f,hg=25.f,hb=25.f;
+        apply_auto_sdr_tone(hr,hg,hb,brightTone,luma);
+        check(hr==25.f&&hg==25.f&&hb==25.f,"Auto tone curve altered extreme highlights");
+        float mr=1.2f,mg=.6f,mb=.3f;
+        apply_auto_sdr_tone(mr,mg,mb,brightTone,luma);
+        check(mr<1.2f&&std::abs(mg/mr-.5f)<1e-6f&&std::abs(mb/mr-.25f)<1e-6f,"Auto tone curve failed to dim midtones or changed hue");
+        float prev=-1.f;
+        for(int k=-600;k<=550;++k) {
+            float v=std::exp2(float(k)*.01f),r=v,g=v,b=v;
+            apply_auto_sdr_tone(r,g,b,brightTone,luma);
+            check(r>prev,"Auto tone curve is not strictly monotonic");
+            prev=r;
+        }
+    }
     const auto mapper=jxrc::SdrToneMapper::reinhard;
     const auto mapping=jxrc::SdrColorMapping::max_rgb;
     const auto automatic=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,.3f,.7f},false,true);
-    const auto manual=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,-.72f,.7f});
-    check(automatic==manual,"Auto curve changed settings beyond midtones");
+    const auto automaticIgnoredMid=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,-.9f,.7f},false,true);
+    const auto automaticNoShadows=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{0.f,.3f,.7f},false,true);
+    const auto manualNeutral=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,0.f,.7f},false,false);
+    check(automatic==automaticIgnoredMid,"Auto curve used manual midtones");
+    check(automatic!=automaticNoShadows,"Auto curve discarded manual shadows/highlights");
+    check(automatic[0]<manualNeutral[0],"Auto curve did not dim bright HDR midtones");
     const auto automaticSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,.3f,.7f},true);
-    const auto manualSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,-.72f,.7f});
-    check(automaticSkiv==manualSkiv,"SKIV manual did not use the automatic midtone setting");
+    const auto automaticSkivIgnoredMid=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,-.9f,.7f},true);
+    const auto manualSkivNeutral=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,0.f,.7f},false);
+    check(automaticSkiv==automaticSkivIgnoredMid,"SKIV manual auto curve used manual midtones");
+    check(automaticSkiv[0]<manualSkivNeutral[0],"SKIV manual auto curve did not dim bright HDR midtones");
+    const auto backlitAuto=tone_map_skiv_manual(darkBacklit,0,.5f,2000.f,mapping,luma,{},true);
+    const auto backlitOff=tone_map_skiv_manual(darkBacklit,0,.5f,2000.f,mapping,luma,{},false);
+    check(backlitAuto==backlitOff,"SKIV manual auto curve dimmed a dark backlit scene");
     const std::vector<float> zoneInput={.03f,.02f,.01f,.4f,.4f,.3f,.2f,.8f,4.f,3.f,2.f,1.f};
     const auto neutralZones=tone_map_sdr_base(zoneInput,.67f,1000.f);
     const auto shadowZones=tone_map_sdr_base(zoneInput,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{.5f,0,0},true);

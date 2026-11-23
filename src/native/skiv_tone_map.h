@@ -164,9 +164,11 @@ inline std::vector<float> tone_map_skiv_manual(const std::vector<float>& hdr,int
         float shoulder,float cap_nits,jxrc::SdrColorMapping mapping,
         std::array<float,3> luma,std::array<float,3> zones,bool auto_curve=false) {
     using namespace skiv;
-    if(auto_curve)zones[1]=auto_sdr_midtones(hdr,luma);
+    const AutoSdrTone auto_tone=auto_curve?analyze_auto_sdr_tone(hdr,luma):AutoSdrTone{};
+    if(auto_curve)zones[1]=0.f;
     auto adjusted=hdr;
     const size_t pixels=adjusted.size()/4;
+    const bool has_zones=zones!=std::array<float,3>{};
     hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned) {
         for(size_t pixel=begin;pixel<end;++pixel) {
             const size_t i=pixel*4;
@@ -174,7 +176,8 @@ inline std::vector<float> tone_map_skiv_manual(const std::vector<float>& hdr,int
                 adjusted[i]=adjusted[i+1]=adjusted[i+2]=0.f;continue;
             }
             for(unsigned c=0;c<3;++c)adjusted[i+c]=std::max(std::isfinite(adjusted[i+c])?adjusted[i+c]:0.f,0.f);
-            apply_tonal_zones(adjusted[i],adjusted[i+1],adjusted[i+2],zones[0],zones[1],zones[2],luma);
+            if(auto_tone.active())apply_auto_sdr_tone(adjusted[i],adjusted[i+1],adjusted[i+2],auto_tone,luma);
+            if(has_zones)apply_tonal_zones(adjusted[i],adjusted[i+1],adjusted[i+2],zones[0],zones[1],zones[2],luma);
         }
     });
     const Matrix& space=gamut==2?rgb2020_xyz:gamut==1?rgbp3_xyz:rgb709_xyz;
