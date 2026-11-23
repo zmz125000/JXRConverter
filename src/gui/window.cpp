@@ -77,7 +77,7 @@ namespace {
 constexpr int VideoTab = 6;
 
 bool isHdrTarget(Target target) {
-    return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png;
+    return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png&&target!=Target::webp;
 }
 Target sdrEquivalent(Target target) {
     switch(target) {
@@ -636,11 +636,11 @@ QWidget* MainWindow::buildControls() {
     auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");mode_->setCurrentIndex(1);general->addRow("Mode",mode_);layout->addLayout(general);
     auto* outputFormats=new QGroupBox("Output formats · select one or more");outputFormats->setObjectName("outputFormats");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new OutputTargetList;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG"};
+    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG","WebP · SDR"};
     const QList<Target> targetOrder={Target::jpeg,Target::jpeg_gainmap,
         Target::png,Target::png_hdr,Target::png_hlg,
         Target::jxl,Target::jxl_linear,Target::jxl_scrgb,Target::jxl_pq,Target::jxl_hlg,
-        Target::avif,Target::avif_pq,Target::avif_hlg,Target::avif_gainmap};
+        Target::avif,Target::avif_pq,Target::avif_hlg,Target::avif_gainmap,Target::webp};
     for(const auto target:targetOrder) {
         const int id=int(target);auto* item=new QListWidgetItem(targetNames[id],targets_);
         item->setData(Qt::UserRole,id);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(target==Target::avif?Qt::Checked:Qt::Unchecked);
@@ -671,7 +671,7 @@ QWidget* MainWindow::buildControls() {
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
     custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit","8 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
-    customForm->addRow("JPEG / AVIF",quality_);customForm->addRow("JXL distance",distance_);avifDepth_->setToolTip("Maximum AVIF depth. 8-bit sources remain 8-bit; AVIF supports up to 12 bits per channel.");customForm->addRow("AVIF max depth",avifDepth_);customForm->addRow(downsize_);qualityLayout->addRow(custom_);layout->addWidget(qualityGroup);
+    customForm->addRow("JPEG / AVIF / WebP",quality_);customForm->addRow("JXL distance",distance_);avifDepth_->setToolTip("Maximum AVIF depth. 8-bit sources remain 8-bit; AVIF supports up to 12 bits per channel.");customForm->addRow("AVIF max depth",avifDepth_);customForm->addRow(downsize_);qualityLayout->addRow(custom_);layout->addWidget(qualityGroup);
     auto* pngGroup=new QGroupBox("PNG options");auto* pngForm=new QFormLayout(pngGroup);autoBitDepth_=check("Auto bit depth","autoBitDepth",true);pngDepth_=combo({"8 bit","16 bit"},"pngDepth");pngDepth_->setCurrentIndex(1);pngForm->addRow(autoBitDepth_);pngForm->addRow("PNG bit depth",pngDepth_);layout->addWidget(pngGroup);
     connect(autoBitDepth_,&QCheckBox::toggled,this,[this](bool automatic){pngDepth_->setEnabled(!automatic);});pngDepth_->setEnabled(!autoBitDepth_->isChecked());
     autoBitDepth_->setToolTip("PNG uses 8 bits for 8-bit sources and 16 bits for deeper sources. Disable to choose PNG depth directly. Independent of quality presets.");
@@ -777,7 +777,7 @@ QWidget* MainWindow::buildControls() {
     dateFolders_->setToolTip("Create today’s folder using the system’s short date format. Filename separators become hyphens.");
     jobFolders_=check("Create job subfolder","jobSubfolders");destinationLayout->addWidget(jobFolders_);jobFolders_->setToolTip("Group this batch in Job-N (or Temporary). The date folder is controlled separately.");
     formatFolders_=check("Create format subfolders","formatSubfolders");destinationLayout->addWidget(formatFolders_);
-    formatFolders_->setToolTip("Group outputs by format: avif, jxl or jpg.");
+    formatFolders_->setToolTip("Group outputs by format: jpg, png, jxl, avif or webp.");
     flattenFolders_=check("Flatten subfolder rules","flattenSubfolders");destinationLayout->addWidget(flattenFolders_);
     flattenFolders_->setToolTip("Join enabled folder names with hyphens in parent–date–job–format order. Off creates nested folders in that order.");
     jumpToJob_=check("Jump to job tab","jumpToJobTab");destinationLayout->addWidget(jumpToJob_);jumpToJob_->setToolTip("Show a conversion’s job when it is queued. Off keeps the current image-list tab and job.");
@@ -806,8 +806,8 @@ void MainWindow::updateMode() {
     const QSignalBlocker blocker(targets_);bool removed=false;
     for(int i=0;i<targets_->count();++i) {
         auto* item=targets_->item(i);
-        const int target=item->data(Qt::UserRole).toInt();
-        if(target!=3&&target!=5&&target!=7&&target!=8&&target<10)continue;
+        const auto target=Target(item->data(Qt::UserRole).toInt());
+        if(!isHdrTarget(target)||target==Target::jpeg_gainmap||target==Target::avif_gainmap)continue;
         if(!process&&item->checkState()==Qt::Checked){item->setCheckState(Qt::Unchecked);removed=true;}
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }

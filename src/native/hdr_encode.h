@@ -47,6 +47,7 @@ struct StillEncodeQuality {
         constexpr int values[] = {100, 90, 85, 80};
         return preset == 4 ? custom_quality : values[preset];
     }
+    int webp() const { return avif(); }
     float jxl_distance() const {
         constexpr float values[] = {0.f, .5f, 1.f, 1.5f};
         return preset == 4 ? custom_distance : values[preset];
@@ -397,6 +398,7 @@ struct StillSourceColor {
 int encode_jxl_source(unsigned w, unsigned h, const void* rgba, bool sixteen,
                       const StillSourceColor& color, const char* path, StillEncodeQuality quality);
 int encode_png_source(unsigned,unsigned,const void*,bool,const StillSourceColor&,const char*,StillEncodeQuality);
+int encode_webp_source(unsigned,unsigned,const void*,bool,const StillSourceColor&,const char*,StillEncodeQuality);
 
 // F32 AVIF modes: 0 SDR, 1 PQ, 2 gain map, 3 HLG (1000-nit reference display).
 int encode_avif_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,int,const char*,StillEncodeQuality,const float* sdr_base = nullptr);

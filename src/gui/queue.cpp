@@ -53,7 +53,7 @@ void orderJobs(QVector<Job>& jobs) {
     // Keep each source's targets together to bound prepared-pixel memory by
     // worker count. RAW has SDR, HDR, and paired HDR/SDR render families.
     QHash<QString,int> order;for(const auto& job:jobs)if(!order.contains(job.input))order.insert(job.input,order.size());
-    auto family=[](Target t){return t==Target::jpeg_gainmap||t==Target::avif_gainmap?2:t==Target::jpeg||t==Target::jxl||t==Target::avif||t==Target::png?0:1;};
+    auto family=[](Target t){return t==Target::jpeg_gainmap||t==Target::avif_gainmap?2:t==Target::jpeg||t==Target::jxl||t==Target::avif||t==Target::png||t==Target::webp?0:1;};
     std::stable_sort(jobs.begin(),jobs.end(),[&](const Job& a,const Job& b){
         return a.input==b.input?family(a.options.target)<family(b.options.target):order[a.input]<order[b.input];
     });
@@ -114,6 +114,7 @@ QString outputFolder(const QString& input,const QString& directory,Target target
             case Target::jpeg:case Target::jpeg_gainmap:parts.append("jpg");break;
             case Target::avif:case Target::avif_pq:case Target::avif_gainmap:case Target::avif_hlg:parts.append("avif");break;
             case Target::png:case Target::png_hdr:case Target::png_hlg:parts.append("png");break;
+            case Target::webp:parts.append("webp");break;
             default:parts.append("jxl");break;
         }
     }
@@ -127,7 +128,7 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
     validate(options);QVector<Job> result;QSet<QString> outputs;QHash<QString,int> nextSuffix;
     if(numbered)*numbered=false;
     const int target=int(options.target);
-    const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl","sdr.png","hdr.png","hlg.png","hlg.jxl","hlg.avif"};
+    const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl","sdr.png","hdr.png","hlg.png","hlg.jxl","hlg.avif","sdr.webp"};
     QString quality;
     if(options.quality.preset==Preset::custom) {
         const bool jxl=options.target==Target::jxl||options.target==Target::jxl_linear||options.target==Target::jxl_pq||options.target==Target::jxl_scrgb||options.target==Target::jxl_hlg;
@@ -137,7 +138,7 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         quality=presets[int(options.quality.preset)];
     }
     const bool png=options.target==Target::png||options.target==Target::png_hdr||options.target==Target::png_hlg;
-    const bool sdr=options.target==Target::jpeg||options.target==Target::jxl||options.target==Target::avif||options.target==Target::png;
+    const bool sdr=options.target==Target::jpeg||options.target==Target::jxl||options.target==Target::avif||options.target==Target::png||options.target==Target::webp;
     QString representation=suffixes[target];
     if(sdr&&options.mode==Mode::process&&options.sdr_tone_map)representation.replace(0,3,"sdr_tm");
     QString suffix=png?representation:quality+"_"+representation;

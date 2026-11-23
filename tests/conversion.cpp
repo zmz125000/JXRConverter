@@ -858,6 +858,61 @@ static void png_content_light(const fs::path& dir) {
     }
 }
 
+static void webp_outputs(const fs::path& dir) {
+    const auto load=[](const fs::path& path) {
+        const auto data=bytes(path);
+        return decode_regular(data.data(),data.size());
+    };
+    const auto input=dir/"webp-source.png";
+    Exiv2::ExifData metadata;
+    metadata["Exif.Image.Orientation"]=uint16_t(6);
+    metadata["Exif.Image.Make"]="JXRC Camera";
+    Exiv2::Blob exif;
+    Exiv2::ExifParser::encode(exif,Exiv2::littleEndian,metadata);
+    write(input,png_chunk(png_chunk(raster_png16,"cICP",{12,13,0,1}),"eXIf",exif));
+    jxrc::Options o;o.target=jxrc::Target::webp;o.quality.preset=jxrc::Preset::lossless;o.keep_exif=true;
+    const auto output=dir/fs::u8path(u8"轉換.webp");
+    const auto result=jxrc::convert(input,output,o);
+    const auto webp=load(output);
+    check(result.width==2&&result.height==3&&webp.width==2&&webp.height==3,"WebP orientation dimensions");
+    check(webp.format=="WebP"&&webp.bits==8&&webp.orientation==1,"WebP output format or orientation");
+    check(!webp.icc.empty()&&!webp.exif.empty(),"WebP lost ICC or requested EXIF");
+    Exiv2::ExifData retained;
+    Exiv2::ExifParser::decode(retained,webp.exif.data(),webp.exif.size());
+    check(retained["Exif.Image.Make"].toString()=="JXRC Camera","WebP lost photographic EXIF");
+    const unsigned order[]={3,0,4,1,5,2};
+    for(unsigned i=0;i<6;++i)for(unsigned c=0;c<4;++c)
+        check(webp.pixels[i*4+c]==(expected_png16[order[i]*4+c]+128)/257,"Lossless WebP changed rotated 8-bit RGBA codes");
+
+    o.keep_exif=false;o.quality.preset=jxrc::Preset::custom;o.quality.codec_quality=10;
+    const auto lossyPath=dir/"webp-lossy.webp";
+    jxrc::convert(input,lossyPath,o);
+    const auto lossy=load(lossyPath);const auto encoded=bytes(lossyPath);
+    const char vp8[]="VP8 ";
+    check(std::search(encoded.begin(),encoded.end(),vp8,vp8+4)!=encoded.end(),"WebP custom preset did not produce lossy VP8");
+    check(lossy.icc==webp.icc&&lossy.exif.empty(),"WebP custom export changed profile or kept disabled EXIF");
+    for(unsigned i=0;i<6;++i)
+        check(lossy.pixels[i*4+3]==webp.pixels[i*4+3],"Lossy WebP changed alpha");
+
+    o.quality.preset=jxrc::Preset::lossless;
+    const auto hdr=dir/"webp-hdr-source.png";
+    const float hdrPixels[]={.5f,.5f,.5f,.25f,2.f,2.f,2.f,1.f,8.f,8.f,8.f,1.f};
+    check(encode_png_f32(3,1,hdrPixels,UHDR_CG_BT_2100,16,16,hdr.u8string().c_str(),StillEncodeQuality(0))==0,"WebP HDR fixture");
+    const auto clipped=dir/"webp-clipped.webp",toned=dir/"webp-toned.webp";
+    fails([&]{jxrc::convert(hdr,clipped,o);});
+    check(!fs::exists(clipped),"WebP published out of Preserve mode HDR failure");
+    o.mode=jxrc::Mode::process;
+    jxrc::ConversionSession session(hdr);session.convert(clipped,o);
+    o.sdr_tone_map=true;o.sdr_tone_mapper=jxrc::SdrToneMapper::logarithmic;o.sdr_auto_tone_curve=false;
+    session.convert(toned,o);
+    const auto before=load(clipped),after=load(toned);
+    check(!jxrc::inspect(toned).hdr&&before.pixels[4]==255&&after.pixels[4]<255,"WebP did not use the SDR tone map");
+    check(after.pixels[3]==64&&after.pixels[3]==before.pixels[3],"Processed WebP changed alpha");
+    o.target=jxrc::Target::png;o.quality.auto_bit_depth=false;o.quality.png_depth=8;
+    const auto reference=dir/"webp-tone-reference.png";session.convert(reference,o);
+    check(load(reference).pixels==after.pixels,"WebP and PNG SDR quantization differ");
+}
+
 static void png_outputs(const fs::path& dir) {
     png_content_light(dir);
     for(unsigned depth:{8u,16u})for(unsigned cp:{1u,9u,12u})for(unsigned tc:{13u,16u,18u}) {
@@ -1830,6 +1885,7 @@ int main(int argc,char** argv) try {
     if(argc==2 && std::string(argv[1])=="--gainmap-f32") {gain_map_f32_tests(dir);non_gain_full_routes(dir);std::cout<<"Gain-map F32 tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--webp") {webp_outputs(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--transparency") {transparency_background(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}

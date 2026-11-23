@@ -101,7 +101,7 @@ build/jxrconvert camera.dng output.avif --mode process --target avif-gainmap \
   --raw-highlight-stops 1 --raw-shoulder 0.6 --raw-target-nits 1500
 ```
 
-Targets are `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `jxl-hlg`, `avif`, `avif-pq`, `avif-hlg`, `avif-gainmap`, `png`, `png-hdr` (also `png-pq`), and `png-hlg`. Generic targets in preservation mode retain the source transfer, so `--target png` can retain a PQ or HLG source. Explicit PQ and HLG targets require `--mode process`.
+Targets are `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `jxl-hlg`, `avif`, `avif-pq`, `avif-hlg`, `avif-gainmap`, `png`, `png-hdr` (also `png-pq`), `png-hlg`, and `webp`. WebP is 8-bit SDR with lossy and lossless presets, alpha, ICC profiles, and optional EXIF. Use `--mode process` to render HDR to WebP. Other generic targets in preservation mode retain the source transfer, so `--target png` can retain a PQ or HLG source. Explicit PQ and HLG targets require `--mode process`.
 
 PNG uses direct integer samples for preservation and untouched SDR exports, retaining source profiles and straight alpha. Pixel edits use the float32 path. PNG cannot preserve gain maps or extended floating HDR directly; use process mode to render those inputs. `--png-depth 8|16` sets PNG precision independently of quality presets. Auto bit depth defaults on (8 bits for 8-bit sources, 16 for deeper sources); use `--no-auto-bit-depth` to apply the selected depth directly.
 
