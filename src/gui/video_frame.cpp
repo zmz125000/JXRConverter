@@ -1,21 +1,17 @@
 #include "video_frame.hpp"
+#include "video_source.hpp"
 #include "catalog.hpp"
 #include "jxrc/converter.hpp"
 #include <QColorSpace>
 #include <QColorTransform>
-#include <QCoreApplication>
 #include <QDesktopServices>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QDir>
-#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
 #include <QImage>
-#include <QJsonArray>
-#include <QJsonDocument>
-#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -28,7 +24,6 @@
 #include <QSaveFile>
 #include <QSignalBlocker>
 #include <QSlider>
-#include <QStandardPaths>
 #include <QStyle>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -43,20 +38,13 @@
 
 namespace jxrc::gui {
 namespace {
+using namespace video;
+
 const QSize previewSize(640, 368);
 const QSize playbackPreviewSize(480, 276);
 const QString timestampFilter="settb=AVTB,showinfo=checksum=0";
 const QStringList videoExtensions={"mp4","mkv","mov","m4v","webm","ts","m2ts","mts","avi","hevc","h265",
     "h264","av1","mpg","mpeg","vob","wmv","asf","flv","3gp","3g2","ogv","mxf","m2v","mpv","dv"};
-
-QString executable(const QString& name) {
-    auto paths=qEnvironmentVariable("PATH").split(QDir::listSeparator(),Qt::SkipEmptyParts);
-    paths.prepend(QCoreApplication::applicationDirPath());
-#ifdef Q_OS_MACOS
-    paths << "/opt/homebrew/bin" << "/usr/local/bin";
-#endif
-    return QStandardPaths::findExecutable(name,paths);
-}
 
 QString timecode(qint64 milliseconds) {
     return QString("%1:%2:%3.%4")
@@ -69,81 +57,6 @@ QString timecode(qint64 milliseconds) {
 const QRegularExpression& timecodePattern() {
     static const QRegularExpression pattern(R"(^(\d{1,3}):([0-5]\d):([0-5]\d)(?:\.(\d{1,3}))?$)");
     return pattern;
-}
-
-QStringList probeArguments(const QString& source) {
-    return {"-v","error","-select_streams","V:0","-show_streams","-show_format","-of","json","-i",source};
-}
-
-struct VideoStream {
-    int index=-1;
-    QSize size;
-    double displayAspect=0;
-    double duration=0;
-    double fps=0;
-    int primaries=0;
-    int transfer=0;
-    bool dolbyVision=false;
-    QString hdrError, primariesName, transferName;
-    QString inputMatrix;
-
-    bool hdr() const { return transfer!=0; }
-    QString ffmpegPrimaries() const {
-        return primaries==9?"bt2020":primaries==12?"smpte432":"bt709";
-    }
-    QString ffmpegTransfer() const { return transfer==16?"smpte2084":"arib-std-b67"; }
-};
-
-VideoStream readStream(const QByteArray& json) {
-    const auto root=QJsonDocument::fromJson(json).object();
-    const auto streams=root.value("streams").toArray();
-    if(streams.isEmpty())throw std::runtime_error("No video stream found.");
-    const auto video=streams.first().toObject();
-    VideoStream stream;
-    stream.index=video.value("index").toInt(-1);
-    stream.size={video.value("width").toInt(),video.value("height").toInt()};
-    stream.duration=video.value("duration").toString().toDouble();
-    if(!(stream.duration>0))stream.duration=root.value("format").toObject().value("duration").toString().toDouble();
-    const auto rate=video.value("avg_frame_rate").toString().split('/');
-    if(rate.size()==2&&rate[1].toDouble()>0)stream.fps=rate[0].toDouble()/rate[1].toDouble();
-    if(stream.index<0||stream.size.isEmpty())throw std::runtime_error("Video dimensions are unavailable.");
-    stream.transferName=video.value("color_transfer").toString();
-    stream.primariesName=video.value("color_primaries").toString();
-    const auto sideData=video.value("side_data_list").toArray();
-    const auto sampleAspect=video.value("sample_aspect_ratio").toString().split(':');
-    stream.displayAspect=double(stream.size.width())/stream.size.height();
-    if(sampleAspect.size()==2&&sampleAspect[0].toInt()>0&&sampleAspect[1].toInt()>0)
-        stream.displayAspect*=double(sampleAspect[0].toInt())/sampleAspect[1].toInt();
-    for(const auto& item:sideData) {
-        if(std::abs(item.toObject().value("rotation").toInt()%180)==90) {
-            stream.size.transpose();
-            stream.displayAspect=1./stream.displayAspect;
-            break;
-        }
-    }
-    for(const auto& item:sideData) {
-        const auto data=item.toObject();
-        if(data.value("dv_profile").toInt()!=5)continue;
-        if(data.value("rpu_present_flag").toInt()!=1)
-            stream.hdrError="This Dolby Vision Profile 5 stream has no RPU metadata.";
-        stream.dolbyVision=true;
-        stream.primaries=9;
-        stream.transfer=16;
-        return stream;
-    }
-    const auto& transfer=stream.transferName;
-    const auto& primaries=stream.primariesName;
-    stream.transfer=transfer=="smpte2084"?16:transfer=="arib-std-b67"?18:0;
-    stream.primaries=primaries=="bt2020"?9:primaries=="smpte432"?12:primaries=="bt709"?1:0;
-    const auto matrix=video.value("color_space").toString();
-    if(stream.hdr()&&!stream.primaries)
-        stream.hdrError="This HDR signal has unsupported or missing color primaries.";
-    else if(matrix=="bt2020c")
-        stream.hdrError="BT.2020 constant-luminance video is unsupported for frame grabs.";
-    if(matrix=="bt2020nc"||(matrix.isEmpty()&&stream.primaries==9))stream.inputMatrix="bt2020";
-    else if(matrix=="smpte170m"||matrix=="bt470bg")stream.inputMatrix="bt601";
-    else if(matrix=="bt709"||matrix=="smpte240m"||matrix=="fcc")stream.inputMatrix=matrix;
-    return stream;
 }
 
 QColorSpace sdrColorSpace(const VideoStream& stream) {
@@ -178,20 +91,6 @@ QColorSpace sdrColorSpace(const VideoStream& stream) {
         color.setTransferFunction(curve);
     }
     return color;
-}
-
-QString frameFilter(const VideoStream& stream,const QSize& preview,const QString& rgbFormat="rgb48be",bool fit=true) {
-    QString scale=preview.isEmpty()?"w=iw:h=ih":QString("w=%1:h=%2").arg(preview.width()).arg(preview.height());
-    if(!preview.isEmpty()&&fit)scale+=":force_original_aspect_ratio=decrease";
-    if(stream.dolbyVision) {
-        // Profile 5 needs the per-frame RPU reshaping before RGB samples can be tagged as PQ.
-        return "libplacebo="+(!preview.isEmpty()?scale+":":QString{})+
-            "format=gbrp16le:colorspace=gbr:color_primaries=bt2020:color_trc=smpte2084:"
-            "range=pc:apply_dolbyvision=true:apply_filmgrain=false,format="+rgbFormat;
-    }
-    if(!stream.inputMatrix.isEmpty())scale+=":in_color_matrix="+stream.inputMatrix;
-    const QString flags=fit?"accurate_rnd+full_chroma_int":"fast_bilinear";
-    return "scale="+scale+":out_range=pc:flags="+flags+",format="+rgbFormat;
 }
 
 QStringList frameArguments(const QString& source,const VideoStream& stream,int position,const QSize& preview,
@@ -301,35 +200,6 @@ QImage framePreview(const QByteArray& png,const VideoStream& stream,int edge) {
     const auto image=jxrc::preview_bytes(std::vector<uint8_t>(first,first+png.size()),edge);
     if(image.rgba.empty())throw std::runtime_error("Cannot display this frame.");
     return QImage(image.rgba.data(),int(image.width),int(image.height),int(image.width)*4,QImage::Format_RGBA8888).copy();
-}
-
-QByteArray runVideoProcess(const QString& program,const QStringList& args,const std::function<bool()>& cancelled) {
-    if(cancelled&&cancelled())throw std::runtime_error("Video read cancelled.");
-    QProcess process;
-    process.start(program,args);
-    QElapsedTimer timer;
-    timer.start();
-    while(process.state()!=QProcess::NotRunning) {
-        process.waitForFinished(50);
-        if(process.state()==QProcess::NotRunning)break;
-        if((cancelled&&cancelled())||timer.elapsed()>=15000) {
-            process.kill();
-            process.waitForFinished(1000);
-            throw std::runtime_error("Video read timed out or was cancelled.");
-        }
-    }
-    if(process.error()==QProcess::FailedToStart||process.exitStatus()!=QProcess::NormalExit||process.exitCode()!=0) {
-        auto error=QString::fromLocal8Bit(process.readAllStandardError()).trimmed().section('\n',-3);
-        if(error.isEmpty())error=process.errorString();
-        throw std::runtime_error(error.toStdString());
-    }
-    return process.readAllStandardOutput();
-}
-
-VideoStream probeVideo(const QString& path,const std::function<bool()>& cancelled) {
-    const auto ffprobe=executable("ffprobe");
-    if(ffprobe.isEmpty())throw std::runtime_error("Video metadata requires ffprobe.");
-    return readStream(runVideoProcess(ffprobe,probeArguments(path),cancelled));
 }
 
 Record videoMetadata(const VideoStream& stream) {

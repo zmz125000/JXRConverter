@@ -4,8 +4,8 @@
 #include "reader_pixels.h"
 #include "codec_api.h"
 #include "render_analysis.h"
-#include "native/sdr_tone_map.h"
-#include "native/skiv_tone_map.h"
+#include "native/sdr_mapping.h"
+#include "native/staged_output.h"
 #include "working_pixels.h"
 #include "input_format.h"
 #include "heif_decode.h"
@@ -17,17 +17,12 @@
 #include "skcms.h"
 #include <algorithm>
 #include <array>
-#include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <memory>
 #include <tuple>
 #include <stdexcept>
-#ifdef _WIN32
-#include <windows.h>
-#endif
 
 // Ported RAW packing consults a per-call capture flag for its paired SDR render.
 namespace { thread_local bool paired_sdr = false; }
@@ -58,27 +53,6 @@ std::vector<uint8_t> read(const std::filesystem::path& path,const std::function<
     if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
     return bytes;
 }
-struct Staging {
-    std::filesystem::path directory, file;
-    explicit Staging(const std::filesystem::path& output) {
-        static std::atomic<uint64_t> sequence{0};
-        auto parent=output.parent_path();if(parent.empty())parent=".";
-        for(unsigned i=0;i<100;++i) {
-            directory=parent/(".jxrc-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count())+"-"+std::to_string(sequence++));
-            if(std::filesystem::create_directory(directory)){file=directory/"output";return;}
-        }
-        throw std::runtime_error("Cannot create conversion staging directory");
-    }
-    ~Staging() {std::error_code ec;std::filesystem::remove_all(directory,ec);}
-    void publish(const std::filesystem::path& output,bool overwrite) {
-        if(!overwrite) {std::filesystem::create_hard_link(file,output);return;}
-#ifdef _WIN32
-        require(MoveFileExW(file.c_str(),output.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH),"Cannot publish output");
-#else
-        std::filesystem::rename(file,output);
-#endif
-    }
-};
 int kind(const std::vector<uint8_t>& b) {
     if(b.size()>2&&b[0]==255&&b[1]==216)return 0;
     if(is_avif_input(b.data(),b.size()))return 1;
@@ -426,20 +400,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
                     std::min(peak*kSdrWhiteNits,float(o.sdr_hdr_range_nits));
                 if(cache.mapped_sdr.empty()||cache.mapped_shoulder!=o.sdr_shoulder||cache.mapped_range!=range||cache.mapped_mapper!=o.sdr_tone_mapper||cache.mapped_color_mapping!=o.sdr_color_mapping||cache.mapped_zones!=zones||cache.mapped_auto_range!=o.sdr_auto_hdr_range||cache.mapped_cap!=o.sdr_hdr_range_nits||cache.mapped_auto_curve!=o.sdr_auto_tone_curve) {
-                    const std::array<float,3> luma=gamut==UHDR_CG_BT_2100?std::array<float,3>{.2627f,.6780f,.0593f}:
-                        gamut==UHDR_CG_DISPLAY_P3?std::array<float,3>{.2289746f,.6917385f,.0792869f}:std::array<float,3>{.2126f,.7152f,.0722f};
-                    // An adjusted render needs the selected ceiling, rather
-                    // than the pre-adjustment content peak, as its manual cap.
-                    const float curve_range=tonal_edits&&!o.sdr_auto_hdr_range?
-                        float(o.sdr_hdr_range_nits):range;
-                    if(o.sdr_tone_mapper==SdrToneMapper::skiv_manual) {
-                        cache.mapped_sdr=tone_map_skiv_manual(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
-                            o.sdr_shoulder,o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits),o.sdr_color_mapping,luma,zones,o.sdr_auto_tone_curve);
-                    } else if(skiv_tone_mapper(o.sdr_tone_mapper)) {
-                        cache.mapped_sdr=tone_map_skiv_base(linear,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
-                            o.sdr_tone_mapper==SdrToneMapper::skiv_custom,o.sdr_shoulder,
-                            o.sdr_auto_hdr_range?10000.f:float(o.sdr_hdr_range_nits));
-                    } else cache.mapped_sdr=tone_map_sdr_base(linear,o.sdr_shoulder,curve_range,o.sdr_tone_mapper,o.sdr_color_mapping,luma,zones,o.sdr_auto_hdr_range,o.sdr_auto_tone_curve);
+                    const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
+                    cache.mapped_sdr=map_sdr_pixels(linear,cg,range,o);
                     cache.mapped_shoulder=o.sdr_shoulder;cache.mapped_range=range;cache.mapped_mapper=o.sdr_tone_mapper;cache.mapped_color_mapping=o.sdr_color_mapping;cache.mapped_zones=zones;cache.mapped_auto_range=o.sdr_auto_hdr_range;cache.mapped_cap=o.sdr_hdr_range_nits;cache.mapped_auto_curve=o.sdr_auto_tone_curve;
                 }
             } else cache.mapped_sdr.clear();

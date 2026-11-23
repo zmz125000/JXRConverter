@@ -355,7 +355,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     statusFilter_=new QButtonGroup(this);statusFilter_->setObjectName("statusFilter");statusFilter_->setExclusive(true);
     auto separator=[actionsLayout](const char* name){auto* line=new ToolbarSeparator;line->setObjectName(name);actionsLayout->addWidget(line);};
     auto tab=[this,actionsLayout](const QString& text,int id,const char* name){auto* button=new QPushButton(text);button->setObjectName(name);button->setCheckable(true);statusFilter_->addButton(button,id);actionsLayout->addWidget(button);return button;};
-    cancelJob_=new QPushButton("Cancel job");cancelJob_->setObjectName("cancelJob");cancelJob_->setToolTip("Cancel this job’s pending outputs; active conversions finish");actionsLayout->addWidget(cancelJob_);cancelJob_->hide();connect(cancelJob_,&QPushButton::clicked,this,[this]{queue_->cancelBatch(viewedJob_);updateCounts();});
+    cancelJob_=new QPushButton("Cancel job");cancelJob_->setObjectName("cancelJob");cancelJob_->setToolTip("Cancel pending outputs and stop active video encodes. Active image conversions finish.");actionsLayout->addWidget(cancelJob_);cancelJob_->hide();connect(cancelJob_,&QPushButton::clicked,this,[this]{queue_->cancelBatch(viewedJob_);updateCounts();});
     jobButton_=new JobButton(cancelJob_);jobButton_->setObjectName("statusJob");jobButton_->setCheckable(true);statusFilter_->addButton(jobButton_,2);actionsLayout->addWidget(jobButton_);
     jobMenu_=new QMenu(jobButton_);jobMenu_->setObjectName("jobMenu");jobActions_=new QActionGroup(jobMenu_);jobActions_->setExclusive(true);jobButton_->setMenu(jobMenu_);jobButton_->setToolTip("Show the selected job and choose a job. Scroll over this button to switch jobs. Counts: finished / all / skipped / failed (images).");
     connect(jobMenu_,&QMenu::aboutToShow,this,[this]{showJob(viewedJob_);});
@@ -387,8 +387,17 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     // Keep the existing startup width and wrap label/field rows as the pane narrows.
     for(auto* form:scroll->widget()->findChildren<QFormLayout*>())form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     sidebar->addTab(scroll,"Conversion");
+    auto* videoScroll=new QScrollArea;
+    videoScroll->setObjectName("videoConversionScroll");
+    videoScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    videoScroll->setWidgetResizable(true);
+    videoScroll->setFrameShape(QFrame::NoFrame);
+    videoScroll->setWidget(buildVideoControls());
+    for(auto* form:videoScroll->widget()->findChildren<QFormLayout*>())form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    videoPage_=videoScroll;
+    sidebar->addTab(videoPage_,"Video");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
-    auto* logPanel=new QWidget;auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(0,0,0,0);
+    auto* logPanel=new QWidget;logPanel->setObjectName("logPanel");auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(0,0,0,0);
     outputLog_=new QPlainTextEdit;outputLog_->setObjectName("outputLog");outputLog_->setReadOnly(true);outputLog_->setMaximumBlockCount(5000);outputLog_->setLineWrapMode(QPlainTextEdit::NoWrap);logLayout->addWidget(outputLog_,1);sidebar->addTab(logPanel,"Log");
     auto* clearLog=new FloatingClearButton(outputLog_);clearLog->setObjectName("clearLog");connect(clearLog,&QPushButton::clicked,outputLog_,&QPlainTextEdit::clear);
     connect(OutputCapture::instance(),&OutputCapture::textReady,this,[this](const QString& text){auto* bar=outputLog_->verticalScrollBar();const bool follow=bar->value()==bar->maximum();QTextCursor cursor(outputLog_->document());cursor.movePosition(QTextCursor::End);cursor.insertText(text);if(follow){outputLog_->setTextCursor(cursor);outputLog_->ensureCursorVisible();}});
@@ -402,11 +411,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,10);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1,Qt::AlignBottom);
-    progressStop_=new HeightMatchedButton("×",progress_);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop queue; active files finish first");progressStop_->setFixedWidth(28);progressStop_->hide();
+    progressStop_=new HeightMatchedButton("×",progress_);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop active video encodes and pending outputs. Active image conversions finish.");progressStop_->setFixedWidth(28);progressStop_->hide();
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
     connect(progressStop_,&QPushButton::clicked,this,&MainWindow::stopQueue);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,2,1);
+    connect(sidebar,&QTabWidget::currentChanged,this,&MainWindow::updateCounts);
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setChildrenCollapsible(false);splitter->setStretchFactor(0,1);splitter->setSizes({1050,std::max(370,fullControlsWidth)});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
@@ -551,6 +561,9 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     });
     connect(queue_,&ConversionQueue::outputStarted,this,[this](qint64 batch,const QString& input,const QString& output){updateJobOutput(batch,input,output,"Running");});
     connect(queue_,&ConversionQueue::outputFinished,this,[this](qint64 batch,const QString& input,const QString& output,const QString& state){updateJobOutput(batch,input,output,state);});
+    connect(queue_,&ConversionQueue::videoProgress,this,[this](const QString& output,int percent){
+        queueState_->setText(QString("Encoding %1 · %2%").arg(QFileInfo(output).fileName()).arg(percent));
+    });
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
     connect(queue_,&ConversionQueue::statusChanged,this,[this](const QString& path,const QString& state,const QString& detail){logMessage(state+": "+path+(detail.isEmpty()?QString{}:"\n"+detail));});
     connect(queue_,&ConversionQueue::progress,this,[this](int done,int total,int active){progress_->setRange(0,total);progress_->setValue(done);queueState_->setText(QString("%1 / %2 outputs finished · %3 active").arg(done).arg(total).arg(active));if(!jobRefreshTimer_->isActive())jobRefreshTimer_->start();updateCounts();});
@@ -592,10 +605,11 @@ const char* settingProperty(QWidget* widget) {
 }
 }
 QList<QWidget*> MainWindow::persistentControls() const {
-    return {checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,transparencyBackground_,
-        sdrShadows_,sdrMidtones_,sdrHighlights_,sdrToneMap_,sdrToneMapper_,sdrColorMapping_,sdrShoulder_,sdrRange_,sdrAutoRange_,sdrAutoCurve_,exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
+    return QList<QWidget*>{checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,transparencyBackground_,
+        exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
-        findChild<QPushButton*>("toggleOutput"),findChild<QTabWidget*>("settingsTabs")};
+        findChild<QPushButton*>("toggleOutput"),videoMode_,videoTransfer_,videoPreset_,videoCrf_,videoMaxEdge_,videoExposure_}
+        +stillTone_.settings()+videoTone_.settings();
 }
 QList<QWidget*> MainWindow::filterControls() const {
     return {search_,instant_,metadataFilters_,today_,format_,range_,minImageEdge_,megapixels_,dateEnabled_,dateFrom_,dateTo_};
@@ -608,28 +622,208 @@ void MainWindow::restoreSettings() {
         if(!widget||(!loadFilters_->isChecked()&&filters.contains(widget)))continue;
         const auto key="controls/"+widget->objectName();
         if(settings.contains(key)){const QSignalBlocker blocker(widget);
-            if(widget==sdrToneMapper_){const int index=sdrToneMapper_->findData(settings.value(key).toInt());sdrToneMapper_->setCurrentIndex(index<0?1:index);}
+            if(widget==stillTone_.mapper||widget==videoTone_.mapper){auto* mapper=static_cast<QComboBox*>(widget);const int index=mapper->findData(settings.value(key).toInt());mapper->setCurrentIndex(index<0?1:index);}
             else if(widget==sort_)sort_->setCurrentIndex(std::max(0,sort_->findData(settings.value(key).toInt())));
             else widget->setProperty(settingProperty(widget),settings.value(key));}
     }
-    if(settings.contains("conversion/targets")) {
-        const auto saved=settings.value("conversion/targets").toStringList();const QSignalBlocker blocker(targets_);
-        for(int i=0;i<targets_->count();++i){auto* item=targets_->item(i);item->setCheckState(saved.contains(item->data(Qt::UserRole).toString())?Qt::Checked:Qt::Unchecked);}
-    }
+    const auto restoreTargets=[&](QListWidget* list,const QString& key) {
+        if(!settings.contains(key))return;
+        const auto saved=settings.value(key).toStringList();
+        const QSignalBlocker blocker(list);
+        for(int i=0;i<list->count();++i){auto* item=list->item(i);item->setCheckState(saved.contains(item->data(Qt::UserRole).toString())?Qt::Checked:Qt::Unchecked);}
+    };
+    restoreTargets(targets_,"conversion/targets");
+    restoreTargets(videoTargets_,"video/targets");
+    auto* tabs=findChild<QTabWidget*>("settingsTabs");
+    const auto oldTab=std::clamp(settings.value("controls/settingsTabs",0).toInt(),0,2);
+    const auto page=settings.value("controls/settingsPage",tabs->widget(oldTab?oldTab+1:0)->objectName()).toString();
+    if(auto* widget=tabs->findChild<QWidget*>(page)) {const QSignalBlocker blocker(tabs);tabs->setCurrentWidget(widget);}
     aspectIndex_=std::clamp(settings.value("browser/aspectRatio",2).toInt(),0,4);
     sortOrder_=settings.value("browser/descending",false).toBool()?Qt::DescendingOrder:Qt::AscendingOrder;
     findChild<QSlider*>("rawTargetNitsSlider")->setValue(nits_->value());
     findChild<QSlider*>("rawShoulderSlider")->setValue(qRound(shoulder_->value()*100));
-    sdrRangeInput_->setValue(sdrRange_->value());
-    for(auto* input:{highlight_,shadows_,midtones_,highlights_,sdrShadows_,sdrMidtones_,sdrHighlights_}) {
+    stillTone_.sync();videoTone_.sync();
+    updateVideoControls();
+    for(auto* input:{highlight_,shadows_,midtones_,highlights_}) {
         auto* slider=input->parentWidget()->findChild<QSlider*>();slider->setValue(qRound(input->value()*100));
     }
 }
 void MainWindow::saveSettings() const {
     auto settings=appSettings();
-    for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),widget==sdrToneMapper_?sdrToneMapper_->currentData():widget==sort_?sort_->currentData():widget->property(settingProperty(widget)));
+    for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),(widget==stillTone_.mapper||widget==videoTone_.mapper)?static_cast<QComboBox*>(widget)->currentData():widget==sort_?sort_->currentData():widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
+    QStringList videoSaved;
+    for(int row=0;row<videoTargets_->count();++row) {
+        const auto* item=videoTargets_->item(row);
+        if(item->checkState()==Qt::Checked)videoSaved.append(item->data(Qt::UserRole).toString());
+    }
+    settings.setValue("video/targets",videoSaved);
+    settings.setValue("controls/settingsPage",findChild<QTabWidget*>("settingsTabs")->currentWidget()->objectName());
     settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
+}
+QGroupBox* MainWindow::ToneControls::build(bool video) {
+    group=new QGroupBox("SDR tone mapping");auto* toneForm=new QFormLayout(group);
+    enabled=check("Tone map HDR to SDR","sdrToneMap",true);enabled->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(enabled);
+    autoRange=check("Auto HDR range","sdrAutoHdrRange",true);autoRange->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(autoRange);
+    autoCurve=check("Auto tone curve","sdrAutoToneCurve",Options{}.sdr_auto_tone_curve);
+    autoCurve->setToolTip("Adjust midtones based on how much of the source exceeds SDR white. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(autoCurve);
+    mapper=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
+    // Stable IDs retain selections saved before the visual list was reordered.
+    const int mapperIds[]={3,4,5,0,1,2};for(int i=0;i<6;++i)mapper->setItemData(i,mapperIds[i]);
+    mapper->setCurrentIndex(1);toneForm->addRow("Tone mapper",mapper);
+    mapper->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls. SKIV (manual) applies Shadows, Midtones and Highlights to HDR pixels first, then feeds them into SKIV’s curve with Max RGB, Luminance or Per channel replacing its ICtCp color mapping.");
+    color=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");color->setCurrentIndex(int(Options{}.sdr_color_mapping));toneForm->addRow("Color mapping",color);
+    color->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation. In SKIV (manual), this replaces SKIV’s internal ICtCp intensity/chroma mapping; tonal edits run first.");
+    shoulder=new QSlider(Qt::Horizontal);shoulder->setObjectName("sdrShoulder");shoulder->setRange(0,95);shoulder->setValue(qRound(Options{}.sdr_shoulder*100.f));shoulderValue=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(shoulder,1);sdrShoulderRow->addWidget(shoulderValue);toneForm->addRow("SDR shoulder",sdrShoulderRow);
+    range=new QSlider(Qt::Horizontal);range->setObjectName("sdrHdrRangeNits");range->setRange(204,10000);range->setSingleStep(50);range->setPageStep(500);range->setValue(2000);rangeInput=spin(204,10000,2000,"sdrHdrRangeInput");rangeInput->setSingleStep(50);rangeInput->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(range,1);rangeRow->addWidget(rangeInput);toneForm->addRow("HDR range cap",rangeRow);
+    QObject::connect(range,&QSlider::valueChanged,rangeInput,&QSpinBox::setValue);QObject::connect(rangeInput,&QSpinBox::valueChanged,range,&QSlider::setValue);
+    rangeInput->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
+    const auto updateControls=[this]{update();};
+    QObject::connect(mapper,&QComboBox::currentIndexChanged,group,updateControls);
+    for(auto* toggle:{enabled,autoRange,autoCurve})QObject::connect(toggle,&QCheckBox::toggled,group,updateControls);
+    QObject::connect(shoulder,&QSlider::valueChanged,group,updateControls);
+    shadows=real(-1,1,0,.05,"sdrShadows");midtones=real(-1,1,0,.05,"sdrMidtones");highlights=real(-1,1,0,.05,"sdrHighlights");
+    toneForm->addRow("Shadows",sliderInput(shadows,"sdrShadowsSlider"));toneForm->addRow("Midtones",sliderInput(midtones,"sdrMidtonesSlider"));toneForm->addRow("Highlights",sliderInput(highlights,"sdrHighlightsSlider"));
+    for(auto* input:{shadows,midtones,highlights})input->setToolTip(video?
+        "Adjust tonal exposure before SDR highlight compression. Zero is neutral. Applies only to HDR-to-SDR video.":
+        "Adjust tonal exposure before SDR highlight compression. Zero is neutral. Applies only to SDR outputs and new gain-map SDR bases.");
+    auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
+    QObject::connect(resetTone,&QPushButton::clicked,group,[this]{
+        enabled->setChecked(true);autoRange->setChecked(true);autoCurve->setChecked(Options{}.sdr_auto_tone_curve);
+        mapper->setCurrentIndex(1);color->setCurrentIndex(int(Options{}.sdr_color_mapping));shoulder->setValue(qRound(Options{}.sdr_shoulder*100.f));range->setValue(2000);
+        for(auto* input:{shadows,midtones,highlights})input->setValue(0.);
+        update();
+    });
+    if(video) {
+        group->setObjectName("videoSdrToneMapping");
+        enabled->setToolTip("Map HDR highlights into SDR video. Off clips above 203 nits.");
+        autoRange->setToolTip("Measure the range of each frame. SKIV uses its 99.94th-percentile peak.");
+        for(auto* widget:group->findChildren<QWidget*>()) {
+            auto name=widget->objectName();
+            if(name.startsWith("sdr")||name=="resetSdrToneMapping") {
+                name[0]=name[0].toUpper();
+                widget->setObjectName("video"+name);
+            }
+        }
+    }
+    update();
+    return group;
+}
+QList<QWidget*> MainWindow::ToneControls::settings() const {
+    return {enabled,mapper,color,shoulder,range,autoRange,autoCurve,shadows,midtones,highlights};
+}
+void MainWindow::ToneControls::sync() {
+    rangeInput->setValue(range->value());
+    for(auto* input:{shadows,midtones,highlights}) {
+        auto* slider=input->parentWidget()->findChild<QSlider*>();
+        slider->setValue(qRound(input->value()*100));
+    }
+    update();
+}
+void MainWindow::ToneControls::update() {
+    const bool tone=enabled->isChecked(),skiv=mapper->currentData().toInt()>=3,customSkiv=mapper->currentData().toInt()==4||mapper->currentData().toInt()==5,manualSkiv=mapper->currentData().toInt()==5;
+    const bool tonalControls=tone&&(!skiv||manualSkiv);
+    const bool automaticCurve=tonalControls&&autoCurve->isChecked();
+    mapper->setEnabled(tone);color->setEnabled(tonalControls);
+    shadows->parentWidget()->setEnabled(tonalControls);
+    midtones->parentWidget()->setEnabled(tonalControls&&!automaticCurve);
+    highlights->parentWidget()->setEnabled(tonalControls);
+    shoulder->setEnabled(tone&&(!skiv||customSkiv));
+    const bool manualRange=tone&&(!skiv||customSkiv)&&!autoRange->isChecked();
+    range->setEnabled(manualRange);rangeInput->setEnabled(manualRange);
+    autoRange->setEnabled(tone&&(!skiv||customSkiv));autoCurve->setEnabled(tonalControls);
+    shoulderValue->setText(QString("%1% (%2 nits)").arg(shoulder->value()).arg(qRound(shoulder->value()*2.03)));
+}
+void MainWindow::ToneControls::apply(Options& o) const {
+    o.sdr_shadows=float(shadows->value());o.sdr_midtones=float(midtones->value());o.sdr_highlights=float(highlights->value());o.sdr_color_mapping=static_cast<SdrColorMapping>(color->currentIndex());
+    const SdrToneMapper mappers[]={SdrToneMapper::logarithmic,SdrToneMapper::extended_reinhard,SdrToneMapper::reinhard,SdrToneMapper::skiv,SdrToneMapper::skiv_custom,SdrToneMapper::skiv_manual};
+    o.sdr_tone_mapper=mappers[std::clamp(mapper->currentData().toInt(),0,5)];
+    o.sdr_tone_map=enabled->isChecked();o.sdr_shoulder=shoulder->value()/100.f;o.sdr_hdr_range_nits=range->value();o.sdr_auto_hdr_range=autoRange->isChecked();o.sdr_auto_tone_curve=autoCurve->isChecked();
+}
+QWidget* MainWindow::buildVideoControls() {
+    auto* panel=new QWidget;
+    auto* layout=new QVBoxLayout(panel);
+    layout->setContentsMargins(14,16,14,16);
+    layout->setSpacing(14);
+    auto* general=new QFormLayout;
+    videoMode_=combo({"Automatic","Process pixels"},"videoConversionMode");
+    videoMode_->setToolTip("Automatic keeps source pixel values when possible. Process pixels uses the float32 pipeline for every frame.");
+    general->addRow("Mode",videoMode_);
+    layout->addLayout(general);
+
+    auto* formats=new QGroupBox("Output formats · select one or more");
+    auto* formatLayout=new QVBoxLayout(formats);
+    videoTargets_=new OutputTargetList;
+    videoTargets_->setObjectName("videoConversionTargets");
+    videoTargets_->setSelectionMode(QAbstractItemView::NoSelection);
+    videoTargets_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    const QStringList names={"H.264 · MP4 · SDR","HEVC · MP4","AV1 · MKV"};
+    for(int i=0;i<names.size();++i) {
+        auto* item=new QListWidgetItem(names[i],videoTargets_);
+        item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);
+        item->setData(Qt::UserRole,i);
+        item->setCheckState(i==int(VideoCodec::hevc)?Qt::Checked:Qt::Unchecked);
+    }
+    videoTargets_->viewport()->installEventFilter(this);
+    formatLayout->addWidget(videoTargets_);
+    auto* color=new QFormLayout;
+    videoTransfer_=combo({"Auto · follow source","SDR","HDR · PQ","HDR · HLG"},"videoOutputTransfer");
+    videoTransfer_->setToolTip("Auto keeps the source transfer where possible and converts HDR to SDR for H.264. PQ and HLG require an HDR source.");
+    color->addRow("Output color",videoTransfer_);
+    formatLayout->addLayout(color);
+    layout->addWidget(formats);
+
+    auto* quality=new QGroupBox("Quality");
+    auto* qualityForm=new QFormLayout(quality);
+    videoPreset_=combo({"Lossless","High","Medium","Low","Custom"},"videoQualityPreset");
+    videoPreset_->setCurrentIndex(int(Preset::high));
+    videoPreset_->setToolTip("Lossless retains the encoder input samples after any color, chroma or bit-depth conversion.");
+    videoCrf_=spin(0,51,22,"videoCrf");
+    videoCrf_->setToolTip("Lower CRF gives higher quality and larger files.");
+    qualityForm->addRow("Preset",videoPreset_);
+    qualityForm->addRow("CRF",videoCrf_);
+    layout->addWidget(quality);
+
+    layout->addWidget(videoTone_.build(true));
+    auto* processing=new QGroupBox("Pixel processing");
+    auto* processingForm=new QFormLayout(processing);
+    videoExposure_=real(-3,3,0,.1,"videoExposure");
+    videoExposure_->setSuffix(" EV");
+    videoMaxEdge_=spin(0,65535,0,"videoMaxEdge");
+    videoMaxEdge_->setSpecialValueText("Original size");
+    processingForm->addRow("Exposure",videoExposure_);
+    processingForm->addRow("Maximum edge",videoMaxEdge_);
+    layout->addWidget(processing);
+    layout->addStretch();
+
+    for(auto* box:{videoMode_,videoTransfer_,videoPreset_})
+        connect(box,&QComboBox::currentIndexChanged,this,[this]{updateVideoControls();updateCounts();});
+    connect(videoMaxEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateCounts);
+    connect(videoExposure_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateCounts);
+    connect(videoTargets_,&QListWidget::itemChanged,this,&MainWindow::updateCounts);
+    return panel;
+}
+void MainWindow::updateVideoControls() {
+    const auto transfer=VideoTransfer(videoTransfer_->currentIndex());
+    const bool hdr=transfer==VideoTransfer::pq||transfer==VideoTransfer::hlg;
+    const QSignalBlocker blocker(videoTargets_);
+    videoTargets_->item(int(VideoCodec::h264))->setFlags(hdr?Qt::ItemFlags{}:Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);
+    videoTone_.group->setEnabled(!hdr);
+    videoCrf_->setEnabled(videoPreset_->currentIndex()==int(Preset::custom));
+    videoExposure_->setEnabled(videoMode_->currentIndex()==1);
+}
+bool MainWindow::videoConversionActive() const {
+    return videoPage_&&findChild<QTabWidget*>("settingsTabs")->currentWidget()==videoPage_;
+}
+QVector<VideoOutput> MainWindow::videoTargets() const {
+    QVector<VideoOutput> result;
+    for(int row=0;row<videoTargets_->count();++row) {
+        const auto* item=videoTargets_->item(row);
+        if(item->checkState()==Qt::Checked&&(item->flags()&Qt::ItemIsEnabled))
+            result.append({VideoCodec(item->data(Qt::UserRole).toInt()),VideoTransfer(videoTransfer_->currentIndex()),
+                           videoCrf_->value(),videoMode_->currentIndex()==1});
+    }
+    return result;
 }
 QWidget* MainWindow::buildControls() {
     auto* panel=new QWidget;panel->setObjectName("conversionControls");auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(14,16,14,16);layout->setSpacing(14);
@@ -675,36 +869,7 @@ QWidget* MainWindow::buildControls() {
     auto* pngGroup=new QGroupBox("PNG options");auto* pngForm=new QFormLayout(pngGroup);autoBitDepth_=check("Auto bit depth","autoBitDepth",true);pngDepth_=combo({"8 bit","16 bit"},"pngDepth");pngDepth_->setCurrentIndex(1);pngForm->addRow(autoBitDepth_);pngForm->addRow("PNG bit depth",pngDepth_);layout->addWidget(pngGroup);
     connect(autoBitDepth_,&QCheckBox::toggled,this,[this](bool automatic){pngDepth_->setEnabled(!automatic);});pngDepth_->setEnabled(!autoBitDepth_->isChecked());
     autoBitDepth_->setToolTip("PNG uses 8 bits for 8-bit sources and 16 bits for deeper sources. Disable to choose PNG depth directly. Independent of quality presets.");
-    toneMap_=new QGroupBox("SDR tone mapping");auto* toneForm=new QFormLayout(toneMap_);
-    sdrToneMap_=check("Tone map HDR to SDR","sdrToneMap",true);sdrToneMap_->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(sdrToneMap_);
-    sdrAutoRange_=check("Auto HDR range","sdrAutoHdrRange",true);sdrAutoRange_->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(sdrAutoRange_);
-    sdrAutoCurve_=check("Auto tone curve","sdrAutoToneCurve",Options{}.sdr_auto_tone_curve);
-    sdrAutoCurve_->setToolTip("Adjust midtones based on how much of the source exceeds SDR white. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(sdrAutoCurve_);
-    sdrToneMapper_=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
-    // Stable IDs retain selections saved before the visual list was reordered.
-    const int mapperIds[]={3,4,5,0,1,2};for(int i=0;i<6;++i)sdrToneMapper_->setItemData(i,mapperIds[i]);
-    sdrToneMapper_->setCurrentIndex(1);toneForm->addRow("Tone mapper",sdrToneMapper_);
-    sdrToneMapper_->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls. SKIV (manual) applies Shadows, Midtones and Highlights to HDR pixels first, then feeds them into SKIV’s curve with Max RGB, Luminance or Per channel replacing its ICtCp color mapping.");
-    sdrColorMapping_=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");sdrColorMapping_->setCurrentIndex(int(Options{}.sdr_color_mapping));toneForm->addRow("Color mapping",sdrColorMapping_);
-    sdrColorMapping_->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation. In SKIV (manual), this replaces SKIV’s internal ICtCp intensity/chroma mapping; tonal edits run first.");
-    sdrShoulder_=new QSlider(Qt::Horizontal);sdrShoulder_->setObjectName("sdrShoulder");sdrShoulder_->setRange(0,95);sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrShoulderValue_=new QLabel;auto* sdrShoulderRow=new QHBoxLayout;sdrShoulderRow->addWidget(sdrShoulder_,1);sdrShoulderRow->addWidget(sdrShoulderValue_);toneForm->addRow("SDR shoulder",sdrShoulderRow);
-    sdrRange_=new QSlider(Qt::Horizontal);sdrRange_->setObjectName("sdrHdrRangeNits");sdrRange_->setRange(204,10000);sdrRange_->setSingleStep(50);sdrRange_->setPageStep(500);sdrRange_->setValue(2000);sdrRangeInput_=spin(204,10000,2000,"sdrHdrRangeInput");sdrRangeInput_->setSingleStep(50);sdrRangeInput_->setSuffix(" nits");auto* rangeRow=new QHBoxLayout;rangeRow->addWidget(sdrRange_,1);rangeRow->addWidget(sdrRangeInput_);toneForm->addRow("HDR range cap",rangeRow);
-    connect(sdrRange_,&QSlider::valueChanged,sdrRangeInput_,&QSpinBox::setValue);connect(sdrRangeInput_,&QSpinBox::valueChanged,sdrRange_,&QSlider::setValue);
-    sdrRangeInput_->setToolTip("Maximum HDR range mapped into SDR. If the image peak is lower, that peak maps to SDR white. Brighter pixels above the cap clip.");
-    connect(sdrToneMapper_,&QComboBox::currentIndexChanged,this,&MainWindow::updateMode);
-    connect(sdrAutoCurve_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrToneMap_,&QCheckBox::toggled,this,&MainWindow::updateMode);connect(sdrAutoRange_,&QCheckBox::toggled,this,&MainWindow::updateMode);
-    connect(sdrShoulder_,&QSlider::valueChanged,this,&MainWindow::updateMode);connect(sdrRange_,&QSlider::valueChanged,this,&MainWindow::updateMode);
-    sdrShadows_=real(-1,1,0,.05,"sdrShadows");sdrMidtones_=real(-1,1,0,.05,"sdrMidtones");sdrHighlights_=real(-1,1,0,.05,"sdrHighlights");
-    toneForm->addRow("Shadows",sliderInput(sdrShadows_,"sdrShadowsSlider"));toneForm->addRow("Midtones",sliderInput(sdrMidtones_,"sdrMidtonesSlider"));toneForm->addRow("Highlights",sliderInput(sdrHighlights_,"sdrHighlightsSlider"));
-    for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setToolTip("Adjust tonal exposure before SDR highlight compression. Zero is neutral. Applies only to SDR outputs and new gain-map SDR bases.");
-    auto* resetTone=new QPushButton("Reset SDR tone mapping");resetTone->setObjectName("resetSdrToneMapping");toneForm->addRow(resetTone);
-    connect(resetTone,&QPushButton::clicked,this,[this]{
-        sdrToneMap_->setChecked(true);sdrAutoRange_->setChecked(true);sdrAutoCurve_->setChecked(Options{}.sdr_auto_tone_curve);
-        sdrToneMapper_->setCurrentIndex(1);sdrColorMapping_->setCurrentIndex(int(Options{}.sdr_color_mapping));sdrShoulder_->setValue(qRound(Options{}.sdr_shoulder*100.f));sdrRange_->setValue(2000);
-        for(auto* input:{sdrShadows_,sdrMidtones_,sdrHighlights_})input->setValue(0.);
-        updateMode();
-    });
-    layout->addWidget(toneMap_);
+    layout->addWidget(stillTone_.build(false));
     processing_=new QGroupBox("Pixel processing");auto* processingForm=new QFormLayout(processing_);exposure_=real(-3,3,0,0.1,"exposure");exposure_->setSuffix(" EV");
     exposure_->setToolTip("0 EV leaves exposure unchanged. −3 EV multiplies linear RGB by 1/8; +3 EV multiplies it by 8. For RAW gain-map output, use Custom RAW exposure instead.");
     maxEdge_=spin(0,65535,0,"maxEdge");maxEdge_->setSpecialValueText("Original size");bt2020_=check("Extended BT.2020 · JXL decoding","extendedBt2020",true);
@@ -792,7 +957,7 @@ QWidget* MainWindow::buildControls() {
     connect(renameConflicts_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
     const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
-    selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue · finish active files");cancel_->setObjectName("cancelQueue");
+    selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue");cancel_->setObjectName("cancelQueue");cancel_->setToolTip("Stop active video encodes and pending outputs. Active image conversions finish.");
     visible_->setToolTip("Convert all visible files. Fewer than 5 images share this session’s Quick job. Inside Jobs, rerun the current job.");selected_->setToolTip("Selections of 1–4 images share this session’s Quick job. Inside Jobs, rerun the current job.");
     // Start actions are placed outside the collapsible output settings.
     queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setObjectName("conversionProgress");progress_->setFormat("%p% (%v/%m)");progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
@@ -812,17 +977,7 @@ void MainWindow::updateMode() {
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }
     if(removed&&selectedTargets().isEmpty())for(int i=0;i<targets_->count();++i)if(targets_->item(i)->data(Qt::UserRole).toInt()==4)targets_->item(i)->setCheckState(Qt::Checked);
-    const bool tone=sdrToneMap_->isChecked(),skiv=sdrToneMapper_->currentData().toInt()>=3,customSkiv=sdrToneMapper_->currentData().toInt()==4||sdrToneMapper_->currentData().toInt()==5,manualSkiv=sdrToneMapper_->currentData().toInt()==5;
-    const bool tonalControls=tone&&(!skiv||manualSkiv);
-    const bool autoCurve=tonalControls&&sdrAutoCurve_->isChecked();
-    toneMap_->setEnabled(process);sdrToneMapper_->setEnabled(tone);sdrColorMapping_->setEnabled(tonalControls);
-    sdrShadows_->parentWidget()->setEnabled(tonalControls);
-    sdrMidtones_->parentWidget()->setEnabled(tonalControls&&!autoCurve);
-    sdrHighlights_->parentWidget()->setEnabled(tonalControls);
-    sdrShoulder_->setEnabled(tone&&(!skiv||customSkiv));
-    sdrRange_->setEnabled(tone&&(!skiv||customSkiv)&&!sdrAutoRange_->isChecked());sdrRangeInput_->setEnabled(sdrRange_->isEnabled());
-    sdrAutoRange_->setEnabled(tone&&(!skiv||customSkiv));sdrAutoCurve_->setEnabled(tonalControls);
-    sdrShoulderValue_->setText(QString("%1% (%2 nits)").arg(sdrShoulder_->value()).arg(qRound(sdrShoulder_->value()*2.03)));
+    stillTone_.group->setEnabled(process);
     processing_->setEnabled(process);raw_->setEnabled(process);rawCustom_->setEnabled(rawMode_->currentIndex()==2);cameraLook_->setEnabled(rawMode_->currentIndex()==2);boostTarget_->setEnabled(rawMode_->currentIndex()!=0);kelvin_->setEnabled(wb_->currentIndex()==8);
     shoulder_->parentWidget()->setEnabled(!(rawMode_->currentIndex()==2&&disableRawBoost_->isChecked()));
     rawProtectHighlights_->setEnabled(process&&rawAutoExposure_->isChecked());
@@ -853,7 +1008,7 @@ Options MainWindow::optionsForTarget(Target target) const {
     o.quality.codec_quality=quality_->value();o.quality.jxl_distance=static_cast<float>(distance_->value());o.quality.avif_depth=avifDepth_->currentIndex()==0?10:avifDepth_->currentIndex()==1?12:8;o.quality.downsize_gainmap=downsize_->isChecked();o.quality.auto_bit_depth=autoBitDepth_->isChecked();o.quality.png_depth=pngDepth_->currentIndex()?16:8;
     o.keep_exif=exif_->isChecked();o.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();o.jpeg_transcoding=transcode_->isChecked()&&target==Target::jxl&&(o.mode==Mode::preserve||(!exposure_->value()&&!maxEdge_->value()&&!srgbClamp_->isChecked()));
     if(o.mode==Mode::process) {
-        o.sdr_shadows=float(sdrShadows_->value());o.sdr_midtones=float(sdrMidtones_->value());o.sdr_highlights=float(sdrHighlights_->value());o.sdr_color_mapping=static_cast<SdrColorMapping>(sdrColorMapping_->currentIndex());const SdrToneMapper mappers[]={SdrToneMapper::logarithmic,SdrToneMapper::extended_reinhard,SdrToneMapper::reinhard,SdrToneMapper::skiv,SdrToneMapper::skiv_custom,SdrToneMapper::skiv_manual};o.sdr_tone_mapper=mappers[std::clamp(sdrToneMapper_->currentData().toInt(),0,5)];o.sdr_tone_map=sdrToneMap_->isChecked();o.sdr_shoulder=sdrShoulder_->value()/100.f;o.sdr_hdr_range_nits=sdrRange_->value();o.sdr_auto_hdr_range=sdrAutoRange_->isChecked();o.sdr_auto_tone_curve=sdrAutoCurve_->isChecked();
+        stillTone_.apply(o);
         o.srgb_clamp=srgbClamp_->isChecked();o.exposure=static_cast<float>(exposure_->value());o.max_edge=maxEdge_->value();o.extended_bt2020=bt2020_->isChecked();o.convert_gamut=convertGamut_->isChecked();o.raw.hdr_mode=RawHdrMode(rawMode_->currentIndex());o.raw.auto_exposure=rawAutoExposure_->isChecked();o.raw.auto_exposure_protect_highlights=rawProtectHighlights_->isChecked();o.raw.shoulder=static_cast<float>(shoulder_->value());
         if(o.raw.hdr_mode!=RawHdrMode::source)o.raw.target_nits=static_cast<float>(nits_->value());
         if(o.raw.hdr_mode==RawHdrMode::custom){o.raw.exposure=static_cast<float>(rawExposure_->value());o.raw.white_balance=wb_->currentIndex();o.raw.kelvin=kelvin_->value();o.raw.highlight_stops=static_cast<float>(highlight_->value());o.raw.shoulder=static_cast<float>(shoulder_->value());o.raw.target_nits=static_cast<float>(nits_->value());o.raw.shadows=static_cast<float>(shadows_->value());o.raw.midtones=static_cast<float>(midtones_->value());o.raw.highlights=static_cast<float>(highlights_->value());o.raw.camera_look=cameraLook_->isChecked();o.raw.linear_hdr=linearHdr_->isChecked();if(disableRawBoost_->isChecked())o.raw.shoulder=0.f;}
@@ -1101,9 +1256,15 @@ void MainWindow::openOutputFolder() {
     else path=lastOutputFolder_;
     if(path.isEmpty()){
         auto paths=selectedPaths();if(paths.isEmpty()&&proxy_->rowCount())paths.append(proxy_->index(0,0).data(Catalog::PathRole).toString());
-        if(paths.isEmpty()&&(sourceFolder_->isChecked()||(parentFolders_->isEnabled()&&parentFolders_->isChecked()))){reportError("Cannot open output folder: Select an image to determine its output folder.");return;}
+        if(paths.isEmpty()&&(sourceFolder_->isChecked()||(parentFolders_->isEnabled()&&parentFolders_->isChecked()))){reportError("Cannot open output folder: Select a file to determine its output folder.");return;}
         const auto targets=selectedTargets();
-        try {path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),outputLayout(viewedJob_));}
+        try {
+            const auto layout=outputLayout(viewedJob_);
+            if(videoConversionActive()) {
+                const auto videos=videoTargets();
+                path=outputFolder(paths.value(0),output_->text().trimmed(),videoExtension(videos.isEmpty()?VideoCodec::hevc:videos.first().codec),layout);
+            } else path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),layout);
+        }
         catch(const std::exception& e){reportError("Cannot open output folder: "+QString::fromUtf8(e.what()),selectedPaths());return;}
     }
     if(path.isEmpty()||!QDir().mkpath(path)){reportError("Cannot open output folder: Choose a writable output folder.",selectedPaths());return;}
@@ -1286,13 +1447,17 @@ void MainWindow::showLibraryMessage(const QString& message,int timeout) {
     updateCounts();
 }
 void MainWindow::updateCounts() {
+    const bool video=videoConversionActive();
     QStringList processingNotes;
-    if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));if(rawAutoExposure_->isChecked())processingNotes.append("AE");}
+    if(video) {
+        if(videoMaxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(videoMaxEdge_->value()));
+        if(videoMode_->currentIndex()&&videoExposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(videoExposure_->value()>0?"+":"").arg(videoExposure_->value(),0,'g',3));
+    } else if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));if(rawAutoExposure_->isChecked())processingNotes.append("AE");}
     const QString progressCounts=queue_->skipped()||queue_->failed()
         ?QString("%p% (%v/%m/%1/%2)").arg(queue_->skipped()).arg(queue_->failed())
         :QString("%p% (%v/%m)");
     progress_->setFormat(progressCounts+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
-    const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=!selectedTargets().isEmpty();
+    const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=video?!videoTargets().isEmpty():!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
@@ -1308,9 +1473,9 @@ void MainWindow::updateCounts() {
         return !routingToken_&&count>0&&hasTargets&&!(updater_&&updater_->installing())
             &&(!queue_->busy()||statusFilter_->checkedId()==2||count<quickJobLimit);
     };
-    selected_->setEnabled(statusFilter_->checkedId()!=VideoTab&&canConvert(selectedImages));
-    visible_->setEnabled(canConvert(visibleImages));
-    cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(statusFilter_->checkedId()==2&&queue_->hasPendingBatch(viewedJob_));
+    selected_->setEnabled(video?canConvert(selected-selectedImages):statusFilter_->checkedId()!=VideoTab&&canConvert(selectedImages));
+    visible_->setEnabled(canConvert(video?proxy_->rowCount()-visibleImages:visibleImages));
+    cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(statusFilter_->checkedId()==2&&(queue_->hasPendingBatch(viewedJob_)||queue_->hasRunningVideo(viewedJob_)));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
@@ -1338,12 +1503,36 @@ void MainWindow::showMetadata() {
     text+="\nEXIF\n";for(auto it=r.exif.cbegin();it!=r.exif.cend();++it)text+=it.key()+" = "+it.value()+"\n";inspector_->setPlainText(text);
 }
 void MainWindow::convertFiles(bool selected) {
-    if(statusFilter_->checkedId()==VideoTab)return;
+    const bool video=videoConversionActive();
+    if(!video&&statusFilter_->checkedId()==VideoTab)return;
     QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
-    paths=imagePaths(std::move(paths));
+    paths.erase(std::remove_if(paths.begin(),paths.end(),[video](const QString& path){return supportedVideoFile(path)!=video;}),paths.end());
     const bool reuse=statusFilter_->checkedId()==2;
     const bool quick=!paths.isEmpty()&&paths.size()<quickJobLimit&&!reuse;
-    convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
+    if(video)convertVideos(paths,reuse,quick);
+    else convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
+}
+void MainWindow::convertVideos(const QStringList& paths,bool reuseJob,bool quick) {
+    if(paths.isEmpty()||routingToken_||(!quick&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
+    try {
+        const auto targets=videoTargets();
+        if(targets.isEmpty())throw std::invalid_argument("Select at least one video output format");
+        const QString directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
+        if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
+        Options options;
+        options.mode=Mode::process;
+        options.quality.preset=Preset(videoPreset_->currentIndex());
+        options.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();
+        options.exposure=videoExposure_->isEnabled()?float(videoExposure_->value()):0.f;
+        options.max_edge=unsigned(videoMaxEdge_->value());
+        videoTone_.apply(options);
+        const bool reuseQuick=quick&&quickJob_>=0;
+        const auto batch=reuseJob?viewedJob_:reuseQuick?quickJob_:nextJob_;
+        auto jobs=makeVideoJobs(paths,directory,options,targets,outputLayout(batch,quick));
+        startConversion(std::move(jobs),batch,false,quick,reuseJob,reuseQuick,quick,directory);
+    } catch(const std::exception& error) {
+        reportError(QString::fromUtf8(error.what()));
+    }
 }
 bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& targets,bool exactTargets,bool priority,bool append,bool reuseJob,bool quick,std::shared_ptr<const Routing> routing) {
     if(routingToken_||paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return false;
@@ -1540,7 +1729,7 @@ void MainWindow::checkForUpdates() {
 }
 void MainWindow::closeEvent(QCloseEvent* event) {
     if(routingToken_){routingToken_->store(false);routingToken_.reset();}
-    if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after active conversions finish…");event->ignore();return;}
+    if(queue_->busy()){closeWhenIdle_=true;queue_->cancelPending();queueState_->setText("Closing after the queue stops…");event->ignore();return;}
     for(auto* dialog:findChildren<QDialog*>("videoFrameDialog",Qt::FindDirectChildrenOnly))dialog->close();
     event->accept();
 }
@@ -1554,10 +1743,12 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
             if(!menu->isVisible())menu->popup(button->mapToGlobal(QPoint(0,button->height())));
         });
     }
-    if(targets_&&watched==targets_->viewport()&&event->type()==QEvent::MouseButtonRelease) {
+    auto* targetList=targets_&&watched==targets_->viewport()?targets_:
+        videoTargets_&&watched==videoTargets_->viewport()?videoTargets_:nullptr;
+    if(targetList&&event->type()==QEvent::MouseButtonRelease) {
         auto* mouse=static_cast<QMouseEvent*>(event);
         if(mouse->button()==Qt::LeftButton) {
-            auto* item=targets_->itemAt(mouse->position().toPoint());
+            auto* item=targetList->itemAt(mouse->position().toPoint());
             if(item&&(item->flags()&Qt::ItemIsEnabled))item->setCheckState(item->checkState()==Qt::Checked?Qt::Unchecked:Qt::Checked);
             return true;
         }

@@ -98,6 +98,14 @@ int recommendedWorkers(int cores) {
     return std::max(1,cores/4);
 }
 QString outputFolder(const QString& input,const QString& directory,Target target,const OutputLayout& layout) {
+    switch(target) {
+    case Target::jpeg:case Target::jpeg_gainmap:return outputFolder(input,directory,QString("jpg"),layout);
+    case Target::avif:case Target::avif_pq:case Target::avif_gainmap:case Target::avif_hlg:return outputFolder(input,directory,QString("avif"),layout);
+    case Target::png:case Target::png_hdr:case Target::png_hlg:return outputFolder(input,directory,QString("png"),layout);
+    default:return outputFolder(input,directory,QString("jxl"),layout);
+    }
+}
+QString outputFolder(const QString& input,const QString& directory,const QString& extension,const OutputLayout& layout) {
     const QFileInfo source(input);
     QString folder=layout.source_folder?source.absolutePath():directory;
     if(folder.trimmed().isEmpty())throw std::invalid_argument("Choose an output folder");
@@ -109,14 +117,7 @@ QString outputFolder(const QString& input,const QString& directory,Target target
     }
     if(!layout.date_subfolder.isEmpty())parts.append(layout.date_subfolder);
     if(!layout.job_subfolder.isEmpty())parts.append(layout.job_subfolder);
-    if(layout.format_subfolders) {
-        switch(target) {
-            case Target::jpeg:case Target::jpeg_gainmap:parts.append("jpg");break;
-            case Target::avif:case Target::avif_pq:case Target::avif_gainmap:case Target::avif_hlg:parts.append("avif");break;
-            case Target::png:case Target::png_hdr:case Target::png_hlg:parts.append("png");break;
-            default:parts.append("jxl");break;
-        }
-    }
+    if(layout.format_subfolders)parts.append(extension);
     for(const auto& part:parts)
         if(part=="."||part==".."||part.contains('/')||part.contains('\\')||part.contains(':'))throw std::invalid_argument("Invalid output subfolder name");
     if(layout.flatten_subfolders&&!parts.isEmpty())folder=QDir(folder).filePath(parts.join('-'));
@@ -170,8 +171,40 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
     }
     return result;
 }
+QVector<Job> makeVideoJobs(const QStringList& inputs,const QString& directory,const Options& options,
+                           const QVector<VideoOutput>& targets,const OutputLayout& layout) {
+    validate(options);
+    QVector<Job> jobs;
+    QSet<QString> outputs;
+    QHash<QString,int> nextSuffix;
+    const auto key=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
+    QSet<QString> sources;for(const auto& input:inputs)sources.insert(key(input));
+    static const QStringList presets={"lossless","high","medium","low"};
+    Options snapshot=options;
+    if(layout.rename_conflicts)snapshot.overwrite=false;
+    for(const auto& input:inputs)for(const auto& target:targets) {
+        const auto extension=videoExtension(target.codec);
+        const auto folder=QDir(outputFolder(input,directory,extension,layout));
+        const auto stem=QFileInfo(input).completeBaseName();
+        const auto quality=options.quality.preset==Preset::custom?"crf"+QString::number(target.crf):presets[int(options.quality.preset)];
+        const auto suffix="_"+videoCodecName(target.codec)+"_"+quality+"_"+videoTransferName(target.transfer)+"."+extension;
+        auto output=folder.absoluteFilePath(stem+suffix);
+        auto outputKey=key(output);
+        const auto baseKey=outputKey;
+        int n=nextSuffix.value(baseKey,2);
+        while(outputs.contains(outputKey)||(layout.rename_conflicts&&(outputExists(output)||sources.contains(outputKey)))) {
+            output=folder.absoluteFilePath(stem+"_"+QString::number(n++)+suffix);
+            outputKey=key(output);
+        }
+        nextSuffix.insert(baseKey,n);
+        if(sources.contains(outputKey))throw std::invalid_argument("Output would replace an input file");
+        outputs.insert(outputKey);
+        jobs.append({input,output,snapshot,0,layout.preserve_original_date,{},false,target});
+    }
+    return jobs;
+}
 ConversionQueue::ConversionQueue(QObject* parent,Convert converter):QObject(parent),converter_(std::move(converter)) {}
-ConversionQueue::~ConversionQueue() { pool_.clear();pool_.waitForDone(); }
+ConversionQueue::~ConversionQueue() { for(const auto& token:activeVideos_)token->store(true);pool_.clear();pool_.waitForDone(); }
 void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     if(busy())throw std::logic_error("A conversion batch is already running");
     if(jobs.isEmpty())return;
@@ -202,6 +235,15 @@ qint64 ConversionQueue::runningBatch() const {
 bool ConversionQueue::hasRunningBatch(qint64 batch) const {
     for(auto it=activeBatches_.cbegin();it!=activeBatches_.cend();++it)
         if(it.value()==batch||batchAliases_.value(jobKey({it.key(),activeOutputs_.value(it.key()),{},it.value()})).contains(batch))return true;
+    return false;
+}
+bool ConversionQueue::hasRunningVideo(qint64 batch) const {
+    for(auto it=activeVideos_.cbegin();it!=activeVideos_.cend();++it) {
+        const auto input=it.key();
+        const auto primary=activeBatches_.value(input);
+        if(!it.value()->load()&&(primary==batch||batchAliases_.value(jobKey({input,activeOutputs_.value(input),{},primary})).contains(batch)))
+            return true;
+    }
     return false;
 }
 bool ConversionQueue::hasPendingBatch(qint64 batch) const {return std::any_of(jobs_.cbegin()+next_,jobs_.cend(),[this,batch](const Job& job){return job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch);});}
@@ -246,6 +288,12 @@ void ConversionQueue::cancelPendingFor(const QStringList& inputs) {
 void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs,qint64 batch) {
     if(!busy())return;
     const StatusBatch updates(this);
+    if(!inputs)for(auto it=activeVideos_.cbegin();it!=activeVideos_.cend();++it) {
+        const auto input=it.key();
+        const auto primary=activeBatches_.value(input);
+        if(batch<0||batch==primary||batchAliases_.value(jobKey({input,activeOutputs_.value(input),{},primary})).contains(batch))
+            it.value()->store(true);
+    }
     // Keep total job count and the order of unselected pending outputs intact.
     const auto end=std::stable_partition(jobs_.begin()+next_,jobs_.end(),[&](const Job& job){return (batch<0||job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch))&&(!inputs||inputs->contains(job.input));});
     const int stop=int(end-jobs_.begin());
@@ -267,7 +315,11 @@ void ConversionQueue::pump() {
         }
         ++active_;activeInputs_.insert(job.input);activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);
         std::shared_ptr<ConversionSession> session;
-        if(!converter_) {
+        std::shared_ptr<std::atomic_bool> videoCancelled;
+        if(job.video) {
+            videoCancelled=std::make_shared<std::atomic_bool>(false);
+            activeVideos_.insert(job.input,videoCancelled);
+        } else if(!converter_) {
             auto& stored=sessions_[job.input];
             if(!stored)stored=std::make_shared<ConversionSession>(nativePath(job.input));
             session=stored;
@@ -276,20 +328,28 @@ void ConversionQueue::pump() {
         emit statusChanged(job.input,"Converting",job.output);
         std::shared_ptr<QDateTime> original;
         if(job.preserve_original_date){auto& stored=originalDates_[job.input];if(!stored)stored=std::make_shared<QDateTime>();original=stored;}
-        pool_.start([this,job,session,original] {
-            QString error;bool skipped=false;
+        pool_.start([this,job,session,original,videoCancelled] {
+            QString error;bool skipped=false,cancelled=false;
             try {
                 if(!job.preparation_error.isEmpty())throw std::runtime_error(job.preparation_error.toStdString());
                 if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
                 if(original&&!original->isValid())*original=originalDate(job.input);
-                const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);skipped=result.skipped;
+                if(job.video) {
+                    skipped=convertVideo(job.input,nativePath(job.output),job.options,*job.video,[&]{return videoCancelled->load();},[this,output=job.output](int percent) {
+                        QMetaObject::invokeMethod(this,[this,output,percent]{emit videoProgress(output,percent);},Qt::QueuedConnection);
+                    });
+                } else {
+                    const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);
+                    skipped=result.skipped;
+                }
                 if(original&&!skipped)preserveDate(job.output,*original);
             }catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
+            if(!error.isEmpty()&&videoCancelled&&videoCancelled->load()){cancelled=true;error.clear();}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
-            QMetaObject::invokeMethod(this,[this,job,error,skipped] {
-                --active_;activeInputs_.remove(job.input);activeOutputs_.remove(job.input);activeBatches_.remove(job.input);++finished_;
-                if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
-                finishFile(job,error,false,skipped);
+            QMetaObject::invokeMethod(this,[this,job,error,skipped,cancelled] {
+                --active_;activeInputs_.remove(job.input);activeOutputs_.remove(job.input);activeBatches_.remove(job.input);activeVideos_.remove(job.input);++finished_;
+                if(cancelled)++cancelled_;else if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
+                finishFile(job,error,cancelled,skipped);
                 pump();
             },Qt::QueuedConnection);
         });
@@ -313,7 +373,7 @@ void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancel
     originalDates_.remove(job.input);
     const auto errors=fileErrors_.value(job.input);
     if(!errors.isEmpty())emit statusChanged(job.input,"Failed",errors);
-    else if(fileCancelled_.value(job.input))emit statusChanged(job.input,"Cancelled",QString("%1 output(s) not started").arg(fileCancelled_.value(job.input)));
+    else if(fileCancelled_.value(job.input))emit statusChanged(job.input,"Cancelled",QString("%1 output(s) cancelled").arg(fileCancelled_.value(job.input)));
     else if(fileSkipped_.value(job.input))emit statusChanged(job.input,fileSucceeded_.value(job.input)?"Done · skipped existing outputs":"Skipped",QString("%1 existing output(s) skipped\n%2").arg(fileSkipped_.value(job.input)).arg(job.output));
     else emit statusChanged(job.input,"Done",job.output);
 }

@@ -740,8 +740,8 @@ private slots:
         QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
         auto* panel=window.findChild<QWidget*>("outputPanel");QVERIFY(panel);QCOMPARE(panel->width(),conversion->width());auto* progress=window.findChild<QProgressBar*>("conversionProgress");QCOMPARE(progress->mapTo(panel,QPoint()).x(),destination->mapTo(panel,QPoint()).x());QCOMPARE(progress->width(),destination->width());auto* toggle=window.findChild<QPushButton*>("toggleOutput");QCOMPARE(toggle->width(),progress->width());QCOMPARE(toggle->mapTo(&window,QPoint()).x(),progress->mapTo(&window,QPoint()).x());
         window.findChild<QPushButton*>("stopProgress")->show();QCoreApplication::processEvents();QCOMPARE(progress->width(),destination->width());window.findChild<QPushButton*>("stopProgress")->hide();QCOMPARE(window.findChild<QPushButton*>("convertVisible")->parentWidget(),panel);QVERIFY(panel->isAncestorOf(window.findChild<QProgressBar*>("conversionProgress")));
-        tabs->setCurrentIndex(2);QCOMPARE(tabs->tabText(2),QString("Log"));auto* log=window.findChild<QPlainTextEdit*>("outputLog");auto* clear=window.findChild<QPushButton*>("clearLog");
-        QVERIFY(tabs->widget(2)->isAncestorOf(clear));QCOMPARE(clear->parentWidget(),log);QCOMPARE(tabs->widget(2)->layout()->count(),1);QVERIFY(log->viewport()->geometry().contains(clear->geometry()));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(2)->width()/2);
+        tabs->setCurrentIndex(3);QCOMPARE(tabs->tabText(3),QString("Log"));auto* log=window.findChild<QPlainTextEdit*>("outputLog");auto* clear=window.findChild<QPushButton*>("clearLog");
+        QVERIFY(tabs->widget(3)->isAncestorOf(clear));QCOMPARE(clear->parentWidget(),log);QCOMPARE(tabs->widget(3)->layout()->count(),1);QVERIFY(log->viewport()->geometry().contains(clear->geometry()));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(3)->width()/2);
         log->setPlainText(QString("log entry\n").repeated(200));QTest::qWait(10);const auto position=clear->pos();log->verticalScrollBar()->setValue(0);log->verticalScrollBar()->setValue(log->verticalScrollBar()->maximum());QCOMPARE(clear->pos(),position);
         window.resize(1600,850);
         // Qt defers resizing hidden tab pages until they are shown. The output
@@ -863,7 +863,7 @@ private slots:
     }
     void outputLogRawResetAndUpdateSchedule() {
         appSettings().clear();MainWindow window;window.show();
-        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");QCOMPARE(tabs->tabText(2),QString("Log"));
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");QCOMPARE(tabs->tabText(3),QString("Log"));
         auto* output=window.findChild<QPlainTextEdit*>("outputLog");QVERIFY(output->isReadOnly());QCOMPARE(output->maximumBlockCount(),5000);
         std::fputs("Native stdout marker\n",stdout);std::fflush(stdout);std::fputs("Native stderr marker\n",stderr);std::fflush(stderr);
         // QtTest owns the Qt message handler in test mode; only the raw
@@ -1194,6 +1194,97 @@ private slots:
         QVERIFY(videoTab->isHidden());
         QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());
         QCOMPARE(window.catalog()->paths(),QStringList{image});
+    }
+    void videoConversionToneMappingAndCancellation() {
+        const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
+        const auto ffprobe=QStandardPaths::findExecutable("ffprobe");
+        if(ffmpeg.isEmpty()||ffprobe.isEmpty())QSKIP("FFmpeg and ffprobe are unavailable");
+        QProcess process;
+        process.start(ffmpeg,{"-hide_banner","-encoders"});
+        QVERIFY(process.waitForFinished());
+        const auto encoders=process.readAllStandardOutput();
+        if(!encoders.contains("libx264")||!encoders.contains("libx265"))QSKIP("FFmpeg lacks the x264 or x265 encoder");
+        const auto directory=root("video-conversion");
+        QVERIFY(QDir().mkpath(directory));
+        const auto video=directory+"/pq.mkv";
+        process.start(ffmpeg,{"-v","error","-f","lavfi","-i","nullsrc=s=64x48:r=8,format=yuv420p10le,geq=lum=64+800*X/W:cb=512:cr=512",
+                               "-f","lavfi","-i","sine=frequency=440:sample_rate=48000","-t","1",
+                               "-c:v","ffv1","-color_range","tv","-color_primaries","bt2020","-colorspace","bt2020nc","-color_trc","smpte2084",
+                               "-c:a","pcm_s16le","-y",video});
+        QVERIFY(process.waitForFinished());
+        const auto fixtureError=process.readAllStandardError();
+        QVERIFY2(process.exitCode()==0,fixtureError.constData());
+        const auto image=makeImage(directory,"still.jpg",32,24,100);
+        const auto outputs=root("video-conversion-output");
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        window.addPaths({image,video});
+        QTRY_COMPARE(window.catalog()->rowCount(),2);
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+        QCOMPARE(tabs->tabText(1),QString("Video"));
+        tabs->setCurrentIndex(1);
+        window.findChild<QLineEdit*>("outputDirectory")->setText(outputs);
+        auto* targets=window.findChild<QListWidget*>("videoConversionTargets");
+        targets->item(0)->setCheckState(Qt::Checked);
+        auto* convert=window.findChild<QPushButton*>("convertVisible");
+        QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
+        QSignalSpy written(window.queue(),&ConversionQueue::outputFinished);
+        QVERIFY(convert->isEnabled());
+        convert->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),1,30000);
+        QCOMPARE(window.queue()->total(),2);
+        QCOMPARE(finished.last().at(0).toInt(),2);
+        QCOMPARE(written.size(),2);
+        for(const auto& signal:written) {
+            QCOMPARE(signal.at(1).toString(),QFileInfo(video).canonicalFilePath());
+            const auto output=signal.at(2).toString();
+            process.start(ffprobe,{"-v","error","-show_entries","stream=codec_name,color_range,color_space,color_primaries,color_transfer,pix_fmt,nb_frames",
+                                    "-of","json",output});
+            QVERIFY(process.waitForFinished());
+            QCOMPARE(process.exitCode(),0);
+            const auto streams=QJsonDocument::fromJson(process.readAllStandardOutput()).object().value("streams").toArray();
+            QCOMPARE(streams.size(),2);
+            const auto frames=streams.at(0).toObject();
+            const bool sdr=output.contains("_h264_");
+            QCOMPARE(frames.value("codec_name").toString(),sdr?QString("h264"):QString("hevc"));
+            QCOMPARE(frames.value("color_transfer").toString(),sdr?QString("bt709"):QString("smpte2084"));
+            QCOMPARE(frames.value("color_primaries").toString(),sdr?QString("bt709"):QString("bt2020"));
+            QCOMPARE(frames.value("pix_fmt").toString(),sdr?QString("yuv420p"):QString("yuv420p10le"));
+            QCOMPARE(frames.value("nb_frames").toString(),QString("8"));
+            QCOMPARE(streams.at(1).toObject().value("codec_name").toString(),QString("aac"));
+            if(sdr) {
+                process.start(ffmpeg,{"-v","error","-i",output,"-frames:v","1","-pix_fmt","yuv420p","-f","rawvideo","pipe:1"});
+                QVERIFY(process.waitForFinished());
+                QCOMPARE(process.exitCode(),0);
+                const auto pixels=process.readAllStandardOutput();
+                QCOMPARE(pixels.size(),64*48*3/2);
+                const int midHighlight=uchar(pixels[64*24+48]);
+                const int brightHighlight=uchar(pixels[64*24+56]);
+                QVERIFY(midHighlight<brightHighlight&&brightHighlight<233); // Clipping sends both samples to SDR white.
+            }
+        }
+        auto* transfer=window.findChild<QComboBox*>("videoOutputTransfer");
+        transfer->setCurrentIndex(int(VideoTransfer::hlg));
+        QVERIFY(!(targets->item(0)->flags()&Qt::ItemIsEnabled));
+        QVERIFY(!window.findChild<QCheckBox*>("videoSdrToneMap")->isEnabled());
+        window.findChild<QPushButton*>("statusVideo")->click();
+        auto* view=window.findChild<FileListView*>();
+        view->selectionModel()->select(window.filterModel()->index(0,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+        auto* selected=window.findChild<QPushButton*>("convertSelected");
+        QVERIFY(selected->isEnabled());
+        selected->click();
+        window.queue()->cancelPending();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),2,30000);
+        QCOMPARE(finished.last().at(2).toInt(),1);
+        QCOMPARE(written.last().at(3).toString(),QString("Cancelled"));
+        QVERIFY(!QFileInfo::exists(written.last().at(2).toString()));
+        selected->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),3,30000);
+        QCOMPARE(finished.last().at(0).toInt(),1);
+        process.start(ffprobe,{"-v","error","-select_streams","v:0","-show_entries","stream=color_transfer","-of","csv=p=0",written.last().at(2).toString()});
+        QVERIFY(process.waitForFinished());
+        QCOMPARE(process.readAllStandardOutput().trimmed(),QByteArray("arib-std-b67"));
     }
     void libraryTabScrollPositions() {
         appSettings().clear();MainWindow window;window.resize(1200,700);window.show();

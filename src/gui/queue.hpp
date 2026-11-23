@@ -1,5 +1,6 @@
 #pragma once
 #include "jxrc/converter.hpp"
+#include "video_conversion.hpp"
 #include <QObject>
 #include <QDateTime>
 #include <QHash>
@@ -8,9 +9,11 @@
 #include <QString>
 #include <QVector>
 #include <functional>
+#include <atomic>
+#include <optional>
 
 namespace jxrc::gui {
-struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; bool skip_existing = false; };
+struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; bool skip_existing = false; std::optional<VideoOutput> video = {}; };
 int coreCount();
 int recommendedWorkers(int cores);
 bool hdrInput(const QString& path);
@@ -31,7 +34,9 @@ struct OutputLayout {
     QSet<QString> raw_inputs; // Catalog-identified RAW, including TIFF sensor containers.
 };
 QString outputFolder(const QString& input, const QString& directory, Target target, const OutputLayout& layout);
+QString outputFolder(const QString& input, const QString& directory, const QString& extension, const OutputLayout& layout);
 QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options, const OutputLayout& layout = {}, bool* numbered = nullptr);
+QVector<Job> makeVideoJobs(const QStringList&,const QString&,const Options&,const QVector<VideoOutput>&,const OutputLayout&);
 bool outputExists(const QString& path);
 class ConversionQueue : public QObject {
     Q_OBJECT
@@ -46,6 +51,7 @@ public:
     void cancelBatch(qint64 batch);
     bool hasPendingBatch(qint64 batch) const;
     bool hasRunningBatch(qint64 batch) const;
+    bool hasRunningVideo(qint64 batch) const;
     qint64 runningBatch() const;
     void cancelPendingFor(const QStringList& inputs);
     bool hasPendingFor(const QStringList& inputs) const;
@@ -59,6 +65,7 @@ signals:
     void statusChanged(const QString& path, const QString& state, const QString& detail);
     void outputStarted(qint64 batch, const QString& input, const QString& output);
     void outputFinished(qint64 batch, const QString& input, const QString& output, const QString& state);
+    void videoProgress(const QString& output, int percent);
     void progress(int finished, int total, int active);
     void batchFinished(int succeeded, int failed, int cancelled);
 private:
@@ -73,6 +80,7 @@ private:
     QSet<QString> activeInputs_;
     QHash<QString,QString> activeOutputs_;
     QHash<QString,qint64> activeBatches_;
+    QHash<QString,std::shared_ptr<std::atomic_bool>> activeVideos_;
     QHash<QString,QSet<qint64>> batchAliases_;
     QHash<QString,std::shared_ptr<ConversionSession>> sessions_;
     QHash<QString,std::shared_ptr<QDateTime>> originalDates_;
