@@ -14,7 +14,7 @@ enum class GainMapReconstruction { off, automatic, full_image };
 // Append targets to retain saved GUI target identifiers.
 enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg, webp };
 enum class SdrColorMapping { max_rgb, luminance, per_channel };
-enum class SdrToneMapper { reinhard, extended_reinhard, logarithmic, skiv, skiv_custom, skiv_manual };
+enum class SdrToneMapper { reinhard, extended_reinhard, logarithmic, skiv, skiv_custom, skiv_manual, mpcvr };
 enum class Preset { lossless, high, medium, low, custom };
 struct Quality {
     Preset preset = Preset::high;

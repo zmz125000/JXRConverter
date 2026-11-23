@@ -353,7 +353,7 @@ private slots:
     }
     void skivToneMapControls() {
         appSettings().clear();MainWindow window;
-        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),6);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
+        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),7);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
         QVERIFY(window.options().sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom);QVERIFY(window.options().sdr_auto_tone_curve);
         auto* shoulder=window.findChild<QSlider*>("sdrShoulder");auto* range=window.findChild<QSpinBox*>("sdrHdrRangeInput");
         QCOMPARE(shoulder->value(),50);
@@ -364,6 +364,12 @@ private slots:
         for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})QVERIFY(!window.findChild<QDoubleSpinBox*>(name)->isEnabled());
         mapper->setCurrentIndex(0);QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::skiv);
         QVERIFY(!shoulder->isEnabled());QVERIFY(!range->isEnabled());QVERIFY(!autoRange->isEnabled());
+        const int mpcvr=mapper->findText("MPCVR");QVERIFY(mpcvr>=0);QCOMPARE(mpcvr+1,mapper->findData(0));
+        mapper->setCurrentIndex(mpcvr);QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::mpcvr);
+        QVERIFY(mapper->isEnabled());QVERIFY(!shoulder->isEnabled());QVERIFY(!range->isEnabled());QVERIFY(!autoRange->isEnabled());
+        QVERIFY(!window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
+        QVERIFY(!window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());
+        for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})QVERIFY(!window.findChild<QDoubleSpinBox*>(name)->isEnabled());
         mapper->setCurrentIndex(mapper->findData(5));QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::skiv_manual);
         QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());
         QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());

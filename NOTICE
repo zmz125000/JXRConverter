@@ -22,8 +22,9 @@ OpenEXR/Imath (BSD-3-Clause), and OpenEXR's bundled libdeflate (MIT),
 OpenJPH (BSD-2-Clause), and Zstandard (BSD-3-Clause).
 Consult each dependency's license files when distributing binaries and source.
 
-COPYING retains GPL version 3 for distributions combined with Exiv2; it is not
-the license of the project's original source code.
+COPYING contains GPL version 3 for distributions of the combined work with
+Exiv2 and the MPCVR tone mapper. The original project code retains the MIT
+license in LICENSE.
 The native converter links Exiv2 (GPL and accompanying dependency notices) for
 photographic metadata. The optional desktop links Qt 6 Widgets
 (LGPL/GPL/commercial licensing). The pinned Ultra HDR CPU-count
@@ -50,3 +51,10 @@ include/utility/image.h, and resources/shaders/tone_mapping.hlsli. Copyright
 warranty notices are retained in src/native/skiv_tone_map.h. The portable
 implementation handles 203-nit working pixels and non-BT.709 source gamuts;
 SKIV (custom) anchors the ICtCp curve at the SDR shoulder and white point.
+
+
+src/native/mpcvr_tone_map.cpp adapts the MPC Video Renderer HDR-to-SDR
+Metadata spline by adipose and contributors under GPL version 3.
+https://github.com/zmz125000/VideoRenderer/blob/70811bc1ea738b7033e89ebc6392b47dd5befaaa/Shaders/convert/hdr_tone_mapping_spline.hlsl
+The CPU port measures the still-image peak, maps to 203-nit SDR white, and
+hands linear pixels to the selected encoder for SDR transfer and tagging.

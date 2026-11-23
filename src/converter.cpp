@@ -161,7 +161,7 @@ void validate(const Options& o) {
     if(o.quality.png_depth!=8&&o.quality.png_depth!=16)throw std::invalid_argument("PNG depth must be 8 or 16");
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
-    range(static_cast<int>(o.sdr_tone_mapper),0,5,"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
+    range(static_cast<int>(o.sdr_tone_mapper),0,static_cast<int>(SdrToneMapper::mpcvr),"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
     range(o.sdr_shoulder,0,0.99,"SDR shoulder");range(o.sdr_hdr_range_nits,204,10000,"SDR HDR range");
     range(o.sdr_shadows,-1,1,"SDR shadows");range(o.sdr_midtones,-1,1,"SDR midtones");range(o.sdr_highlights,-1,1,"SDR highlights");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
@@ -240,7 +240,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
     const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png||o.target==Target::webp;
     const bool base_only=cache.gainmap&&!full_gainmap&&sdr_target;
-    const bool tonal_controls=o.sdr_tone_mapper==SdrToneMapper::skiv_manual||!skiv_tone_mapper(o.sdr_tone_mapper);
+    const bool mpcvr=o.sdr_tone_mapper==SdrToneMapper::mpcvr;
+    const bool tonal_controls=!mpcvr&&(o.sdr_tone_mapper==SdrToneMapper::skiv_manual||!skiv_tone_mapper(o.sdr_tone_mapper));
     const std::array<float,3> zones=tonal_controls?std::array<float,3>{
         o.sdr_shadows,o.sdr_auto_tone_curve?0.f:o.sdr_midtones,o.sdr_highlights}:std::array<float,3>{};
     const bool tonal_edits=o.sdr_tone_map&&zones!=std::array<float,3>{};
@@ -426,7 +427,12 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
-            if(peak>1.f||tonal_edits) {
+            if(mpcvr&&peak>1.f) {
+                if(cache.mapped_sdr.empty()||cache.mapped_mapper!=o.sdr_tone_mapper) {
+                    cache.mapped_sdr=tone_map_mpcvr_base(linear,gamut,double(peak)*kSdrWhiteNits);
+                    cache.mapped_mapper=o.sdr_tone_mapper;
+                }
+            } else if(peak>1.f||tonal_edits) {
                 // The manual range is a ceiling. Fit a dimmer source to its
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:

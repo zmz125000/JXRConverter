@@ -18,6 +18,8 @@ void normalize_exif(std::vector<uint8_t>&);
 void scale_rgba_f16_max_edge(std::vector<uint16_t>&,unsigned&,unsigned&,unsigned);
 void scale_rgba_f32_max_edge(std::vector<float>&,unsigned&,unsigned&,unsigned);
 int encode_still_export_f32(const float*,unsigned,unsigned,int,int,const char*,StillEncodeQuality,const float* sdr_base = nullptr);
+// Linear input and output in the encoder gamut, with 1.0 representing 203 nits.
+std::vector<float> tone_map_mpcvr_base(std::vector<float>,uhdr_color_gamut_t,double source_peak_nits);
 int encode_webp_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,const char*,StillEncodeQuality);
 int encode_png_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,int,int,const char*,StillEncodeQuality);
 struct avifImage;

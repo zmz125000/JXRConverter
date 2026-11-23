@@ -1593,6 +1593,51 @@ static void transparency_background(const fs::path& dir) {
     fails([&]{jxrc::validate(invalid);});
 }
 
+static void mpcvr_tone_mapping(const fs::path& dir) {
+    const float levels[]={2.f,75.f,420.f,1100.f};
+    std::vector<float> pixels;
+    for(const float nits:levels) {
+        const float linear=nits/kSdrWhiteNits;
+        pixels.insert(pixels.end(),{linear,linear,linear,.5f});
+    }
+    const auto source=dir/"mpcvr-pq.png";
+    check(encode_png_f32(4,1,pixels.data(),UHDR_CG_BT_2100,16,16,source.u8string().c_str(),StillEncodeQuality(0))==0,
+          "MPCVR HDR source");
+    jxrc::ConversionSession session(source);
+    jxrc::Options o;o.mode=jxrc::Mode::process;o.target=jxrc::Target::png;o.sdr_tone_map=true;
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::mpcvr;
+    const auto output=dir/"mpcvr-sdr.png";
+    session.convert(output,o);
+    const auto encoded=bytes(output);
+    const auto png=decode_regular(encoded.data(),encoded.size());
+    check(png.transfer==13&&png.primaries==9,"MPCVR SDR PNG color tags");
+    auto sample=[&](unsigned i) {
+        uint16_t code;std::memcpy(&code,png.pixels.data()+2*i,sizeof code);return code;
+    };
+    const float blackNearby=2.f/kSdrWhiteNits;
+    const int srgbShadow=int(std::lround(65535.f*(1.055f*std::pow(blackNearby,1.f/2.4f)-.055f)));
+    check(std::abs(int(sample(0))-srgbShadow)<=3,"MPCVR output does not use the encoder's sRGB transfer");
+    check(sample(0)<sample(4)&&sample(4)<sample(8)&&sample(8)<sample(12)&&sample(12)>=65534,
+          "MPCVR curve did not preserve highlight gradations or reach 203-nit white");
+    for(unsigned i=0;i<4;++i)check(sample(i*4+3)==32768,"MPCVR changed straight alpha");
+
+    o.sdr_shoulder=.91f;o.sdr_hdr_range_nits=300;o.sdr_auto_hdr_range=false;
+    o.sdr_auto_tone_curve=false;o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;
+    o.sdr_shadows=.8f;o.sdr_midtones=-.7f;o.sdr_highlights=.9f;
+    const auto edited=dir/"mpcvr-ignored-controls.png";
+    jxrc::convert(source,edited,o);
+    check(bytes(edited)==encoded,"MPCVR used controls meant for another tone mapper");
+    o.sdr_auto_hdr_range=true;
+    const auto automatic=dir/"mpcvr-auto-range.png";
+    jxrc::convert(source,automatic,o);
+    check(bytes(automatic)==encoded,"Auto HDR range changed MPCVR");
+
+    o.target=jxrc::Target::png_hdr;
+    const auto hdr=dir/"mpcvr-hdr.png",reference=dir/"mpcvr-hdr-reference.png";
+    session.convert(hdr,o);o.sdr_tone_map=false;session.convert(reference,o);
+    check(bytes(hdr)==bytes(reference),"MPCVR affected a PQ HDR output");
+}
+
 static void sdr_tone_mapping(const fs::path& dir) {
     check(jxrc::Options{}.sdr_auto_tone_curve,"Auto tone curve should default to on");
     check(jxrc::Options{}.sdr_color_mapping==jxrc::SdrColorMapping::luminance,"Default SDR color mapping");
@@ -1890,7 +1935,7 @@ int main(int argc,char** argv) try {
     if(argc==2 && std::string(argv[1])=="--transparency") {transparency_background(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--skiv") {skiv_tone_mapping(dir);std::cout<<"SKIV tone mapping tests passed\n";return 0;}
-    if(argc==2 && std::string(argv[1])=="--sdr-tone-map") {sdr_tone_mapping(dir);std::cout<<"SDR tone mapping tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--sdr-tone-map") {sdr_tone_mapping(dir);mpcvr_tone_mapping(dir);std::cout<<"SDR tone mapping tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--raw-auto-exposure") {raw_auto_exposure(dir);std::cout<<"RAW auto exposure tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--srgb-clamp") {srgb_clamping(dir);signed_float_jxl(dir);std::cout<<"sRGB clamp tests passed\n";return 0;}
