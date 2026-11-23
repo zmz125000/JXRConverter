@@ -82,7 +82,7 @@ inline AutoSdrTone analyze_auto_sdr_tone(const std::vector<float>& source, const
     const float daylight_gate = zone_smooth(0.395f, 0.470f, mean_pq);
     // 3. Scale dimming smoothly with perceptual bright-area load above the SDR shoulder.
     const float pressure = std::sqrt(std::clamp(excess_pq / 0.085f, 0.f, 1.f));
-    out.strength_ev = 1.50f * hdr_gate * daylight_gate * pressure;
+    out.strength_ev = 1.20f * hdr_gate * daylight_gate * pressure;
     if (!out.active()) {
         out.strength_ev = 0.f;
         return out;

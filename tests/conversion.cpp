@@ -1561,7 +1561,7 @@ static void sdr_tone_mapping(const fs::path& dir) {
     check(!analyze_auto_sdr_tone(nightNeon,luma).active(),"Dark night scene with HDR lights triggered automatic tone curve");
     const auto mildTone=analyze_auto_sdr_tone(mildSunny,luma);
     const auto brightTone=analyze_auto_sdr_tone(halfHdr,luma);
-    check(mildTone.active()&&brightTone.active()&&brightTone.strength_ev>mildTone.strength_ev,"Auto tone curve did not scale with daylight HDR brightness");
+    check(mildTone.active()&&brightTone.active()&&brightTone.strength_ev>mildTone.strength_ev&&brightTone.strength_ev<=1.2001f,"Auto tone curve did not scale within the -1.2 EV limit");
     // Preserve deep shadows and extreme highlights while strictly increasing across 0..10000 nits.
     {
         float sr=.005f,sg=.005f,sb=.005f;
