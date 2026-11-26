@@ -397,6 +397,14 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* form:videoScroll->widget()->findChildren<QFormLayout*>())form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     videoPage_=videoScroll;
     sidebar->addTab(videoPage_,"Video");
+    auto* animationScroll=new QScrollArea;
+    animationScroll->setObjectName("animationConversionScroll");
+    animationScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
+    animationScroll->setWidgetResizable(true);
+    animationScroll->setFrameShape(QFrame::NoFrame);
+    animationScroll->setWidget(buildAnimationControls());
+    animationPage_=animationScroll;
+    sidebar->addTab(animationPage_,"GIF");
     inspector_=new QPlainTextEdit;inspector_->setObjectName("metadataInspector");inspector_->setReadOnly(true);sidebar->addTab(inspector_,"Metadata");
     auto* logPanel=new QWidget;logPanel->setObjectName("logPanel");auto* logLayout=new QVBoxLayout(logPanel);logLayout->setContentsMargins(0,0,0,0);
     outputLog_=new QPlainTextEdit;outputLog_->setObjectName("outputLog");outputLog_->setReadOnly(true);outputLog_->setMaximumBlockCount(5000);outputLog_->setLineWrapMode(QPlainTextEdit::NoWrap);logLayout->addWidget(outputLog_,1);sidebar->addTab(logPanel,"Log");
@@ -412,12 +420,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,10);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1,Qt::AlignBottom);
-    progressStop_=new HeightMatchedButton("×",progress_);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop active video encodes and pending outputs. Active image conversions finish.");progressStop_->setFixedWidth(28);progressStop_->hide();
+    progressStop_=new HeightMatchedButton("×",progress_);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop active video and animation conversions and pending outputs. Active image conversions finish.");progressStop_->setFixedWidth(28);progressStop_->hide();
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
     connect(progressStop_,&QPushButton::clicked,this,&MainWindow::stopQueue);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,2,1);
-    connect(sidebar,&QTabWidget::currentChanged,this,&MainWindow::updateCounts);
+    connect(sidebar,&QTabWidget::currentChanged,this,[this]{updateCounts();if(animationConversionActive())updateAnimationSummary();});
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setChildrenCollapsible(false);splitter->setStretchFactor(0,1);splitter->setSizes({1050,std::max(370,fullControlsWidth)});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
@@ -562,7 +570,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     });
     connect(queue_,&ConversionQueue::outputStarted,this,[this](qint64 batch,const QString& input,const QString& output){updateJobOutput(batch,input,output,"Running");});
     connect(queue_,&ConversionQueue::outputFinished,this,[this](qint64 batch,const QString& input,const QString& output,const QString& state){updateJobOutput(batch,input,output,state);});
-    connect(queue_,&ConversionQueue::videoProgress,this,[this](const QString& output,int percent){
+    connect(queue_,&ConversionQueue::mediaProgress,this,[this](const QString& output,int percent){
         queueState_->setText(QString("Encoding %1 · %2%").arg(QFileInfo(output).fileName()).arg(percent));
     });
     connect(queue_,&ConversionQueue::statusChanged,catalog_,&Catalog::setStatus);
@@ -610,7 +618,7 @@ QList<QWidget*> MainWindow::persistentControls() const {
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
-        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_}
+        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_}
         +stillTone_.settings()+videoTone_.settings();
 }
 QList<QWidget*> MainWindow::filterControls() const {
@@ -634,7 +642,7 @@ void MainWindow::restoreSettings() {
     }
     auto* tabs=findChild<QTabWidget*>("settingsTabs");
     const auto oldTab=std::clamp(settings.value("controls/settingsTabs",0).toInt(),0,2);
-    const auto page=settings.value("controls/settingsPage",tabs->widget(oldTab?oldTab+1:0)->objectName()).toString();
+    const auto page=settings.value("controls/settingsPage",tabs->widget(oldTab?oldTab+2:0)->objectName()).toString();
     if(auto* widget=tabs->findChild<QWidget*>(page)) {const QSignalBlocker blocker(tabs);tabs->setCurrentWidget(widget);}
     aspectIndex_=std::clamp(settings.value("browser/aspectRatio",2).toInt(),0,4);
     sortOrder_=settings.value("browser/descending",false).toBool()?Qt::DescendingOrder:Qt::AscendingOrder;
@@ -642,6 +650,8 @@ void MainWindow::restoreSettings() {
     findChild<QSlider*>("rawShoulderSlider")->setValue(qRound(shoulder_->value()*100));
     stillTone_.sync();videoTone_.sync();
     updateVideoControls();
+    animationDelayUs_=std::clamp(settings.value("animation/frameDelayUs",83333u).toUInt(),1000u,600000000u);
+    updateAnimationControls();
     for(auto* input:{highlight_,shadows_,midtones_,highlights_}) {
         auto* slider=input->parentWidget()->findChild<QSlider*>();slider->setValue(qRound(input->value()*100));
     }
@@ -651,6 +661,7 @@ void MainWindow::saveSettings() const {
     for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),(widget==stillTone_.mapper||widget==videoTone_.mapper)?static_cast<QComboBox*>(widget)->currentData():widget==sort_?sort_->currentData():widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
     saveVideoEncoderSettings();
+    settings.setValue("animation/frameDelayUs",animationDelayUs_);
     settings.setValue("controls/settingsPage",findChild<QTabWidget*>("settingsTabs")->currentWidget()->objectName());
     settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
 }
@@ -759,8 +770,8 @@ QWidget* MainWindow::buildVideoControls() {
     videoContainer_=combo({"MP4","Matroska (MKV)","QuickTime (MOV)","WebM"},"videoOutputContainer");
     videoTransfer_=combo({"Auto · follow source","SDR","HDR · PQ","HDR · HLG"},"videoOutputTransfer");
     videoTransfer_->setToolTip("Auto follows the source transfer when supported by the selected codec and bit depth. PQ and HLG require an HDR source.");
-    videoDepth_=combo({"Auto","8 bit","10 bit"},"videoOutputDepth");
-    videoDepth_->setItemData(0,0);videoDepth_->setItemData(1,8);videoDepth_->setItemData(2,10);
+    videoDepth_=combo({"Auto","8 bit","10 bit","12 bit"},"videoOutputDepth");
+    videoDepth_->setItemData(0,0);videoDepth_->setItemData(1,8);videoDepth_->setItemData(2,10);videoDepth_->setItemData(3,12);
     videoChroma_=combo({"4:2:0","4:2:2","4:4:4"},"videoOutputChroma");
     formatForm->addRow("Codec",videoCodec_);
     formatForm->addRow("Container",videoContainer_);
@@ -827,6 +838,169 @@ QWidget* MainWindow::buildVideoControls() {
     return panel;
 }
 
+QWidget* MainWindow::buildAnimationControls() {
+    auto* panel=new QWidget;
+    auto* layout=new QVBoxLayout(panel);
+    layout->setContentsMargins(14,16,14,16);
+    layout->setSpacing(14);
+
+    auto* output=new QGroupBox("Animation output");
+    auto* form=new QFormLayout(output);
+    form->setRowWrapPolicy(QFormLayout::WrapLongRows);
+    animationFormat_=combo({"GIF","WebP","PNG (APNG)","JPEG XL","AVIF"},"animationFormat");
+    animationTransfer_=combo({"SDR","HDR · PQ","HDR · HLG","HDR · Linear JXL","HDR · scRGB JXL"},"animationTransfer");
+    animationRate_=real(.001,1000,12,.1,"animationFrameRate");
+    animationRate_->setToolTip("Frame rate in Hz, or the time one frame stays on screen in milliseconds.");
+    animationMilliseconds_=check("Milliseconds","animationMilliseconds");
+    animationSlowMotion_=check("Slow motion","animationSlowMotion");
+    animationSlowMotion_->setToolTip("Keep every decoded video frame and play it at the chosen rate. At 1 Hz, one second of 24 Hz video becomes 24 seconds.");
+    animationAlignment_=combo({"Top left","Top","Top right","Left","Center","Right","Bottom left","Bottom","Bottom right"},"animationAlignment");
+    animationAlignment_->setCurrentIndex(4);
+    animationAlignment_->setToolTip("Place smaller frames on a shared canvas. Empty space follows the transparency setting in Conversion.");
+    animationEdge_=spin(0,65535,0,"animationMaxEdge");
+    animationEdge_->setSpecialValueText("Original size");
+    animationEdge_->setSuffix(" px");
+    form->addRow("Format",animationFormat_);
+    form->addRow("Dynamic range",animationTransfer_);
+    form->addRow("Frame timing",animationRate_);
+    form->addRow(animationMilliseconds_);
+    form->addRow(animationSlowMotion_);
+    form->addRow("Alignment",animationAlignment_);
+    form->addRow("Max edge",animationEdge_);
+    auto* ordering=new QLabel("Combines files in list order. Each still contributes one frame.");
+    ordering->setWordWrap(true);
+    form->addRow(ordering);
+    layout->addWidget(output);
+
+    auto* shared=new QLabel("Edit shared settings in Conversion.");
+    shared->setWordWrap(true);
+    layout->addWidget(shared);
+    const auto summary=[&](const QString& title,const QList<std::pair<QString,QWidget*>>& fields) {
+        auto* group=new QGroupBox(title);
+        auto* rows=new QFormLayout(group);
+        rows->setRowWrapPolicy(QFormLayout::WrapLongRows);
+        for(const auto& field:fields) {
+            auto* value=new QLabel;
+            value->setWordWrap(true);
+            rows->addRow(field.first,value);
+            animationSummary_.append({field.second,value});
+            const auto changed=[this]{if(animationConversionActive())updateAnimationSummary();};
+            if(auto* box=qobject_cast<QComboBox*>(field.second))connect(box,&QComboBox::currentIndexChanged,this,changed);
+            if(auto* box=qobject_cast<QCheckBox*>(field.second))connect(box,&QCheckBox::toggled,this,changed);
+            if(auto* spinBox=qobject_cast<QSpinBox*>(field.second))connect(spinBox,&QSpinBox::valueChanged,this,changed);
+            if(auto* spinBox=qobject_cast<QDoubleSpinBox*>(field.second))connect(spinBox,&QDoubleSpinBox::valueChanged,this,changed);
+            if(auto* slider=qobject_cast<QSlider*>(field.second))connect(slider,&QSlider::valueChanged,this,changed);
+        }
+        layout->addWidget(group);
+    };
+    summary("Quality and source settings",{{"Quality preset",preset_},{"JPEG / AVIF / WebP quality",quality_},{"JXL distance",distance_},
+        {"AVIF max depth",avifDepth_},{"PNG auto bit depth",autoBitDepth_},{"PNG bit depth",pngDepth_},
+        {"Gain map reconstruction",reconstruction_},{"Transparency background",transparencyBackground_}});
+    summary("SDR tone mapping",{{"HDR tone mapping",stillTone_.enabled},{"Tone mapper",stillTone_.mapper},
+        {"SDR shoulder",stillTone_.shoulder},{"Auto HDR range",stillTone_.autoRange},{"HDR range cap",stillTone_.range},
+        {"Color mapping",stillTone_.color},{"Auto tone curve",stillTone_.autoCurve},{"Shadows",stillTone_.shadows},
+        {"Midtones",stillTone_.midtones},{"Highlights",stillTone_.highlights}});
+    summary("Pixel processing",{{"Conversion mode",mode_},{"Exposure",exposure_},{"Conversion max edge",maxEdge_},
+        {"sRGB clamp",srgbClamp_},{"Extended BT.2020",bt2020_},{"Convert scRGB gamut to BT.2020",convertGamut_}});
+    summary("RAW rendering",{{"HDR mode",rawMode_},{"Auto exposure",rawAutoExposure_},{"Protect highlights",rawProtectHighlights_},
+        {"Exposure",rawExposure_},{"White balance",wb_},{"Temperature",kelvin_},{"HDR boost target",nits_},{"HDR shoulder",shoulder_},
+        {"Highlight stops",highlight_},{"Shadows",shadows_},{"Midtones",midtones_},{"Highlights",highlights_},
+        {"Camera look",cameraLook_},{"Linear HDR",linearHdr_},{"Disable HDR boost",disableRawBoost_}});
+    layout->addStretch();
+
+    connect(animationFormat_,&QComboBox::currentIndexChanged,this,&MainWindow::updateAnimationControls);
+    connect(animationTransfer_,&QComboBox::currentIndexChanged,this,&MainWindow::updateAnimationSummary);
+    connect(animationMilliseconds_,&QCheckBox::toggled,this,&MainWindow::updateAnimationControls);
+    connect(animationEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateCounts);
+    connect(animationRate_,&QDoubleSpinBox::valueChanged,this,[this](double value) {
+        animationDelayUs_=unsigned(qRound(animationMilliseconds_->isChecked()?value*1000.:1000000./value));
+        animationDelayUs_=std::clamp(animationDelayUs_,1000u,600000000u);
+    });
+    updateAnimationControls();
+    return panel;
+}
+
+bool MainWindow::animationConversionActive() const {
+    return animationPage_&&findChild<QTabWidget*>("settingsTabs")->currentWidget()==animationPage_;
+}
+
+void MainWindow::updateAnimationControls() {
+    const auto format=AnimationFormat(animationFormat_->currentIndex());
+    const bool sdrOnly=format==AnimationFormat::gif||format==AnimationFormat::webp;
+    const QSignalBlocker transferBlocker(animationTransfer_), rateBlocker(animationRate_);
+    auto* model=static_cast<QStandardItemModel*>(animationTransfer_->model());
+    for(int i=0;i<animationTransfer_->count();++i) {
+        const bool enabled=i==0||(!sdrOnly&&(i<=int(AnimationTransfer::hlg)||format==AnimationFormat::jxl));
+        model->item(i)->setEnabled(enabled);
+    }
+    if(animationTransfer_->currentIndex()<0||!model->item(animationTransfer_->currentIndex())->isEnabled())
+        animationTransfer_->setCurrentIndex(0);
+    animationTransfer_->setEnabled(!sdrOnly);
+
+    const unsigned minimumDelay=format==AnimationFormat::gif?10000u:1000u;
+    const bool ms=animationMilliseconds_->isChecked();
+    const auto delay=std::max(minimumDelay,animationDelayUs_);
+    animationRate_->setDecimals(ms?3:4);
+    animationRate_->setRange(ms?minimumDelay/1000.:1000000./600000000.,ms?600000.:1000000./minimumDelay);
+    animationRate_->setSingleStep(ms?1.:.1);
+    animationRate_->setSuffix(ms?" ms":" Hz");
+    animationRate_->setValue(ms?delay/1000.:1000000./delay);
+    updateAnimationSummary();
+}
+
+void MainWindow::updateAnimationSummary() {
+    const auto format=AnimationFormat(animationFormat_->currentIndex());
+    const bool sdr=animationTransfer_->currentIndex()==int(AnimationTransfer::sdr);
+    for(const auto& [field,label]:animationSummary_) {
+        QString text;
+        if(const auto* box=qobject_cast<QComboBox*>(field))text=box->currentText();
+        if(const auto* box=qobject_cast<QCheckBox*>(field))text=box->isChecked()?"On":"Off";
+        if(const auto* spinBox=qobject_cast<QSpinBox*>(field))text=spinBox->text();
+        if(const auto* spinBox=qobject_cast<QDoubleSpinBox*>(field))text=QString::number(spinBox->value(),'g',5)+spinBox->suffix();
+        if(field==stillTone_.shoulder)text=stillTone_.shoulderValue->text();
+        if(field==stillTone_.range)text=QString("%1 nits").arg(stillTone_.range->value());
+        bool applies=field->isEnabled();
+        if(stillTone_.group->isAncestorOf(field))applies&=sdr;
+        if(field==avifDepth_)applies&=format==AnimationFormat::avif;
+        if(field==distance_)applies&=format==AnimationFormat::jxl;
+        if(field==quality_)applies&=format==AnimationFormat::avif||format==AnimationFormat::webp;
+        if(field==autoBitDepth_||field==pngDepth_)applies&=format==AnimationFormat::png&&sdr;
+        label->setText(text);
+        label->setEnabled(applies);
+    }
+}
+
+AnimationOutput MainWindow::animationTarget() const {
+    AnimationOutput result;
+    result.format=AnimationFormat(animationFormat_->currentIndex());
+    result.transfer=AnimationTransfer(animationTransfer_->currentIndex());
+    result.delayUs=std::max(result.format==AnimationFormat::gif?10000u:1000u,animationDelayUs_);
+    result.slowMotion=animationSlowMotion_->isChecked();
+    result.horizontal=unsigned(animationAlignment_->currentIndex()%3);
+    result.vertical=unsigned(animationAlignment_->currentIndex()/3);
+    return result;
+}
+
+void MainWindow::convertAnimationFiles(QStringList paths,bool reuseJob,bool quick) {
+    if(paths.isEmpty()||routingToken_||(!quick&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
+    try {
+        const auto directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
+        if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
+        auto options=optionsForTarget(Target::png);
+        const auto edge=unsigned(animationEdge_->value());
+        if(edge)options.max_edge=options.max_edge?std::min(options.max_edge,edge):edge;
+        options.mode=Mode::process;
+        const bool reuseQuick=quick&&quickJob_>=0;
+        const auto batch=reuseJob?viewedJob_:reuseQuick?quickJob_:nextJob_;
+        auto target=animationTarget();
+        target.inputs=std::move(paths);
+        auto job=makeAnimationJob(directory,options,std::move(target),outputLayout(batch,quick));
+        startConversion({std::move(job)},batch,false,quick,reuseJob,reuseQuick,quick,directory);
+    } catch(const std::exception& error) {
+        reportError(QString::fromUtf8(error.what()));
+    }
+}
+
 void MainWindow::loadVideoEncoderSettings(bool reset) {
     const auto& encoder=videoEncoderSettings(VideoCodec(videoCodec_->currentIndex()),VideoEncoder(videoEncoder_->currentIndex()));
     videoSettingsEncoder_=encoder.name;
@@ -846,7 +1020,7 @@ void MainWindow::loadVideoEncoderSettings(bool reset) {
     for(const auto& tune:encoder.tunes)videoTune_->addItem(tune,tune);
     select(videoTune_,settings.value("tune",QString{}));
 
-    static const QStringList names={"Constant rate factor (CRF)","Constant quantizer (QP)","Variable bitrate","Lossless"};
+    static const QStringList names={"Constant rate factor (CRF)","Constant QP","Variable bitrate","Lossless"};
     videoRate_->clear();
     for(auto rate:encoder.rates)videoRate_->addItem(names[int(rate)],int(rate));
     select(videoRate_,settings.value("rate",int(encoder.rates.front())).toInt());
@@ -1068,7 +1242,7 @@ QWidget* MainWindow::buildControls() {
     connect(renameConflicts_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
     const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
-    selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue");cancel_->setObjectName("cancelQueue");cancel_->setToolTip("Stop active video encodes and pending outputs. Active image conversions finish.");
+    selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue");cancel_->setObjectName("cancelQueue");cancel_->setToolTip("Stop active video and animation conversions and pending outputs. Active image conversions finish.");
     visible_->setToolTip("Convert all visible files. Fewer than 5 images share this session’s Quick job. Inside Jobs, rerun the current job.");selected_->setToolTip("Selections of 1–4 images share this session’s Quick job. Inside Jobs, rerun the current job.");
     // Start actions are placed outside the collapsible output settings.
     queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setObjectName("conversionProgress");progress_->setFormat("%p% (%v/%m)");progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
@@ -1096,6 +1270,7 @@ void MainWindow::updateMode() {
     pngDepth_->setEnabled(!autoBitDepth_->isChecked());
     convertGamut_->setEnabled(!srgbClamp_->isChecked());bt2020_->setEnabled(!srgbClamp_->isChecked());
     updateOutputSettings();updateCounts();
+    if(animationConversionActive())updateAnimationSummary();
 }
 void MainWindow::updateOutputSettings() {
     overwrite_->setEnabled(!renameConflicts_->isChecked());
@@ -1326,7 +1501,14 @@ void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse,bo
     if(creating&&!saved->createdAt.isValid())saved->createdAt=QDateTime::currentDateTimeUtc();
     if(quick)saved->quick=true;
     QSet<QString> knownFiles(saved->files.cbegin(),saved->files.cend());
-    for(const auto& job:jobs){if(!knownFiles.contains(job.input)){knownFiles.insert(job.input);saved->files.append(job.input);}saved->outputs.insert(job.output,{job.input,"Queued"});}
+    const auto addInput=[&](const QString& path) {
+        if(!knownFiles.contains(path)){knownFiles.insert(path);saved->files.append(path);}
+    };
+    for(const auto& job:jobs) {
+        if(job.animation)for(const auto& input:job.animation->inputs)addInput(input);
+        else addInput(job.input);
+        saved->outputs.insert(job.output,{job.input,"Queued"});
+    }
     if(creating)saved->name=jobParentName(saved->files);
     if(!jobs.isEmpty())lastOutputFolder_=saved->folder=QFileInfo(jobs.first().output).absolutePath();
     if(jumpToJob_->isChecked())showJob(saved->number);
@@ -1373,6 +1555,8 @@ void MainWindow::openOutputFolder() {
             const auto layout=outputLayout(viewedJob_);
             if(videoConversionActive()) {
                 path=outputFolder(paths.value(0),output_->text().trimmed(),videoExtension(videoTarget().container),layout);
+            } else if(animationConversionActive()) {
+                path=outputFolder(paths.value(0),output_->text().trimmed(),animationExtension(animationTarget().format),layout);
             } else path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),layout);
         }
         catch(const std::exception& e){reportError("Cannot open output folder: "+QString::fromUtf8(e.what()),selectedPaths());return;}
@@ -1558,8 +1742,11 @@ void MainWindow::showLibraryMessage(const QString& message,int timeout) {
 }
 void MainWindow::updateCounts() {
     const bool video=videoConversionActive();
+    const bool animation=animationConversionActive();
     QStringList processingNotes;
-    if(video) {
+    if(animation) {
+        if(animationEdge_->value()>0)processingNotes.append(QString("%1 px").arg(animationEdge_->value()));
+    } else if(video) {
         if(videoMaxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(videoMaxEdge_->value()));
         if(videoMode_->currentIndex()&&videoExposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(videoExposure_->value()>0?"+":"").arg(videoExposure_->value(),0,'g',3));
     } else if(mode_->currentIndex()==1){if(maxEdge_->value()>0)processingNotes.append(QString("%1 px").arg(maxEdge_->value()));if(srgbClamp_->isChecked())processingNotes.append("sRGB");if(exposure_->value()!=0)processingNotes.append(QString("EV %1%2").arg(exposure_->value()>0?"+":"").arg(exposure_->value(),0,'g',3));if(rawAutoExposure_->isChecked())processingNotes.append("AE");}
@@ -1567,7 +1754,7 @@ void MainWindow::updateCounts() {
         ?QString("%p% (%v/%m/%1/%2)").arg(queue_->skipped()).arg(queue_->failed())
         :QString("%p% (%v/%m)");
     progress_->setFormat(progressCounts+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
-    const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=video||!selectedTargets().isEmpty();
+    const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=video||animation||!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
@@ -1583,9 +1770,9 @@ void MainWindow::updateCounts() {
         return !routingToken_&&count>0&&hasTargets&&!(updater_&&updater_->installing())
             &&(!queue_->busy()||statusFilter_->checkedId()==2||count<quickJobLimit);
     };
-    selected_->setEnabled(video?canConvert(selected-selectedImages):statusFilter_->checkedId()!=VideoTab&&canConvert(selectedImages));
-    visible_->setEnabled(canConvert(video?proxy_->rowCount()-visibleImages:visibleImages));
-    cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(statusFilter_->checkedId()==2&&(queue_->hasPendingBatch(viewedJob_)||queue_->hasRunningVideo(viewedJob_)));
+    selected_->setEnabled(animation?canConvert(selected):video?canConvert(selected-selectedImages):statusFilter_->checkedId()!=VideoTab&&canConvert(selectedImages));
+    visible_->setEnabled(canConvert(animation?proxy_->rowCount():video?proxy_->rowCount()-visibleImages:visibleImages));
+    cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(statusFilter_->checkedId()==2&&(queue_->hasPendingBatch(viewedJob_)||queue_->hasRunningMedia(viewedJob_)));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
     running_->setEnabled(queue_->busy());clearJobs_->setEnabled(!busy);workers_->setEnabled(!busy);
@@ -1614,12 +1801,23 @@ void MainWindow::showMetadata() {
 }
 void MainWindow::convertFiles(bool selected) {
     const bool video=videoConversionActive();
-    if(!video&&statusFilter_->checkedId()==VideoTab)return;
-    QStringList paths;if(selected)paths=selectedPaths();else for(int row=0;row<proxy_->rowCount();++row)paths<<proxy_->index(row,0).data(Catalog::PathRole).toString();
-    paths.erase(std::remove_if(paths.begin(),paths.end(),[video](const QString& path){return supportedVideoFile(path)!=video;}),paths.end());
+    const bool animation=animationConversionActive();
+    if(!video&&!animation&&statusFilter_->checkedId()==VideoTab)return;
+    QStringList paths;
+    if(!animation&&selected)paths=selectedPaths();
+    else {
+        auto hidden=selected?imageSelection():QSet<QString>{};
+        for(int row=0;row<proxy_->rowCount();++row) {
+            const auto path=proxy_->index(row,0).data(Catalog::PathRole).toString();
+            if(!selected||hidden.remove(path))paths<<path;
+        }
+        if(!hidden.isEmpty())for(const auto& path:catalog_->paths())if(hidden.contains(path))paths<<path;
+    }
+    if(!animation)paths.erase(std::remove_if(paths.begin(),paths.end(),[video](const QString& path){return supportedVideoFile(path)!=video;}),paths.end());
     const bool reuse=statusFilter_->checkedId()==2;
     const bool quick=!paths.isEmpty()&&paths.size()<quickJobLimit&&!reuse;
-    if(video)convertVideos(paths,reuse,quick);
+    if(animation)convertAnimationFiles(std::move(paths),reuse,quick);
+    else if(video)convertVideos(paths,reuse,quick);
     else convertPaths(paths,selectedTargets(),false,false,quick,reuse,quick);
 }
 void MainWindow::convertVideos(const QStringList& paths,bool reuseJob,bool quick) {
@@ -1798,7 +1996,11 @@ bool MainWindow::startConversion(QVector<Job> jobs,qint64 batch,bool priority,bo
         throw std::invalid_argument("The selected job no longer exists");
     // Discard stale results for rerun inputs without changing job identity.
     if(reuseJob&&!queue_->hasRunningBatch(batch)&&!queue_->hasPendingBatch(batch)) {
-        QSet<QString> rerun;for(const auto& job:jobs)rerun.insert(job.input);
+        QSet<QString> rerun;
+        for(const auto& job:jobs) {
+            if(job.animation)for(const auto& input:job.animation->inputs)rerun.insert(input);
+            else rerun.insert(job.input);
+        }
         for(auto& saved:savedJobs_)if(saved.number==batch) {
             for(auto it=saved.outputs.begin();it!=saved.outputs.end();)if(rerun.contains(it->input))it=saved.outputs.erase(it);else ++it;
             break;

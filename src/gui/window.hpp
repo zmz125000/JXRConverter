@@ -67,6 +67,12 @@ private:
     };
     QWidget* buildControls();
     QWidget* buildVideoControls();
+    QWidget* buildAnimationControls();
+    bool animationConversionActive() const;
+    AnimationOutput animationTarget() const;
+    void updateAnimationControls();
+    void updateAnimationSummary();
+    void convertAnimationFiles(QStringList paths,bool reuseJob,bool quick);
     bool videoConversionActive() const;
     VideoOutput videoTarget() const;
     void loadVideoEncoderSettings(bool reset = false);
@@ -149,7 +155,13 @@ private:
     QButtonGroup *viewMode_, *statusFilter_;
     QComboBox *transparencyBackground_, *reconstruction_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *pngDepth_, *rawMode_, *wb_;
     QListWidget* targets_ = nullptr;
-    QWidget* videoPage_ = nullptr;
+    QWidget *videoPage_ = nullptr, *animationPage_ = nullptr;
+    QComboBox *animationFormat_, *animationTransfer_, *animationAlignment_;
+    QDoubleSpinBox* animationRate_;
+    QCheckBox *animationMilliseconds_, *animationSlowMotion_;
+    QSpinBox* animationEdge_;
+    QList<std::pair<QWidget*,QLabel*>> animationSummary_;
+    unsigned animationDelayUs_=83333;
     QComboBox *videoMode_, *videoCodec_, *videoContainer_, *videoTransfer_, *videoDepth_, *videoChroma_, *videoEncoder_;
     QComboBox *videoPreset_, *videoTune_, *videoRate_, *videoAudio_;
     QSpinBox *videoFactor_, *videoBitrate_, *videoAudioBitrate_, *videoMaxEdge_;

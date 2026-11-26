@@ -22,8 +22,8 @@ std::filesystem::path nativePath(const QString& value) {
 // can update once after the transaction instead of once per pending output.
 struct StatusBatch {
     ConversionQueue* queue;
-    explicit StatusBatch(ConversionQueue* q):queue(q){emit queue->statusBatchStarted();}
-    ~StatusBatch(){emit queue->statusBatchFinished();}
+    explicit StatusBatch(ConversionQueue* q):queue(q){if(queue)emit queue->statusBatchStarted();}
+    ~StatusBatch(){if(queue)emit queue->statusBatchFinished();}
 };
 QString jobKey(const Job& job) {return QString::number(job.batch)+QChar(0)+job.input+QChar(0)+job.output;}
 QDateTime originalDate(const QString& path) {
@@ -48,6 +48,16 @@ void preserveDate(const QString& path,const QDateTime& date) {
         throw std::runtime_error("Cannot preserve output file date");
     // Creation time is writable on supporting filesystems (e.g. Windows).
     file.setFileTime(date,QFileDevice::FileBirthTime);
+}
+template<class Function>
+void forJobInput(const Job& job,Function&& function) {
+    if(job.animation)for(const auto& input:job.animation->inputs)function(input);
+    else function(job.input);
+}
+bool usesInput(const Job& job,const QSet<QString>& inputs) {
+    if(!job.animation)return inputs.contains(job.input);
+    return std::any_of(job.animation->inputs.cbegin(),job.animation->inputs.cend(),
+                       [&](const QString& path){return inputs.contains(path);});
 }
 void orderJobs(QVector<Job>& jobs) {
     // Keep each source's targets together to bound prepared-pixel memory by
@@ -202,8 +212,27 @@ QVector<Job> makeVideoJobs(const QStringList& inputs,const QString& directory,co
     }
     return jobs;
 }
+Job makeAnimationJob(const QString& directory,const Options& options,AnimationOutput target,const OutputLayout& layout) {
+    if(target.inputs.isEmpty())throw std::invalid_argument("Select files for the animation.");
+    auto snapshot=options;
+    if(layout.rename_conflicts)snapshot.overwrite=false;
+    const auto input=target.inputs.front();
+    const auto stem=QFileInfo(input).completeBaseName();
+    const auto folder=QDir(outputFolder(input,directory,animationExtension(target.format),layout));
+    const auto suffix=animationSuffix(target);
+    auto output=folder.absoluteFilePath(stem+suffix);
+    const auto key=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
+    QSet<QString> sources;
+    for(const auto& path:target.inputs)sources.insert(key(path));
+    if(layout.rename_conflicts) {
+        for(int n=2;outputExists(output)||sources.contains(key(output));++n)
+            output=folder.absoluteFilePath(stem+"_"+QString::number(n)+suffix);
+    }
+    if(sources.contains(key(output)))throw std::invalid_argument("Output would replace an input file.");
+    return {input,output,snapshot,0,layout.preserve_original_date,{},false,{},std::move(target)};
+}
 ConversionQueue::ConversionQueue(QObject* parent,Convert converter):QObject(parent),converter_(std::move(converter)) {}
-ConversionQueue::~ConversionQueue() { for(const auto& token:activeVideos_)token->store(true);pool_.clear();pool_.waitForDone(); }
+ConversionQueue::~ConversionQueue() { for(const auto& token:activeMedia_)token->store(true);pool_.clear();pool_.waitForDone(); }
 void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     if(busy())throw std::logic_error("A conversion batch is already running");
     if(jobs.isEmpty())return;
@@ -214,17 +243,16 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     limit_=std::clamp(parallelism,1,std::max(1,cores));pool_.setMaxThreadCount(limit_);
     threadBudget_=std::max(1,cores/limit_);
     remaining_.clear();fileCancelled_.clear();fileSkipped_.clear();fileSucceeded_.clear();fileErrors_.clear();
-    for(const auto& job:jobs_)++remaining_[job.input];
-    for(auto& job:jobs_){job.options.threads=threadBudget_;emit statusChanged(job.input,"Queued",job.output);}
+    for(auto& job:jobs_){job.options.threads=threadBudget_;recordPending(job);updateJobStatus(job,"Queued");}
     pump();
 }
 void ConversionQueue::enqueue(QVector<Job> jobs,int parallelism,int cores) {
     if(!busy()){start(std::move(jobs),parallelism,cores);return;}
     const StatusBatch updates(this);
     orderJobs(jobs);
-    for(auto& job:jobs){job.options.threads=threadBudget_;if(!remaining_.value(job.input)){fileErrors_.remove(job.input);fileCancelled_.remove(job.input);fileSkipped_.remove(job.input);fileSucceeded_.remove(job.input);}++remaining_[job.input];}
+    for(auto& job:jobs){job.options.threads=threadBudget_;recordPending(job);}
     jobs_+=jobs;
-    for(const auto& job:jobs)if(!activeInputs_.contains(job.input))emit statusChanged(job.input,"Queued",job.output);
+    for(const auto& job:jobs)updateJobStatus(job,"Queued");
     pump();
 }
 qint64 ConversionQueue::runningBatch() const {
@@ -236,8 +264,8 @@ bool ConversionQueue::hasRunningBatch(qint64 batch) const {
         if(it.value()==batch||batchAliases_.value(jobKey({it.key(),activeOutputs_.value(it.key()),{},it.value()})).contains(batch))return true;
     return false;
 }
-bool ConversionQueue::hasRunningVideo(qint64 batch) const {
-    for(auto it=activeVideos_.cbegin();it!=activeVideos_.cend();++it) {
+bool ConversionQueue::hasRunningMedia(qint64 batch) const {
+    for(auto it=activeMedia_.cbegin();it!=activeMedia_.cend();++it) {
         const auto input=it.key();
         const auto primary=activeBatches_.value(input);
         if(!it.value()->load()&&(primary==batch||batchAliases_.value(jobKey({input,activeOutputs_.value(input),{},primary})).contains(batch)))
@@ -252,12 +280,12 @@ void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
     if(jobs.isEmpty())return;
     const StatusBatch updates(this);
     orderJobs(jobs);
-    QSet<QString> inputs;for(const auto& job:jobs)inputs.insert(job.input);
+    QSet<QString> inputs;for(const auto& job:jobs)forJobInput(job,[&](const QString& input){inputs.insert(input);});
     QVector<Job> priority,rest;
     // Promote existing outputs rather than submitting them twice. Running
     // outputs finish in place; new targets reuse the same source session.
     for(int i=next_;i<jobs_.size();++i)
-        (inputs.contains(jobs_[i].input)?priority:rest).append(jobs_[i]);
+        (usesInput(jobs_[i],inputs)?priority:rest).append(jobs_[i]);
     QHash<QString,int> pendingOutputs;
     auto outputKey=[](const Job& job){return job.input+QChar(0)+job.output;};
     for(int i=0;i<priority.size();++i)pendingOutputs.insert(outputKey(priority[i]),i);
@@ -267,17 +295,17 @@ void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
         const auto pending=pendingOutputs.constFind(outputKey(job));
         if(pending!=pendingOutputs.cend()){batchAliases_[jobKey(priority[pending.value()])].insert(job.batch);continue;}
         job.options.threads=threadBudget_;
-        if(!remaining_.value(job.input)){fileErrors_.remove(job.input);fileCancelled_.remove(job.input);fileSkipped_.remove(job.input);fileSucceeded_.remove(job.input);}
-        pendingOutputs.insert(outputKey(job),priority.size());priority.append(job);added.append(job);++remaining_[job.input];
+        recordPending(job);
+        pendingOutputs.insert(outputKey(job),priority.size());priority.append(job);added.append(job);
     }
     orderJobs(priority);
     jobs_.resize(next_);jobs_+=priority;jobs_+=rest;
-    for(const auto& job:added)if(!activeInputs_.contains(job.input))emit statusChanged(job.input,"Queued",job.output);
+    for(const auto& job:added)updateJobStatus(job,"Queued");
     pump();
 }
 bool ConversionQueue::hasPendingFor(const QStringList& inputs) const {
     const QSet<QString> selected(inputs.cbegin(),inputs.cend());
-    return std::any_of(jobs_.cbegin()+next_,jobs_.cend(),[&](const Job& job){return selected.contains(job.input);});
+    return std::any_of(jobs_.cbegin()+next_,jobs_.cend(),[&](const Job& job){return usesInput(job,selected);});
 }
 void ConversionQueue::cancelPending() { cancelPendingMatching(nullptr); }
 void ConversionQueue::cancelPendingFor(const QStringList& inputs) {
@@ -287,14 +315,14 @@ void ConversionQueue::cancelPendingFor(const QStringList& inputs) {
 void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs,qint64 batch) {
     if(!busy())return;
     const StatusBatch updates(this);
-    if(!inputs)for(auto it=activeVideos_.cbegin();it!=activeVideos_.cend();++it) {
+    if(!inputs)for(auto it=activeMedia_.cbegin();it!=activeMedia_.cend();++it) {
         const auto input=it.key();
         const auto primary=activeBatches_.value(input);
         if(batch<0||batch==primary||batchAliases_.value(jobKey({input,activeOutputs_.value(input),{},primary})).contains(batch))
             it.value()->store(true);
     }
     // Keep total job count and the order of unselected pending outputs intact.
-    const auto end=std::stable_partition(jobs_.begin()+next_,jobs_.end(),[&](const Job& job){return (batch<0||job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch))&&(!inputs||inputs->contains(job.input));});
+    const auto end=std::stable_partition(jobs_.begin()+next_,jobs_.end(),[&](const Job& job){return (batch<0||job.batch==batch||batchAliases_.value(jobKey(job)).contains(batch))&&(!inputs||usesInput(job,*inputs));});
     const int stop=int(end-jobs_.begin());
     if(stop==next_)return;
     while(next_<stop){const auto& job=jobs_[next_++];++cancelled_;++finished_;finishFile(job,{},true);}
@@ -304,7 +332,7 @@ void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs,qint64 b
 void ConversionQueue::pump() {
     while(active_<limit_&&next_<jobs_.size()) {
         int candidate=next_;
-        while(candidate<jobs_.size()&&activeInputs_.contains(jobs_[candidate].input))++candidate;
+        while(candidate<jobs_.size()&&usesInput(jobs_[candidate],activeInputs_))++candidate;
         if(candidate==jobs_.size())break;
         // Rotate rather than swap so each source retains its render-family order.
         std::rotate(jobs_.begin()+next_,jobs_.begin()+candidate,jobs_.begin()+candidate+1);
@@ -312,41 +340,44 @@ void ConversionQueue::pump() {
         if(job.skip_existing||(!job.options.overwrite&&outputExists(job.output))) {
             ++skipped_;++finished_;finishFile(job,{},false,true);continue;
         }
-        ++active_;activeInputs_.insert(job.input);activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);
+        ++active_;forJobInput(job,[&](const QString& input){activeInputs_.insert(input);});activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);
         std::shared_ptr<ConversionSession> session;
-        std::shared_ptr<std::atomic_bool> videoCancelled;
-        if(job.video) {
-            videoCancelled=std::make_shared<std::atomic_bool>(false);
-            activeVideos_.insert(job.input,videoCancelled);
+        std::shared_ptr<std::atomic_bool> mediaCancelled;
+        if(job.video||job.animation) {
+            mediaCancelled=std::make_shared<std::atomic_bool>(false);
+            activeMedia_.insert(job.input,mediaCancelled);
         } else if(!converter_) {
             auto& stored=sessions_[job.input];
             if(!stored)stored=std::make_shared<ConversionSession>(nativePath(job.input));
             session=stored;
         }
         emit outputStarted(job.batch,job.input,job.output);
-        emit statusChanged(job.input,"Converting",job.output);
+        updateJobStatus(job,"Converting");
         std::shared_ptr<QDateTime> original;
         if(job.preserve_original_date){auto& stored=originalDates_[job.input];if(!stored)stored=std::make_shared<QDateTime>();original=stored;}
-        pool_.start([this,job,session,original,videoCancelled] {
+        pool_.start([this,job,session,original,mediaCancelled] {
             QString error;bool skipped=false,cancelled=false;
             try {
                 if(!job.preparation_error.isEmpty())throw std::runtime_error(job.preparation_error.toStdString());
                 if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
                 if(original&&!original->isValid())*original=originalDate(job.input);
-                if(job.video) {
-                    skipped=convertVideo(job.input,nativePath(job.output),job.options,*job.video,[&]{return videoCancelled->load();},[this,output=job.output](int percent) {
-                        QMetaObject::invokeMethod(this,[this,output,percent]{emit videoProgress(output,percent);},Qt::QueuedConnection);
-                    });
+                if(mediaCancelled) {
+                    const auto stop=[&]{return mediaCancelled->load();};
+                    const auto report=[this,output=job.output](int percent){
+                        QMetaObject::invokeMethod(this,[this,output,percent]{emit mediaProgress(output,percent);},Qt::QueuedConnection);
+                    };
+                    if(job.animation)skipped=convertAnimation(nativePath(job.output),job.options,*job.animation,stop,report);
+                    else skipped=convertVideo(job.input,nativePath(job.output),job.options,*job.video,stop,report);
                 } else {
                     const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);
                     skipped=result.skipped;
                 }
                 if(original&&!skipped)preserveDate(job.output,*original);
             }catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
-            if(!error.isEmpty()&&videoCancelled&&videoCancelled->load()){cancelled=true;error.clear();}
+            if(!error.isEmpty()&&mediaCancelled&&mediaCancelled->load()){cancelled=true;error.clear();}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
             QMetaObject::invokeMethod(this,[this,job,error,skipped,cancelled] {
-                --active_;activeInputs_.remove(job.input);activeOutputs_.remove(job.input);activeBatches_.remove(job.input);activeVideos_.remove(job.input);++finished_;
+                --active_;forJobInput(job,[&](const QString& input){activeInputs_.remove(input);});activeOutputs_.remove(job.input);activeBatches_.remove(job.input);activeMedia_.remove(job.input);++finished_;
                 if(cancelled)++cancelled_;else if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
                 finishFile(job,error,cancelled,skipped);
                 pump();
@@ -356,24 +387,42 @@ void ConversionQueue::pump() {
     emit progress(finished_,jobs_.size(),active_);
     if(!busy())emit batchFinished(succeeded_,failed_,cancelled_);
 }
+void ConversionQueue::recordPending(const Job& job) {
+    forJobInput(job,[&](const QString& input) {
+        if(!remaining_.value(input)) {
+            fileErrors_.remove(input);fileCancelled_.remove(input);fileSkipped_.remove(input);fileSucceeded_.remove(input);
+        }
+        ++remaining_[input];
+    });
+}
+void ConversionQueue::updateJobStatus(const Job& job,const QString& state) {
+    const StatusBatch updates(job.animation?this:nullptr);
+    forJobInput(job,[&](const QString& input) {
+        if(state!="Queued"||!activeInputs_.contains(input))emit statusChanged(input,state,job.output);
+    });
+}
 void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancelled,bool skipped) {
     const QString outcome=cancelled?"Cancelled":!error.isEmpty()?"Failed":skipped?"Skipped":"Finished";
     const auto aliases=batchAliases_.take(jobKey(job));
     emit outputFinished(job.batch,job.input,job.output,outcome);
     for(auto alias:aliases)if(alias!=job.batch)emit outputFinished(alias,job.input,job.output,outcome);
-    if(!error.isEmpty())fileErrors_[job.input]+=error+"\nOutput: "+job.output+"\n";
-    if(cancelled)++fileCancelled_[job.input];
-    if(skipped)++fileSkipped_[job.input];
-    if(error.isEmpty()&&!cancelled&&!skipped)++fileSucceeded_[job.input];
-    const int left=--remaining_[job.input];
+    const StatusBatch updates(job.animation?this:nullptr);
+    forJobInput(job,[&](const QString& input){finishInput(input,job.output,error,cancelled,skipped);});
+}
+void ConversionQueue::finishInput(const QString& input,const QString& output,const QString& error,bool cancelled,bool skipped) {
+    if(!error.isEmpty())fileErrors_[input]+=error+"\nOutput: "+output+"\n";
+    if(cancelled)++fileCancelled_[input];
+    if(skipped)++fileSkipped_[input];
+    if(error.isEmpty()&&!cancelled&&!skipped)++fileSucceeded_[input];
+    const int left=--remaining_[input];
     // With multiple outputs, a later success must not hide an earlier failure.
-    if(left>0){emit statusChanged(job.input,QString("In progress · %1 outputs remaining").arg(left),fileErrors_.value(job.input));return;}
-    sessions_.remove(job.input);
-    originalDates_.remove(job.input);
-    const auto errors=fileErrors_.value(job.input);
-    if(!errors.isEmpty())emit statusChanged(job.input,"Failed",errors);
-    else if(fileCancelled_.value(job.input))emit statusChanged(job.input,"Cancelled",QString("%1 output(s) cancelled").arg(fileCancelled_.value(job.input)));
-    else if(fileSkipped_.value(job.input))emit statusChanged(job.input,fileSucceeded_.value(job.input)?"Done · skipped existing outputs":"Skipped",QString("%1 existing output(s) skipped\n%2").arg(fileSkipped_.value(job.input)).arg(job.output));
-    else emit statusChanged(job.input,"Done",job.output);
+    if(left>0){emit statusChanged(input,QString("In progress · %1 outputs remaining").arg(left),fileErrors_.value(input));return;}
+    sessions_.remove(input);
+    originalDates_.remove(input);
+    const auto errors=fileErrors_.value(input);
+    if(!errors.isEmpty())emit statusChanged(input,"Failed",errors);
+    else if(fileCancelled_.value(input))emit statusChanged(input,"Cancelled",QString("%1 output(s) cancelled").arg(fileCancelled_.value(input)));
+    else if(fileSkipped_.value(input))emit statusChanged(input,fileSucceeded_.value(input)?"Done · skipped existing outputs":"Skipped",QString("%1 existing output(s) skipped\n%2").arg(fileSkipped_.value(input)).arg(output));
+    else emit statusChanged(input,"Done",output);
 }
 }

@@ -38,6 +38,8 @@ Supported HDR formats: JPG, PNG, JXR, JXL, HEIF, AVIF, OpenEXR, Radiance HDR, PF
 
 The Qt 6 GUI for Windows, Linux and macOS uses FFmpeg for video conversion and frame grabs. The Video tab selects H.264, HEVC or AV1 independently from the container and dynamic range. It offers encoder presets, rate control, bit depth, chroma subsampling and audio settings, with SDR tone mapping and PQ or HLG output for HEVC and AV1. Frames can be exported to 16-bit PNG, JXL and AVIF.
 
+The GIF tab combines pictures and video in browser order into one looping GIF, WebP, APNG, JPEG XL or AVIF file. JPEG XL, APNG and AVIF also support HDR. Enter a rate in Hz or a frame duration in milliseconds. Slow motion keeps every decoded video frame and displays it at the chosen rate. The tab uses the quality, tone mapping and pixel settings from Conversion, with its own canvas alignment and maximum edge. Video input and GIF encoding require FFmpeg.
+
 special thanks to  [MPCVR](https://github.com/Aleksoid1978/VideoRenderer/) and [SKIV](https://github.com/SpecialKO/SKIV) for the best HDR to SDR tone mappers.
 
 #### The app uses piecewise tone mapping (customized skiv) for HDR to SDR conversion, the results are much better than tools like Xbox Game Bar built-in PNG.  

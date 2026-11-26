@@ -31,7 +31,7 @@ endif()
 add_library(jxrc ${jxrc_library_type} src/converter.cpp src/inspect.cpp src/native/hdr_convert.cpp src/native/jxl_hdr.cpp
     src/native/avif_hdr.cpp src/native/gain_map.cpp src/native/still_jxl.cpp src/native/still_avif.cpp
     src/native/exif_metadata.cpp src/native/heif_decode.cpp src/native/source_export.cpp src/native/raw_still.cpp src/native/regular_decode.cpp src/native/jpeg_decode.cpp src/native/linear_decode.cpp src/native/png_encode.cpp src/native/webp_encode.cpp src/native/thread_budget.cpp
-    src/native/mpcvr_tone_map.cpp src/native/video_color.cpp)
+    src/native/mpcvr_tone_map.cpp src/native/video_color.cpp src/native/animation_encode.cpp)
 add_library(jxrc::jxrc ALIAS jxrc)
 set_target_properties(jxrc PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON VERSION ${PROJECT_VERSION} SOVERSION 0)
 if(JXRC_SHARED_ENGINE)
@@ -54,7 +54,7 @@ target_include_directories(jxrc PUBLIC include "${CMAKE_CURRENT_BINARY_DIR}/gene
 add_dependencies(jxrc jxrc_jpeg_build)
 add_dependencies(jxrc_raw jxrc_jpeg_build)
 target_compile_definitions(jxrc PRIVATE EHVIEWER_HDR_CODECS)
-target_link_libraries(jxrc PRIVATE heif jxrc_uhdr jpeg-static jxl jxl_threads jxl_cms skcms avif jxrc_raw jxrc_jxr png_static webpdemux libwebpmux tiff OpenEXR::OpenEXR ${JXRC_EXIV2_TARGET} Threads::Threads)
+target_link_libraries(jxrc PRIVATE heif jxrc_uhdr jpeg-static jxl jxl_threads jxl_cms skcms avif jxrc_raw jxrc_jxr png_static ZLIB::ZLIB webpdemux libwebpmux tiff OpenEXR::OpenEXR ${JXRC_EXIV2_TARGET} Threads::Threads)
 if(UNIX AND NOT APPLE)
     # Keep bundled libjpeg symbols local. Qt's image plugin may use a different
     # JPEG ABI, and ELF symbol interposition must not bind it to this codec.

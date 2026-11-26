@@ -1,8 +1,11 @@
 #include "video_conversion.hpp"
+#include "animation_conversion.hpp"
+#include "video_frame.hpp"
 #include "video_source.hpp"
 #include "../native/staged_output.h"
 #include "../native/video_color.h"
 #include <QByteArray>
+#include <QFileInfo>
 #include <QProcess>
 #include <QSysInfo>
 #include <algorithm>
@@ -55,10 +58,10 @@ QString encoderPixelFormat(const VideoStream& stream, bool hdr, const VideoOutpu
     const auto format=stream.pixelFormat.chopped(2);
     const bool deep=stream.bitDepth>8||format.endsWith("10")||format.endsWith("12")||
         format.endsWith("14")||format.endsWith("16")||format.endsWith("48")||format.endsWith("64");
-    const bool tenBit=target.depth==10 || (target.depth==0 && (hdr || (deep && target.codec!=VideoCodec::h264)));
-    if(target.encoder==VideoEncoder::nvenc)return tenBit?"p010le":"nv12";
+    const int depth=target.depth?target.depth:(hdr||(deep&&target.codec!=VideoCodec::h264)?10:8);
+    if(target.encoder==VideoEncoder::nvenc)return depth==10?"p010le":"nv12";
     const QString chroma=target.chroma==VideoChroma::yuv444?"444":target.chroma==VideoChroma::yuv422?"422":"420";
-    return "yuv"+chroma+(tenBit?"p10le":"p");
+    return "yuv"+chroma+"p"+(depth==8?QString{}:QString::number(depth)+"le");
 }
 
 QStringList encoderArguments(const VideoOutput& target, int threads, const QString& contentLight) {
@@ -78,8 +81,14 @@ QStringList encoderArguments(const VideoOutput& target, int threads, const QStri
         if(aom)args << "-b:v" << "0";
         break;
     case VideoRate::cqp:
-        if(nvenc)args << "-rc" << "constqp";
-        args << "-qp" << QString::number(target.factor);
+        if(aom) {
+            const auto qp=QString::number(target.factor);
+            args << "-crf" << qp << "-b:v" << "0" << "-qmin" << qp << "-qmax" << qp << "-aq-mode" << "0";
+        } else {
+            if(nvenc)args << "-rc" << "constqp";
+            if(target.encoder==VideoEncoder::svt)params << "rc=0" << "aq-mode=0" << "qp="+QString::number(target.factor);
+            args << "-qp" << QString::number(target.factor);
+        }
         break;
     case VideoRate::bitrate:
         if(nvenc)args << "-rc" << "vbr";
@@ -172,34 +181,24 @@ private:
     int last_=-1;
 };
 
-void streamFrames(const QString& ffmpeg,const QStringList& args,VideoProcess& encoder,EncodeProgress& progress,
-                  const QSize& size,VideoColor source,VideoColor output,const Options& options,
-                  const std::function<bool()>& cancelled) {
+void readFrames(const QString& ffmpeg,const QStringList& args,const QSize& size,
+                const std::function<bool()>& cancelled,const std::function<void(QByteArray&)>& frameReady,
+                const std::function<void()>& poll={}) {
     const auto pixels=quint64(size.width())*quint64(size.height());
-    if(pixels>quint64(std::numeric_limits<qsizetype>::max())/8)
+    if(!pixels||pixels>quint64(std::numeric_limits<qsizetype>::max())/8)
         throw std::runtime_error("Video frame dimensions exceed addressable memory.");
     QByteArray frame(qsizetype(pixels*8),Qt::Uninitialized);
-    std::vector<float> working;
     VideoProcess decoder(ffmpeg,args);
     qsizetype available=0;
     bool wroteFrame=false;
     while(true) {
         checkCancelled(cancelled);
-        progress.poll();
-        if(encoder.process.state()==QProcess::NotRunning)encoder.fail("Video encode failed");
+        if(poll)poll();
         decoder.readErrors();
         const auto read=decoder.process.read(frame.data()+available,frame.size()-available);
         if(read>0)available+=read;
         if(available==frame.size()) {
-            process_video_pixels(reinterpret_cast<uint8_t*>(frame.data()),size_t(pixels),source,output,options,working);
-            checkCancelled(cancelled);
-            if(encoder.process.write(frame)!=frame.size())encoder.fail("Cannot send frame to FFmpeg");
-            while(encoder.process.bytesToWrite()>0) {
-                checkCancelled(cancelled);
-                encoder.process.waitForBytesWritten(50);
-                progress.poll();
-                if(encoder.process.state()==QProcess::NotRunning)encoder.fail("Video encode failed");
-            }
+            frameReady(frame);
             wroteFrame=true;
             available=0;
         } else if(decoder.process.state()==QProcess::NotRunning) {
@@ -211,6 +210,31 @@ void streamFrames(const QString& ffmpeg,const QStringList& args,VideoProcess& en
             decoder.process.waitForReadyRead(50);
         }
     }
+}
+
+void writeFrame(VideoProcess& encoder,const char* data,qsizetype size,const std::function<bool()>& cancelled,
+                const std::function<void()>& poll) {
+    checkCancelled(cancelled);
+    if(encoder.process.write(data,size)!=size)encoder.fail("Cannot send frame to FFmpeg");
+    while(encoder.process.bytesToWrite()>0) {
+        checkCancelled(cancelled);
+        encoder.process.waitForBytesWritten(50);
+        poll();
+    }
+}
+
+void streamFrames(const QString& ffmpeg,const QStringList& args,VideoProcess& encoder,EncodeProgress& progress,
+                  const QSize& size,VideoColor source,VideoColor output,const Options& options,
+                  const std::function<bool()>& cancelled) {
+    std::vector<float> working;
+    const auto poll=[&] {
+        progress.poll();
+        if(encoder.process.state()==QProcess::NotRunning)encoder.fail("Video encode failed");
+    };
+    readFrames(ffmpeg,args,size,cancelled,[&](QByteArray& frame) {
+        process_video_pixels(reinterpret_cast<uint8_t*>(frame.data()),size_t(frame.size()/8),source,output,options,working);
+        writeFrame(encoder,frame.constData(),frame.size(),cancelled,poll);
+    },poll);
     encoder.process.closeWriteChannel();
 }
 }
@@ -225,9 +249,9 @@ const VideoEncoderSettings& videoEncoderSettings(VideoCodec codec, VideoEncoder 
         {"psnr","ssim","grain","fastdecode","zerolatency","animation"},
         "medium","-x265-params",23,51,x26xRates};
     static const VideoEncoderSettings aom={"libaom-av1",{"0","1","2","3","4","5","6","7","8"},
-        {},"6","-aom-params",30,63,{VideoRate::crf,VideoRate::bitrate,VideoRate::lossless}};
+        {},"6","-aom-params",30,63,{VideoRate::crf,VideoRate::cqp,VideoRate::bitrate,VideoRate::lossless}};
     static const VideoEncoderSettings svt={"libsvtav1",{"0","1","2","3","4","5","6","7","8","9","10","11","12","13"},
-        {},"8","-svtav1-params",35,63,{VideoRate::crf,VideoRate::bitrate}};
+        {},"8","-svtav1-params",35,63,{VideoRate::crf,VideoRate::cqp,VideoRate::bitrate}};
     static const QStringList nvencPresets={"p1","p2","p3","p4","p5","p6","p7"};
     static const QStringList nvencTunes={"hq","ll","ull"};
     static const QList<VideoRate> nvencRates={VideoRate::cqp,VideoRate::bitrate};
@@ -251,7 +275,7 @@ bool supportsVideoAudio(VideoContainer container, VideoAudio audio) {
 }
 
 bool supportsVideoDepth(VideoCodec codec, VideoEncoder encoder, int depth) {
-    return depth==0 || depth==8 || (depth==10 && !(codec==VideoCodec::h264 && encoder==VideoEncoder::nvenc));
+    return (depth==12 && encoder==VideoEncoder::software && codec!=VideoCodec::h264) || depth==0 || depth==8 || (depth==10 && !(codec==VideoCodec::h264 && encoder==VideoEncoder::nvenc));
 }
 
 QString videoExtension(VideoContainer container) {
@@ -298,7 +322,7 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     const bool hdrOutput=transfer==VideoTransfer::automatic?stream.hdr()&&!h264&&target.depth!=8:transfer!=VideoTransfer::sdr;
     if(hdrOutput&&!stream.hdr())throw std::runtime_error("PQ and HLG output require an HDR source. Use Auto or SDR for SDR videos.");
     if(hdrOutput&&h264)throw std::runtime_error("H.264 output uses SDR. Choose HEVC or AV1 for HDR.");
-    if(hdrOutput&&target.depth==8)throw std::runtime_error("HDR output requires auto or 10-bit output depth.");
+    if(hdrOutput&&target.depth==8)throw std::runtime_error("HDR output requires Auto, 10-bit, or 12-bit output depth.");
     const int outputTransfer=!hdrOutput?1:transfer==VideoTransfer::pq?16:transfer==VideoTransfer::hlg?18:stream.transfer;
     const bool processed=stream.dolbyVision||target.processPixels||
         (stream.hdr()&&stream.transfer!=outputTransfer);
@@ -346,7 +370,7 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     const QString light=!processed&&outputTransfer==16&&stream.maxContentLight>0?
         QString("%1,%2").arg(stream.maxContentLight).arg(stream.maxFrameAverageLight):QString{};
     encode << encoderArguments(target,encodingThreads,light)
-           << "-vf" << filter << "-pix_fmt" << pixFmt << "-threads:v" << encodeThreads
+           << "-vf" << filter << "-pix_fmt" << (target.depth==12?"+"+pixFmt:pixFmt) << "-threads:v" << encodeThreads
            << "-color_primaries" << primaries << "-color_trc" << trc << "-colorspace" << matrix << "-color_range" << range
            << "-fps_mode" << "passthrough";
     if(!processed&&!stream.timeBase.isEmpty())encode << "-enc_time_base:v" << stream.timeBase;
@@ -380,4 +404,205 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     stage.publish(output,options.overwrite);
     return false;
 }
+QString animationExtension(AnimationFormat format) {
+    switch(format) {
+    case AnimationFormat::gif:return "gif";
+    case AnimationFormat::webp:return "webp";
+    case AnimationFormat::png:return "png";
+    case AnimationFormat::jxl:return "jxl";
+    case AnimationFormat::avif:return "avif";
+    }
+    throw std::invalid_argument("Unknown animation format.");
+}
+
+QString animationSuffix(const AnimationOutput& target) {
+    QString range;
+    switch(target.transfer) {
+    case AnimationTransfer::sdr:break;
+    case AnimationTransfer::pq:range="_pq";break;
+    case AnimationTransfer::hlg:range="_hlg";break;
+    case AnimationTransfer::linear:range="_linear";break;
+    case AnimationTransfer::scrgb:range="_scrgb";break;
+    }
+    return "_animation"+range+"."+animationExtension(target.format);
+}
+
+namespace {
+std::filesystem::path pathFromQt(const QString& value) {
+    return std::filesystem::u8path(value.toUtf8().constData());
+}
+QSize animationSize(QSize size,unsigned edge) {
+    if(edge&&unsigned(std::max(size.width(),size.height()))>edge) {
+        size.scale(int(edge),int(edge),Qt::KeepAspectRatio);
+        size=size.expandedTo({1,1});
+    }
+    return size;
+}
+struct AnimationSource {
+    QString path;
+    QSize size;
+    VideoStream video;
+    bool isVideo() const {return video.index>=0;}
+};
+}
+
+bool convertAnimation(const std::filesystem::path& output,const Options& options,const AnimationOutput& target,
+                      const std::function<bool()>& cancelled,const std::function<void(int)>& progress) {
+    validate(options);
+    checkCancelled(cancelled);
+    if(target.inputs.isEmpty()||target.delayUs<1000||target.delayUs>600000000||
+       target.horizontal>2||target.vertical>2)
+        throw std::invalid_argument("Invalid animation frame timing or alignment.");
+    const bool gif=target.format==AnimationFormat::gif, webp=target.format==AnimationFormat::webp;
+    const bool sdr=target.transfer==AnimationTransfer::sdr;
+    if((gif||webp)&&!sdr)throw std::invalid_argument("GIF and WebP animation require SDR output.");
+    if(gif&&target.delayUs<10000)throw std::invalid_argument("GIF frame delays must be at least 10 ms.");
+    if((target.transfer==AnimationTransfer::linear||target.transfer==AnimationTransfer::scrgb)&&target.format!=AnimationFormat::jxl)
+        throw std::invalid_argument("Linear animation output requires JPEG XL.");
+    const auto exists=[&] {return std::filesystem::exists(std::filesystem::symlink_status(output));};
+    if(!options.overwrite&&exists())return true;
+    QString ffmpeg;
+    QList<AnimationSource> sources;
+    QSize canvas(0,0);
+    unsigned sourceBits=8;
+    bool wide=false;
+    for(const auto& input:target.inputs) {
+        checkCancelled(cancelled);
+        const auto path=pathFromQt(input);
+        std::error_code ec;
+        if(std::filesystem::equivalent(output,path,ec))throw std::invalid_argument("Output would replace an input file.");
+        AnimationSource source;
+        source.path=input;
+        if(supportedVideoFile(input)) {
+            source.video=video::probeVideo(input,cancelled);
+            if(!source.video.hdrError.isEmpty())throw std::runtime_error(source.video.hdrError.toStdString());
+            source.size=source.video.size;
+            const auto aspect=source.video.displayAspect;
+            if(aspect>0&&std::isfinite(aspect)) {
+                const double width=source.size.height()*aspect;
+                if(width>std::numeric_limits<int>::max())throw std::runtime_error("Video display dimensions are too large.");
+                source.size.setWidth(std::max(1,qRound(width)));
+            }
+            const auto& fmt=source.video.pixelFormat;
+            const unsigned bits=source.video.bitDepth>0?unsigned(source.video.bitDepth):
+                fmt.contains("12")?12:fmt.contains("10")||fmt.startsWith("p010")?10:fmt.contains("16")?16:8;
+            sourceBits=std::max(sourceBits,bits);
+            wide|=source.video.primaries==9||source.video.primaries==12;
+        } else {
+            const auto info=inspect(path,cancelled);
+            if(info.width>unsigned(std::numeric_limits<int>::max())||info.height>unsigned(std::numeric_limits<int>::max()))
+                throw std::runtime_error("Image dimensions are too large for animation.");
+            source.size={int(info.width),int(info.height)};
+            sourceBits=std::max(sourceBits,info.gainmap&&options.gain_map_reconstruction==GainMapReconstruction::full_image?32u:info.bits);
+            // JXR and linear sources may have extended sRGB colors even when
+            // the source container names its primaries BT.709.
+            wide|=info.hdr||info.raw||info.primaries.find("2020")!=std::string::npos||
+                  info.primaries.find("P3")!=std::string::npos||info.transfer=="Linear";
+        }
+        source.size=animationSize(source.size,options.max_edge);
+        if(source.size.isEmpty())throw std::runtime_error("Animation source dimensions are unavailable.");
+        canvas=canvas.expandedTo(source.size);
+        sources.append(std::move(source));
+    }
+    if(gif||std::any_of(sources.cbegin(),sources.cend(),[](const auto& source){return source.isVideo();})) {
+        ffmpeg=video::executable("ffmpeg");
+        if(ffmpeg.isEmpty())throw std::runtime_error("GIF output and video inputs require FFmpeg on PATH.");
+    }
+
+    unsigned bits=sourceBits>8||!sdr?16:8;
+    if(target.format==AnimationFormat::png&&sdr&&!options.quality.auto_bit_depth)bits=unsigned(options.quality.png_depth);
+    if(target.format==AnimationFormat::avif) {
+        const auto& q=options.quality;
+        const unsigned cap=q.preset==Preset::custom?unsigned(q.avif_depth):
+            q.preset==Preset::lossless||q.preset==Preset::high?12u:10u;
+        bits=std::min(cap,!sdr?std::max(10u,sourceBits>10?12u:10u):sourceBits>10?12u:sourceBits>8?10u:8u);
+        if(!sdr&&bits<10)throw std::invalid_argument("HDR AVIF animation requires a 10- or 12-bit AVIF maximum depth.");
+    }
+    const bool srgb=gif||webp||options.srgb_clamp||target.transfer==AnimationTransfer::scrgb;
+    const unsigned primaries=srgb?1:!sdr||wide?9:1;
+    const AnimationEncoding encoding{target.format,target.transfer,unsigned(canvas.width()),unsigned(canvas.height()),bits,primaries,target.delayUs};
+    Staging stage(output);
+    std::unique_ptr<AnimationEncoder> native;
+    std::unique_ptr<VideoProcess> gifEncoder;
+    const auto rate=QString("1000000/%1").arg(target.delayUs);
+    const QString threads=QString::number(std::clamp(options.threads,1u,4u));
+    if(gif) {
+        if(canvas.width()>65535||canvas.height()>65535)throw std::runtime_error("GIF animation exceeds the codec dimensions.");
+        const QString size=QString("%1x%2").arg(canvas.width()).arg(canvas.height());
+        const QStringList args={"-hide_banner","-loglevel","error","-nostdin","-xerror","-y",
+            "-filter_complex_threads",threads,"-f","rawvideo","-pixel_format","rgba","-video_size",size,"-framerate",rate,"-i","pipe:0",
+            "-filter_complex","split[frames][palette];[palette]palettegen=stats_mode=single[p];[frames][p]paletteuse=new=1",
+            "-loop","0","-final_delay",QString::number(qRound(target.delayUs/10000.)),
+            "-f","gif",QString::fromStdString(stage.file.u8string())};
+        gifEncoder=std::make_unique<VideoProcess>(ffmpeg,args);
+    } else native=std::make_unique<AnimationEncoder>(stage.file,encoding,options);
+
+    const auto addFrame=[&](AnimationFrame&& frame) {
+        checkCancelled(cancelled);
+        auto pixels=compose_animation_frame(std::move(frame),encoding,target.horizontal,target.vertical,options);
+        if(native)native->add(pixels);
+        else {
+            const auto rgba=animation_rgba8(pixels);
+            writeFrame(*gifEncoder,reinterpret_cast<const char*>(rgba.data()),qsizetype(rgba.size()),cancelled,[&] {
+                gifEncoder->readErrors();
+                if(gifEncoder->process.state()==QProcess::NotRunning)gifEncoder->fail("GIF encode failed");
+            });
+        }
+    };
+
+    int lastProgress=-1;
+    for(qsizetype i=0;i<sources.size();++i) {
+        checkCancelled(cancelled);
+        const auto& source=sources[i];
+        const auto update=[&](double fraction) {
+            const int percent=std::min(99,int((i+std::clamp(fraction,0.,1.))*100./sources.size()));
+            if(percent>lastProgress){lastProgress=percent;progress(percent);}
+        };
+        try {
+            if(!source.isVideo()) {
+                addFrame(AnimationImageRenderer::render(pathFromQt(source.path),options,!sdr,cancelled));
+            } else {
+                auto stream=source.video;
+                const VideoColor color{sourcePrimaries(stream),sourceTransfer(stream)};
+                const bool rgb=stream.matrixName=="gbr"||stream.pixelFormat.startsWith("rgb")||
+                    stream.pixelFormat.startsWith("bgr")||stream.pixelFormat.startsWith("gbr");
+                if(stream.inputMatrix.isEmpty()&&!rgb)stream.inputMatrix=matrixFilter(stream.matrixName,color.primaries);
+                const QString rgbFormat=QSysInfo::ByteOrder==QSysInfo::LittleEndian?"rgba64le":"rgba64be";
+                const QString sampling=target.slowMotion?QString{}:"fps=fps="+rate+":start_time=0:round=up,";
+                const auto filter=sampling+video::frameFilter(stream,source.size,rgbFormat,false)
+                    .replace("flags=fast_bilinear","flags=accurate_rnd+full_chroma_int");
+                const QStringList args={"-hide_banner","-loglevel","error","-nostdin","-xerror","-filter_threads",threads,
+                    "-threads",threads,"-i",source.path,"-map",QString("0:%1").arg(stream.index),"-an","-vf",filter,
+                    "-c:v","rawvideo","-threads:v","1","-pix_fmt",rgbFormat,"-fps_mode","passthrough","-f","rawvideo","pipe:1"};
+                uint64_t frames=0;
+                const double step=target.slowMotion?(stream.fps>0?1./stream.fps:0):target.delayUs/1000000.;
+                readFrames(ffmpeg,args,source.size,cancelled,[&](QByteArray& frame) {
+                    addFrame(render_animation_video_frame(reinterpret_cast<const uint8_t*>(frame.constData()),
+                        unsigned(source.size.width()),unsigned(source.size.height()),color,sdr,options));
+                    ++frames;
+                    if(stream.duration>0)update(frames*step/stream.duration);
+                });
+            }
+        } catch(const std::exception& error) {
+            throw std::runtime_error((QFileInfo(source.path).fileName()+": "+QString::fromUtf8(error.what())).toStdString());
+        }
+        update(1);
+    }
+    if(native)native->finish(cancelled);
+    else {
+        gifEncoder->process.closeWriteChannel();
+        while(gifEncoder->process.state()!=QProcess::NotRunning) {
+            checkCancelled(cancelled);
+            gifEncoder->process.waitForFinished(50);
+            gifEncoder->readErrors();
+        }
+        gifEncoder->checkExit("GIF encode failed");
+    }
+    checkCancelled(cancelled);
+    if(std::filesystem::file_size(stage.file)==0)throw std::runtime_error("The animation encoder produced no output.");
+    if(!options.overwrite&&exists())return true;
+    stage.publish(output,options.overwrite);
+    return false;
+}
+
 }

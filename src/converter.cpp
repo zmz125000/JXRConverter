@@ -1,4 +1,5 @@
 #include "native/image_size.h"
+#include "native/animation.h"
 #include "jxrc/converter.hpp"
 #include "jxrc/version.hpp"
 #include "reader_pixels.h"
@@ -21,6 +22,7 @@
 #include <cstring>
 #include <fstream>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <stdexcept>
 
@@ -189,23 +191,40 @@ Result convert(const std::filesystem::path& input,const std::filesystem::path& o
     return ConversionSession(input).convert(output,o);
 }
 Result ConversionSession::convert(const std::filesystem::path& output,const Options& o) {
+    return run(output,o,nullptr,{});
+}
+AnimationFrame AnimationImageRenderer::render(const std::filesystem::path& input,const Options& options,
+                                      bool hdr,const std::function<bool()>& cancelled) {
+    auto o=options;
+    o.mode=Mode::process;
+    o.target=hdr?Target::png_hdr:Target::png;
+    o.keep_exif=false;
+    o.jpeg_transcoding=false;
+    AnimationFrame frame;
+    ConversionSession(input).run({},o,&frame,cancelled);
+    return frame;
+}
+Result ConversionSession::run(const std::filesystem::path& output,const Options& o,AnimationFrame* frame,
+                              const std::function<bool()>& cancelled) {
     auto& cache=*impl_;const auto& input=cache.input;
 
     JxrcThreadBudget thread_budget(o.threads);
-    validate(o);require(!output.empty(),"Empty output path");
+    validate(o);require(frame||!output.empty(),"Empty output path");
     require(std::filesystem::is_regular_file(input),"Input must be a regular file");
     std::error_code ec;
-    require(!std::filesystem::equivalent(input,output,ec),"Input and output refer to the same file");
-    if(!o.overwrite && std::filesystem::exists(std::filesystem::symlink_status(output))) {
+    require(frame||!std::filesystem::equivalent(input,output,ec),"Input and output refer to the same file");
+    if(!frame&&!o.overwrite && std::filesystem::exists(std::filesystem::symlink_status(output))) {
         Result skipped;skipped.skipped=true;return skipped;
     }
     if(cache.format<0){
-        auto source=read(input);const int format=kind(source);
+        auto source=read(input,cancelled);const int format=kind(source);
         if(format!=6 && format!=5){const auto info=inspect_bytes(source);cache.gainmap=info.gainmap;cache.source_hdr=info.hdr;cache.bits=info.bits;cache.input_width=info.width;cache.input_height=info.height;cache.half_jxr=format==4&&info.hdr&&info.bits==16;cache.integer_sdr=!info.hdr&&(format==0||format==1||format==7||(format==3&&is_integer_jxl(source.data(),source.size())));}
         cache.bytes=std::move(source);cache.format=format;
     }
-    const auto& bytes=cache.bytes;const int format=cache.format;Staging stage(output);
-    const auto path=stage.file.u8string();
+    const auto& bytes=cache.bytes;const int format=cache.format;
+    std::optional<Staging> stage;
+    if(!frame)stage.emplace(output);
+    const auto path=stage?stage->file.u8string():std::string{};
     StillEncodeQuality q(static_cast<int>(o.quality.preset),o.quality.jxl_distance,o.quality.codec_quality,o.quality.avif_depth,o.quality.downsize_gainmap);
     q.transparency_background_white=white_background(o);q.remove_alpha=remove_alpha(o);
     q.png_bits=o.quality.png_depth;q.png_auto_bits=o.quality.auto_bit_depth;
@@ -229,7 +248,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && sdr_target && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
+    if(!frame && o.mode==Mode::process && sdr_target && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
         if(format==6&&!cache.source_hdr) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
             cache.source_hdr=regular->hdr();direct_sdr=!cache.source_hdr;
@@ -247,7 +266,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         throw std::runtime_error("WebP is SDR; use Process pixels mode for HDR input");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
     bool source_done=false;
-    if(direct_gainmap || direct_sdr || direct_jxl || (o.mode==Mode::preserve && format!=4&&!full_gainmap)) {
+    if(!frame&&(direct_gainmap || direct_sdr || direct_jxl || (o.mode==Mode::preserve && format!=4&&!full_gainmap))) {
         require(format==0||format==1||format==3||format==6||format==7,"Source preservation supports JPEG, AVIF, HEIC, JXL and regular raster images; use --mode process for RAW/JXR");
         int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:o.target==Target::png?3:o.target==Target::webp?kWebpSourceTarget:2;
         int rc=0;
@@ -418,6 +437,12 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
                 }
             } else cache.mapped_sdr.clear();
         }
+        if(frame) {
+            frame->width=w;frame->height=h;
+            frame->primaries=gamut==UHDR_CG_BT_2100?9:gamut==UHDR_CG_DISPLAY_P3?12:1;
+            frame->rgba=std::move(sdr_target&&!cache.mapped_sdr.empty()?cache.mapped_sdr:linear);
+            return result;
+        }
         const float* export_pixels=sdr_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():linear.data();
         const float* export_base=gain_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():sdr_base.empty()?nullptr:sdr_base.data();
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
@@ -459,7 +484,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         result.transfer=hlg_target(o.target)?18:o.target==Target::avif_pq||o.target==Target::jxl_pq||o.target==Target::png_hdr?16:0;
         result.encoding=result.gainmap?"gainmap":result.transfer==18?"hlg":result.transfer==16?"pq":(linear_jxl(o.target)||cache.scrgb)?"linear":"sdr";
     }
-    require(std::filesystem::file_size(stage.file)>0,"Encoder produced no output");stage.publish(output,o.overwrite);return result;
+    require(std::filesystem::file_size(stage->file)>0,"Encoder produced no output");stage->publish(output,o.overwrite);return result;
 }
 Preview preview(const std::filesystem::path& input,unsigned edge) {
     return preview(input,edge,{});

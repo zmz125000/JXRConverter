@@ -746,8 +746,12 @@ private slots:
         QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
         auto* panel=window.findChild<QWidget*>("outputPanel");QVERIFY(panel);QCOMPARE(panel->width(),conversion->width());auto* progress=window.findChild<QProgressBar*>("conversionProgress");QCOMPARE(progress->mapTo(panel,QPoint()).x(),destination->mapTo(panel,QPoint()).x());QCOMPARE(progress->width(),destination->width());auto* toggle=window.findChild<QPushButton*>("toggleOutput");QCOMPARE(toggle->width(),progress->width());QCOMPARE(toggle->mapTo(&window,QPoint()).x(),progress->mapTo(&window,QPoint()).x());
         window.findChild<QPushButton*>("stopProgress")->show();QCoreApplication::processEvents();QCOMPARE(progress->width(),destination->width());window.findChild<QPushButton*>("stopProgress")->hide();QCOMPARE(window.findChild<QPushButton*>("convertVisible")->parentWidget(),panel);QVERIFY(panel->isAncestorOf(window.findChild<QProgressBar*>("conversionProgress")));
-        tabs->setCurrentIndex(3);QCOMPARE(tabs->tabText(3),QString("Log"));auto* log=window.findChild<QPlainTextEdit*>("outputLog");auto* clear=window.findChild<QPushButton*>("clearLog");
-        QVERIFY(tabs->widget(3)->isAncestorOf(clear));QCOMPARE(clear->parentWidget(),log);QCOMPARE(tabs->widget(3)->layout()->count(),1);QVERIFY(log->viewport()->geometry().contains(clear->geometry()));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>tabs->widget(3)->width()/2);
+        auto* logPanel=window.findChild<QWidget*>("logPanel");
+        tabs->setCurrentWidget(logPanel);
+        QCOMPARE(tabs->tabText(tabs->indexOf(logPanel)),QString("Log"));
+        auto* log=window.findChild<QPlainTextEdit*>("outputLog");
+        auto* clear=window.findChild<QPushButton*>("clearLog");
+        QVERIFY(logPanel->isAncestorOf(clear));QCOMPARE(clear->parentWidget(),log);QCOMPARE(logPanel->layout()->count(),1);QVERIFY(log->viewport()->geometry().contains(clear->geometry()));log->appendPlainText("Clear this log");clear->click();QVERIFY(log->toPlainText().isEmpty());QVERIFY(clear->x()>logPanel->width()/2);
         log->setPlainText(QString("log entry\n").repeated(200));QTest::qWait(10);const auto position=clear->pos();log->verticalScrollBar()->setValue(0);log->verticalScrollBar()->setValue(log->verticalScrollBar()->maximum());QCOMPARE(clear->pos(),position);
         window.resize(1600,850);
         // Qt defers resizing hidden tab pages until they are shown. The output
@@ -869,7 +873,8 @@ private slots:
     }
     void outputLogRawResetAndUpdateSchedule() {
         appSettings().clear();MainWindow window;window.show();
-        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");QCOMPARE(tabs->tabText(3),QString("Log"));
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+        QCOMPARE(tabs->tabText(tabs->indexOf(window.findChild<QWidget*>("logPanel"))),QString("Log"));
         auto* output=window.findChild<QPlainTextEdit*>("outputLog");QVERIFY(output->isReadOnly());QCOMPARE(output->maximumBlockCount(),5000);
         std::fputs("Native stdout marker\n",stdout);std::fflush(stdout);std::fputs("Native stderr marker\n",stderr);std::fflush(stderr);
         // QtTest owns the Qt message handler in test mode; only the raw
@@ -1256,6 +1261,12 @@ private slots:
         container->setCurrentIndex(int(VideoContainer::webm));
         QCOMPARE(speed->currentText(),QString("6"));
         QCOMPARE(factor->maximum(),63);
+        QVERIFY(rate->findData(int(VideoRate::cqp))>=0);
+        depth->setCurrentIndex(depth->findData(12));
+        QCOMPARE(depth->currentData().toInt(),12);
+        backend->setCurrentIndex(int(VideoEncoder::svt));
+        QCOMPARE(depth->currentData().toInt(),0);
+        QVERIFY(rate->findData(int(VideoRate::cqp))>=0);
         backend->setCurrentIndex(int(VideoEncoder::nvenc));
         QCOMPARE(speed->currentText(),QString("p4"));
         QCOMPARE(rate->currentData().toInt(),int(VideoRate::cqp));
@@ -1401,6 +1412,112 @@ private slots:
             QCOMPARE(webmStreams.at(0).toObject().value("codec_name").toString(),QString("av1"));
             QCOMPARE(webmStreams.at(0).toObject().value("color_transfer").toString(),QString("bt709"));
             if(opusAvailable)QCOMPARE(webmStreams.at(1).toObject().value("codec_name").toString(),QString("opus"));
+        }
+    }
+    void animationOutputAndTiming() {
+        const auto directory=root("animation");
+        const auto wide=makeImage(directory,"a.jpg",80,40,100);
+        const auto tall=makeImage(directory,"b.jpg",24,48,140);
+        const auto outputs=root("animation-output");
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        window.addPaths({tall,wide});
+        QTRY_COMPARE(window.catalog()->rowCount(),2);
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+        QCOMPARE(tabs->tabText(2),QString("GIF"));
+        tabs->setCurrentIndex(2);
+        window.findChild<QLineEdit*>("outputDirectory")->setText(outputs);
+        auto* format=window.findChild<QComboBox*>("animationFormat");
+        auto* transfer=window.findChild<QComboBox*>("animationTransfer");
+        auto* rate=window.findChild<QDoubleSpinBox*>("animationFrameRate");
+        auto* convert=window.findChild<QPushButton*>("convertVisible");
+        QVERIFY(!transfer->isEnabled());
+        rate->setValue(4);
+        window.findChild<QCheckBox*>("animationMilliseconds")->setChecked(true);
+        QCOMPARE(rate->value(),250.);
+        window.findChild<QSpinBox*>("animationMaxEdge")->setValue(40);
+        window.findChild<QComboBox*>("animationAlignment")->setCurrentIndex(8);
+
+        format->setCurrentIndex(int(jxrc::AnimationFormat::png));
+        transfer->setCurrentIndex(int(jxrc::AnimationTransfer::pq));
+        QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
+        QSignalSpy written(window.queue(),&ConversionQueue::outputFinished);
+        convert->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(),1,30000);
+        QCOMPARE(finished.last().at(0).toInt(),1);
+        QCOMPARE(window.queue()->total(),1);
+        QCOMPARE(QFileInfo(written.last().at(1).toString()).fileName(),QString("a.jpg"));
+        const auto path=written.last().at(2).toString();
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto bytes=file.readAll();
+        QVERIFY(bytes.contains(QByteArray::fromHex("6349435009100001"))); // BT.2020 PQ.
+        QVERIFY(bytes.contains(QByteArray::fromHex("6163544c0000000200000000"))); // Two frames, loop forever.
+        QVERIFY(bytes.contains(QByteArray::fromHex("6663544c0000000000000028000000280000000000000000000100040000")));
+        QVERIFY(bytes.contains("fdAT"));
+
+        format->setCurrentIndex(int(jxrc::AnimationFormat::jxl));
+        convert->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(),2,30000);
+        QCOMPARE(finished.last().at(0).toInt(),1);
+        const auto outputJxl=std::filesystem::u8path(written.last().at(2).toString().toUtf8().constData());
+        const auto info=jxrc::inspect(outputJxl);
+        QVERIFY(info.hdr);
+        QCOMPARE(info.width,40u);
+        QCOMPARE(info.height,40u);
+
+        format->setCurrentIndex(int(jxrc::AnimationFormat::avif));
+        convert->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(),3,30000);
+        QCOMPARE(finished.last().at(0).toInt(),1);
+        QFile avif(written.last().at(2).toString());
+        QVERIFY(avif.open(QIODevice::ReadOnly));
+        QVERIFY(avif.read(64).contains("avis"));
+
+        format->setCurrentIndex(int(jxrc::AnimationFormat::webp));
+        QCOMPARE(transfer->currentIndex(),0);
+        convert->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.size(),4,30000);
+        QCOMPARE(finished.last().at(0).toInt(),1);
+        QFile webp(written.last().at(2).toString());
+        QVERIFY(webp.open(QIODevice::ReadOnly));
+        QCOMPARE(webp.readAll().count("ANMF"),2);
+    }
+    void animationVideoSlowMotion() {
+        const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
+        const auto ffprobe=QStandardPaths::findExecutable("ffprobe");
+        if(ffmpeg.isEmpty()||ffprobe.isEmpty())QSKIP("FFmpeg and ffprobe are unavailable");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto input=directory.filePath("source.mkv");
+        QProcess process;
+        process.start(ffmpeg,{"-v","error","-f","lavfi","-i","testsrc2=size=64x48:rate=24:duration=1",
+                              "-c:v","ffv1","-y",input});
+        QVERIFY(process.waitForFinished());
+        QCOMPARE(process.exitCode(),0);
+
+        AnimationOutput target;
+        target.inputs={input};
+        target.delayUs=1000000;
+        for(const bool slow:{false,true}) {
+            target.slowMotion=slow;
+            const auto output=directory.filePath(slow?"slow.gif":"regular.gif");
+            std::string error;
+            try {
+                convertAnimation(std::filesystem::u8path(output.toUtf8().constData()),{},target,[]{return false;},[](int){});
+            } catch(const std::exception& e) {
+                error=e.what();
+            }
+            QVERIFY2(error.empty(),error.c_str());
+            process.start(ffprobe,{"-v","error","-show_entries","stream=nb_frames,duration","-of","json",output});
+            QVERIFY(process.waitForFinished());
+            QCOMPARE(process.exitCode(),0);
+            const auto streams=QJsonDocument::fromJson(process.readAllStandardOutput()).object().value("streams").toArray();
+            QCOMPARE(streams.size(),1);
+            const auto stream=streams.first().toObject();
+            QCOMPARE(stream.value("nb_frames").toString().toInt(),slow?24:1);
+            QCOMPARE(stream.value("duration").toString().toDouble(),slow?24.:1.);
         }
     }
     void libraryTabScrollPositions() {

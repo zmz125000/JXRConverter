@@ -1,11 +1,14 @@
 #pragma once
-#include "jxrc/converter.hpp"
+#include "animation.h"
 #include <cstddef>
 
 namespace jxrc {
 struct VideoColor {
     unsigned primaries, transfer; // CICP identifiers
 };
+
+JXRC_API AnimationFrame render_animation_video_frame(const uint8_t* codes, unsigned width, unsigned height,
+                                                     VideoColor source, bool sdr, const Options&);
 
 // Full-range, native-endian RGBA16 frames from the video decoder. Reuse the
 // float buffer between frames, and write the encoder's RGB codes in place.

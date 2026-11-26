@@ -20,11 +20,9 @@ float bt709_code(float value) {
     const float linear=std::clamp(value,0.f,1.f);
     return linear<.0180539685f?4.5f*linear:1.0992968268f*std::pow(linear,.45f)-.0992968268f;
 }
-}
 
-void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoColor output,
-                          const Options& options,std::vector<float>& working) {
-    JxrcThreadBudget budget(options.threads);
+std::vector<float> render_video_pixels(const uint8_t* codes,size_t count,VideoColor source,bool sdr_output,
+                         const Options& options,std::vector<float>& working) {
     uhdr_color_gamut_t gamut;
     cicp_rgb_to_linear(codes,count,16,source.primaries,source.transfer,working,gamut);
     const float exposure=std::exp2(options.exposure);
@@ -34,7 +32,6 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
     });
 
     const bool hdr_source=source.transfer==16||source.transfer==18;
-    const bool sdr_output=output.transfer==1;
     std::vector<float> mapped;
     if(hdr_source&&sdr_output&&options.sdr_tone_map) {
         RenderAnalysis analysis;
@@ -48,7 +45,42 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
                                   options.sdr_auto_hdr_range?range:std::min(range,float(options.sdr_hdr_range_nits)),options);
         }
     }
+    return mapped;
+}
+}
+
+AnimationFrame render_animation_video_frame(const uint8_t* codes,unsigned width,unsigned height,
+                                             VideoColor source,bool sdr,const Options& options) {
+    JxrcThreadBudget budget(options.threads);
+    AnimationFrame frame;
+    frame.width=width;
+    frame.height=height;
+    frame.primaries=source.primaries;
+    auto mapped=render_video_pixels(codes,size_t(width)*height,source,sdr,options,frame.rgba);
+    if(!mapped.empty())frame.rgba=std::move(mapped);
+    if(source.primaries!=1&&source.primaries!=9&&source.primaries!=12) {
+        const auto toXyz=rgb_to_xyz(source.primaries);
+        const auto fromXyz=skiv::inverse(skiv::rgb709_xyz);
+        const auto count=size_t(width)*height;
+        hdr_parallel_pixels(count,hdr_pixel_jobs(count),[&](size_t begin,size_t end,unsigned) {
+            for(size_t i=begin*4;i<end*4;i+=4) {
+                auto* p=frame.rgba.data()+i;
+                const auto rgb=skiv::transform(fromXyz,skiv::transform(toXyz,{p[0],p[1],p[2]}));
+                for(unsigned c=0;c<3;++c)p[c]=float(rgb[c]);
+            }
+        });
+        frame.primaries=1;
+    }
+    return frame;
+}
+
+void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoColor output,
+                          const Options& options,std::vector<float>& working) {
+    JxrcThreadBudget budget(options.threads);
+    const bool sdr_output=output.transfer==1;
+    const auto mapped=render_video_pixels(codes,count,source,sdr_output,options,working);
     const auto& linear=mapped.empty()?working:mapped;
+    const unsigned jobs=hdr_pixel_jobs(count);
     const auto to_xyz=rgb_to_xyz(source.primaries);
     const auto from_xyz=skiv::inverse(rgb_to_xyz(output.primaries));
     const auto output_gamut=output.primaries==9?UHDR_CG_BT_2100:UHDR_CG_BT_709;
