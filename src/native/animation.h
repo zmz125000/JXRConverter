@@ -7,7 +7,7 @@ namespace jxrc {
 enum class AnimationFormat { gif, webp, png, jxl, avif };
 enum class AnimationTransfer { sdr, pq, hlg, linear, scrgb };
 enum class AnimationStack { off, first, previous };
-enum class AnimationResize { off, fit_up, fit_down, fill };
+enum class AnimationResize { off, fit_up, fit_down, fill_up, fill_down };
 
 struct AnimationPlacement {
     AnimationStack stack = AnimationStack::off;

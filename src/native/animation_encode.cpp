@@ -310,7 +310,10 @@ std::vector<float> compose_animation_frame(AnimationFrame&& frame, const Animati
         break;
     case AnimationResize::fit_up:break;
     case AnimationResize::fit_down:scale=std::min(1.,fit);break;
-    case AnimationResize::fill:scale=std::max(double(format.width)/frame.width,double(format.height)/frame.height);break;
+    case AnimationResize::fill_up:
+    case AnimationResize::fill_down:
+        scale=std::max(double(format.width)/frame.width,double(format.height)/frame.height);
+        break;
     }
     const double width=std::max(1.,std::round(frame.width*scale));
     const double height=std::max(1.,std::round(frame.height*scale));

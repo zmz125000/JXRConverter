@@ -528,8 +528,9 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         source.size=animationSize(source.size,options.max_edge);
         if(source.size.isEmpty())throw std::runtime_error("Animation source dimensions are unavailable.");
         if(sources.isEmpty())canvas=source.size;
-        else if(placement.resize==AnimationResize::fit_down)canvas=canvas.boundedTo(source.size);
-        else if(placement.resize!=AnimationResize::fill)canvas=canvas.expandedTo(source.size);
+        else if(placement.resize==AnimationResize::fit_down||placement.resize==AnimationResize::fill_down)
+            canvas=canvas.boundedTo(source.size);
+        else canvas=canvas.expandedTo(source.size);
         sources.append(std::move(source));
     }
     if(gif||asVideo||std::any_of(sources.cbegin(),sources.cend(),[](const auto& source){return source.isVideo();})) {

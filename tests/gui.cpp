@@ -1135,12 +1135,12 @@ private slots:
         window.addPaths({c,a,b});
         auto* model=window.filterModel();
         QTRY_COMPARE(model->rowCount(),3);
-        auto* mode=window.findChild<QPushButton*>("selectedInteractionMode");
-        QVERIFY(mode->isHidden());
+        auto* mode=window.findChild<QPushButton*>("statusSelected");
+        QVERIFY(!mode->isChecked());
         window.findChild<QPushButton*>("selectAllImages")->click();
-        window.findChild<QPushButton*>("statusSelected")->click();
-        QCOMPARE(mode->text(),QString("Select"));
-        QVERIFY(!mode->isHidden());
+        mode->click();
+        QCOMPARE(mode->text(),QString("Selected"));
+        QVERIFY(mode->isChecked());
         auto* list=window.findChild<FileListView*>();
         auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
         const auto order=[&] {
@@ -1163,6 +1163,7 @@ private slots:
         selection->select(model->index(1,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
         mode->click();
         QCOMPARE(mode->text(),QString("Reorder"));
+        QVERIFY(mode->isChecked());
         QVERIFY(!list->isSelectionRectVisible());
         drag(list,2,0,true,false);
         QCOMPARE(order(),(QStringList{c,a,b}));
@@ -1170,11 +1171,12 @@ private slots:
         QCOMPARE(selection->selectedRows().first().data(Catalog::PathRole).toString(),b);
 
         tabs->setCurrentIndex(1);
-        QCOMPARE(mode->text(),QString("Select"));
+        QCOMPARE(mode->text(),QString("Selected"));
         QVERIFY(list->isSelectionRectVisible());
         tabs->setCurrentIndex(2);
         QCOMPARE(mode->text(),QString("Reorder"));
         mode->click();
+        QCOMPARE(mode->text(),QString("Selected"));
         QTest::mouseClick(tabs->tabBar(),Qt::LeftButton,Qt::NoModifier,tabs->tabBar()->tabRect(2).center());
         QCOMPARE(mode->text(),QString("Reorder"));
 
@@ -1190,9 +1192,24 @@ private slots:
         QCOMPARE(order(),(QStringList{b,c,a}));
 
         window.findChild<QPushButton*>("statusAll")->click();
-        QVERIFY(mode->isHidden());
+        QVERIFY(!mode->isChecked());
+        QCOMPARE(mode->text(),QString("Reorder"));
         QCOMPARE(order(),(QStringList{a,b,c}));
-        window.findChild<QPushButton*>("statusSelected")->click();
+        const auto clickSettingsTab=[&](int index) {
+            QTest::mouseClick(tabs->tabBar(),Qt::LeftButton,Qt::NoModifier,tabs->tabBar()->tabRect(index).center());
+        };
+        clickSettingsTab(0);
+        QCOMPARE(mode->text(),QString("Selected"));
+        clickSettingsTab(2);
+        QCOMPARE(mode->text(),QString("Reorder"));
+        clickSettingsTab(1);
+        QCOMPARE(mode->text(),QString("Selected"));
+        clickSettingsTab(2);
+        QCOMPARE(mode->text(),QString("Reorder"));
+        QVERIFY(!mode->isChecked());
+        QVERIFY(list->isSelectionRectVisible());
+        mode->click();
+        QCOMPARE(mode->text(),QString("Reorder"));
         QCOMPARE(order(),(QStringList{b,c,a}));
         window.findChild<QComboBox*>("animationFormat")->setCurrentIndex(int(jxrc::AnimationFormat::png));
         window.findChild<QLineEdit*>("outputDirectory")->setText(root("reorder-output"));
@@ -1202,7 +1219,7 @@ private slots:
         QCOMPARE(written.first().at(1).toString(),b);
         QVERIFY(QFileInfo::exists(written.first().at(2).toString()));
         tabs->setCurrentIndex(0);
-        QCOMPARE(mode->text(),QString("Select"));
+        QCOMPARE(mode->text(),QString("Selected"));
         QCOMPARE(order(),(QStringList{b,c,a}));
     }
     void replacingFilteredSelection() {
@@ -1598,7 +1615,10 @@ private slots:
         QCOMPARE(enlarged[11],.25f);
         QCOMPARE(enlarged[15],0.f);
 
-        placement.resize=AnimationResize::fill;
+        placement.resize=AnimationResize::fill_up;
+        const auto filled=compose(2,2,std::vector<float>(2*2*4,1.f));
+        QVERIFY(std::all_of(filled.cbegin(),filled.cend(),[](float channel){return channel==1.f;}));
+
         std::vector<float> stripes(4*4*4,1.f);
         for(size_t i=0;i<stripes.size();i+=4)stripes[i]=float(i/16)/4.f;
         placement.vertical=0;
@@ -1607,6 +1627,12 @@ private slots:
         QCOMPARE(compose(4,4,stripes)[0],.25f);
         placement.vertical=2;
         QCOMPARE(compose(4,4,stripes)[0],.5f);
+
+        placement.resize=AnimationResize::fill_down;
+        placement.vertical=1;
+        std::vector<float> bands(8*8*4,1.f);
+        for(size_t i=0;i<bands.size();i+=4)bands[i]=float(i/32)/8.f;
+        QCOMPARE(compose(8,8,bands)[0],.3125f);
 
         placement.resize=AnimationResize::fit_down;
         std::vector<float> alternating(8*4*4,1.f);
@@ -1682,6 +1708,16 @@ private slots:
         QCOMPARE(pixels.size(),3*2*2*4);
         checkColor(pixels,2*2*2*4,Qt::green);
         checkColor(pixels,2*2*2*4+4,Qt::blue);
+
+        target.placement.resize=AnimationResize::fill_down;
+        const auto fillDown=directory.filePath("fill-down.png");
+        QVERIFY(!render(fillDown,flatten));
+        QCOMPARE(QImage(fillDown).size(),QSize(2,2));
+        target.inputs.swapItemsAt(0,1);
+        target.placement.resize=AnimationResize::fill_up;
+        const auto fillUp=directory.filePath("fill-up.png");
+        QVERIFY(!render(fillUp,flatten));
+        QCOMPARE(QImage(fillUp).size(),QSize(4,2));
     }
     void animationOutputAsVideo() {
         const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");

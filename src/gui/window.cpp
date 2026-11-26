@@ -363,19 +363,25 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(jobMenu_,&QMenu::aboutToShow,this,[this]{showJob(viewedJob_);});
     running_=new QPushButton("Running");running_->setObjectName("runningJob");actionsLayout->addWidget(running_);connect(running_,&QPushButton::clicked,this,[this]{const auto batch=queue_->runningBatch();if(batch>=0)showJob(batch);});
     tab("Remember",5,"statusRemember")->setToolTip("Images you clicked or individually selected; Select all does not add images");
-    tab("Selected",1,"statusSelected")->setToolTip("Your selection across all views; image clicks leave it unchanged");
+    tab("Selected",1,"statusSelected");
     separator("collectionSeparator");
     tab("All",0,"statusAll")->setChecked(true);tab("Video",VideoTab,"statusVideo")->hide();
     tab("Finished",3,"statusFinished");tab("Failed",4,"statusFailed");
     separator("selectionSeparator");
-    connect(statusFilter_,&QButtonGroup::idClicked,this,&MainWindow::updateFilter);
+    connect(statusFilter_,&QButtonGroup::idClicked,this,[this](int id){
+        // The scroll key still identifies the view shown before this click.
+        if(id==1&&scrollKey_==browserScrollKey()){
+            reorderMode_=!reorderMode_;
+            updateReorderMode();
+            return;
+        }
+        updateFilter();
+    });
     jobRefreshTimer_=new QTimer(this);jobRefreshTimer_->setSingleShot(true);jobRefreshTimer_->setInterval(50);connect(jobRefreshTimer_,&QTimer::timeout,this,&MainWindow::refreshJobs);
     jobSaveTimer_=new QTimer(this);jobSaveTimer_->setSingleShot(true);jobSaveTimer_->setInterval(500);connect(jobSaveTimer_,&QTimer::timeout,this,&MainWindow::saveJobs);
     nextJob_=std::clamp(appSettings().value("jobs/nextNumber",1).toLongLong(),qint64(1),qint64(1000000001));
     if(appSettings().value("controls/loadPreviousJobs",false).toBool()){loadJobs();jobHistoryLoaded_=true;}
     refreshJobs();
-    selectionModeButton_=new QPushButton("Select");selectionModeButton_->setObjectName("selectedInteractionMode");actionsLayout->addWidget(selectionModeButton_);
-    connect(selectionModeButton_,&QPushButton::clicked,this,[this]{reorderMode_=!reorderMode_;updateReorderMode();});
     connect(list_,&FileListView::fileReordered,this,&MainWindow::reorderSelected);
     connect(table_,&FileTableView::fileReordered,this,&MainWindow::reorderSelected);
     auto* selectAll=new QPushButton("Select all");selectAll->setObjectName("selectAllImages");actionsLayout->addWidget(selectAll);
@@ -869,8 +875,8 @@ QWidget* MainWindow::buildAnimationControls() {
     animationSlowMotion_->setToolTip("Keep every decoded video frame and play it at the chosen rate. At 1 Hz, one second of 24 Hz video becomes 24 seconds.");
     animationStack_=combo({"Off","First frame","Previous frames"},"animationStack");
     animationStack_->setToolTip("Use the first frame or the accumulated previous frames behind transparent areas.");
-    animationResize_=combo({"Off","Fit (upscale)","Fit (downscale)","Fill (up/down)"},"animationResize");
-    animationResize_->setToolTip("Upscale to fit the largest width and height, downscale to fit the smallest, or fill the first frame’s dimensions and crop.");
+    animationResize_=combo({"Off","Fit (upscale)","Fit (downscale)","Fill (upscale)","Fill (downscale)"},"animationResize");
+    animationResize_->setToolTip("Upscale uses the largest input width and height. Downscale uses the smallest. Fit keeps the entire frame visible. Fill crops to cover the canvas.");
     animationAlignment_=combo({"Top left","Top","Top right","Left","Center","Right","Bottom left","Bottom","Bottom right"},"animationAlignment");
     animationAlignment_->setCurrentIndex(4);
     animationAlignment_->setToolTip("Place smaller frames on a shared canvas. Empty space follows the transparency setting in Conversion.");
@@ -1369,10 +1375,11 @@ void MainWindow::changeSelection(const QItemSelection& selected,const QItemSelec
 void MainWindow::updateReorderMode() {
     const bool selectedTab=statusFilter_->checkedId()==1;
     const bool reorder=selectedTab&&reorderMode_;
-    selectionModeButton_->setVisible(selectedTab);
-    selectionModeButton_->setText(reorder?"Reorder":"Select");
-    selectionModeButton_->setToolTip(reorder?"Drag files to change their order. Click to switch to selection.":
-        "Drag to box-select files. Click to switch to reordering.");
+    auto* selectedTabButton=statusFilter_->button(1);
+    selectedTabButton->setText(reorderMode_?"Reorder":"Selected");
+    selectedTabButton->setToolTip(reorder?"Drag files to change their order. Click to switch to selection.":
+        selectedTab?"Drag to box-select files. Click to switch to reordering.":
+        reorderMode_?"Open the selection for reordering.":"Show your selection across all views.");
     list_->setReorderEnabled(reorder);
     table_->setReorderEnabled(reorder);
 }
