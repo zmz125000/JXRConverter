@@ -6,16 +6,19 @@ class QPropertyAnimation;
 
 namespace jxrc::gui {
 void revealFile(const QString& path);
+class FileReorder;
 class FileListView : public QListView {
     Q_OBJECT
 public:
     explicit FileListView(QWidget* parent = nullptr);
     void setPresentation(bool grid, int size, double aspect = 1.0);
     void setSmoothScrolling(bool enabled);
+    void setReorderEnabled(bool enabled);
     void selectAll() override;
     QModelIndexList firstVisibleRow(int count = 2) const;
 signals:
     void pathsDropped(const QStringList& paths);
+    void fileReordered(const QString& path, const QString& target, bool after);
     void bulkSelectionChanged(bool selecting);
     void viewportChanged();
 protected:
@@ -28,6 +31,7 @@ protected:
     void dropEvent(QDropEvent*) override;
 private:
     void updateCellSize();
+    FileReorder* reorder_;
     bool grid_ = true;
     int minimumCell_ = 200;
     double aspect_ = 1.0;
@@ -40,6 +44,7 @@ class FileTableView : public QTableView {
 public:
     explicit FileTableView(QWidget* parent = nullptr);
     void setSmoothScrolling(bool enabled);
+    void setReorderEnabled(bool enabled);
     void selectAll() override;
     void setFillThumbnails(bool fill);
     void setModel(QAbstractItemModel*) override;
@@ -49,6 +54,7 @@ public:
     void scrollTo(const QModelIndex&, ScrollHint hint = EnsureVisible) override;
 signals:
     void pathsDropped(const QStringList& paths);
+    void fileReordered(const QString& path, const QString& target, bool after);
     void bulkSelectionChanged(bool selecting);
 protected:
     void resizeEvent(QResizeEvent*) override;
@@ -62,6 +68,7 @@ protected:
 private:
     void updateFrozenColumn();
     QTableView* frozen_;
+    FileReorder* reorder_;
     bool smooth_ = false;
     QPropertyAnimation* scrollAnimation_ = nullptr;
     double wheelRemainder_ = 0;

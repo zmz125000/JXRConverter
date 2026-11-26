@@ -57,6 +57,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSysInfo>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QToolButton>
 #include <QLabel>
@@ -1122,6 +1123,87 @@ private slots:
         QCOMPARE(model->rowCount(),0);QCOMPARE(window.catalog()->rowCount(),3);
         tab("statusAll");QVERIFY(selection->selectedRows().isEmpty());
         tab("statusRemember");QCOMPARE(model->rowCount(),2);
+    }
+    void selectedFilesCanBeReordered() {
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        const auto directory=root("reorder");
+        const auto a=makeImage(directory,"a.jpg",32,24,100);
+        const auto b=makeImage(directory,"b.jpg",32,24,125);
+        const auto c=makeImage(directory,"c.jpg",32,24,150);
+        window.addPaths({c,a,b});
+        auto* model=window.filterModel();
+        QTRY_COMPARE(model->rowCount(),3);
+        auto* mode=window.findChild<QPushButton*>("selectedInteractionMode");
+        QVERIFY(mode->isHidden());
+        window.findChild<QPushButton*>("selectAllImages")->click();
+        window.findChild<QPushButton*>("statusSelected")->click();
+        QCOMPARE(mode->text(),QString("Select"));
+        QVERIFY(!mode->isHidden());
+        auto* list=window.findChild<FileListView*>();
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+        const auto order=[&] {
+            QStringList result;
+            for(int row=0;row<model->rowCount();++row)
+                result.append(model->index(row,0).data(Catalog::PathRole).toString());
+            return result;
+        };
+        const auto drag=[&](QAbstractItemView* view,int from,int to,bool grid,bool after) {
+            view->doItemsLayout();
+            const auto source=view->visualRect(model->index(from,0)).center();
+            const auto target=view->visualRect(model->index(to,0));
+            const int sign=after?1:-1;
+            const auto destination=target.center()+(grid?QPoint(sign*target.width()/4,0):QPoint(0,sign*target.height()/4));
+            QTest::mousePress(view->viewport(),Qt::LeftButton,Qt::NoModifier,source);
+            QTest::mouseMove(view->viewport(),destination,30);
+            QTest::mouseRelease(view->viewport(),Qt::LeftButton,Qt::NoModifier,destination);
+        };
+        auto* selection=list->selectionModel();
+        selection->select(model->index(1,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        mode->click();
+        QCOMPARE(mode->text(),QString("Reorder"));
+        QVERIFY(!list->isSelectionRectVisible());
+        drag(list,2,0,true,false);
+        QCOMPARE(order(),(QStringList{c,a,b}));
+        QCOMPARE(selection->selectedRows().size(),1);
+        QCOMPARE(selection->selectedRows().first().data(Catalog::PathRole).toString(),b);
+
+        tabs->setCurrentIndex(1);
+        QCOMPARE(mode->text(),QString("Select"));
+        QVERIFY(list->isSelectionRectVisible());
+        tabs->setCurrentIndex(2);
+        QCOMPARE(mode->text(),QString("Reorder"));
+        mode->click();
+        QTest::mouseClick(tabs->tabBar(),Qt::LeftButton,Qt::NoModifier,tabs->tabBar()->tabRect(2).center());
+        QCOMPARE(mode->text(),QString("Reorder"));
+
+        auto* views=window.findChild<QButtonGroup*>("viewMode");
+        views->button(1)->click();
+        drag(list,2,0,false,false);
+        QCOMPARE(order(),(QStringList{b,c,a}));
+        views->button(2)->click();
+        auto* details=window.findChild<FileTableView*>();
+        drag(details,2,0,false,false);
+        QCOMPARE(order(),(QStringList{a,b,c}));
+        drag(details,0,2,false,true);
+        QCOMPARE(order(),(QStringList{b,c,a}));
+
+        window.findChild<QPushButton*>("statusAll")->click();
+        QVERIFY(mode->isHidden());
+        QCOMPARE(order(),(QStringList{a,b,c}));
+        window.findChild<QPushButton*>("statusSelected")->click();
+        QCOMPARE(order(),(QStringList{b,c,a}));
+        window.findChild<QComboBox*>("animationFormat")->setCurrentIndex(int(jxrc::AnimationFormat::png));
+        window.findChild<QLineEdit*>("outputDirectory")->setText(root("reorder-output"));
+        QSignalSpy written(window.queue(),&ConversionQueue::outputFinished);
+        window.findChild<QPushButton*>("convertVisible")->click();
+        QTRY_COMPARE(written.size(),1);
+        QCOMPARE(written.first().at(1).toString(),b);
+        QVERIFY(QFileInfo::exists(written.first().at(2).toString()));
+        tabs->setCurrentIndex(0);
+        QCOMPARE(mode->text(),QString("Select"));
+        QCOMPARE(order(),(QStringList{b,c,a}));
     }
     void replacingFilteredSelection() {
         appSettings().clear();MainWindow window;window.show();

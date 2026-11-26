@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QDragEnterEvent>
 #include <QMimeData>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QResizeEvent>
 #include <QHideEvent>
@@ -16,6 +17,7 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QProcess>
+#include <QTimer>
 #if defined(Q_OS_UNIX) && !defined(Q_OS_MACOS)
 #include <QDBusConnection>
 #include <QDBusMessage>
@@ -121,7 +123,115 @@ bool scrollWheel(QAbstractItemView* view,QWheelEvent* event,bool smooth,QPropert
 }
 QStringList paths(const QMimeData* mime) {QStringList out;for(const auto& url:mime->urls())if(url.isLocalFile())out<<url.toLocalFile();return out;}
 }
-FileListView::FileListView(QWidget* parent):QListView(parent) {
+class FileReorder : public QObject {
+public:
+    using Move = std::function<void(const QString&,const QString&,bool)>;
+    FileReorder(QAbstractItemView* view, Move move)
+        : QObject(view), view_(view), indicator_(new QWidget(view->viewport())), move_(std::move(move)) {
+        indicator_->setAttribute(Qt::WA_TransparentForMouseEvents);
+        indicator_->setStyleSheet("background: palette(highlight);");
+        indicator_->hide();
+        view_->viewport()->installEventFilter(this);
+        scroll_.setInterval(35);
+        connect(&scroll_,&QTimer::timeout,this,[this] {
+            auto* bar=view_->verticalScrollBar();
+            const int edge=18;
+            const int direction=position_.y()<edge?-1:position_.y()>=view_->viewport()->height()-edge?1:0;
+            if(direction)bar->setValue(bar->value()+16*direction);
+            updateTarget();
+        });
+    }
+    void setEnabled(bool enabled) {
+        enabled_=enabled;
+        if(!enabled)reset();
+        view_->setSelectionMode(enabled?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
+    }
+protected:
+    bool eventFilter(QObject*, QEvent* event) override {
+        if(!enabled_)return false;
+        switch(event->type()) {
+        case QEvent::MouseButtonPress: {
+            auto* mouse=static_cast<QMouseEvent*>(event);
+            if(mouse->button()==Qt::LeftButton) {
+                reset();
+                start_=mouse->position().toPoint();
+                source_=view_->indexAt(start_).data(Catalog::PathRole).toString();
+            }
+            return false;
+        }
+        case QEvent::MouseMove: {
+            auto* mouse=static_cast<QMouseEvent*>(event);
+            if(source_.isEmpty()||!(mouse->buttons()&Qt::LeftButton))return false;
+            position_=mouse->position().toPoint();
+            if(!dragging_&&(position_-start_).manhattanLength()>=QApplication::startDragDistance()) {
+                dragging_=true;
+                scroll_.start();
+            }
+            if(dragging_)updateTarget();
+            return true;
+        }
+        case QEvent::MouseButtonRelease: {
+            auto* mouse=static_cast<QMouseEvent*>(event);
+            if(mouse->button()!=Qt::LeftButton)return false;
+            const bool dragged=dragging_;
+            const auto pos=mouse->position().toPoint();
+            if(dragged&&view_->viewport()->rect().contains(pos)) {
+                position_=pos;
+                updateTarget();
+                const auto source=source_, target=target_;
+                const bool after=after_;
+                reset();
+                if(!target.isEmpty()&&source!=target)move_(source,target,after);
+            } else reset();
+            return dragged;
+        }
+        case QEvent::Hide:case QEvent::UngrabMouse:reset();return false;
+        default:return false;
+        }
+    }
+private:
+    void reset() {
+        source_.clear();target_.clear();dragging_=false;
+        indicator_->hide();scroll_.stop();
+    }
+    void updateTarget() {
+        const auto bounds=view_->viewport()->rect();
+        const QPoint point(std::clamp(position_.x(),0,bounds.right()),std::clamp(position_.y(),0,bounds.bottom()));
+        const auto* list=qobject_cast<const QListView*>(view_);
+        const bool grid=list&&list->viewMode()==QListView::IconMode;
+        auto index=view_->indexAt(point);
+        if(!index.isValid()) {
+            // Grid gutters and list spacing can fall just outside the item rectangle.
+            const QPoint step=grid?QPoint(8,0):QPoint(0,8);
+            index=view_->indexAt(point-step);
+            if(!index.isValid())index=view_->indexAt(point+step);
+        }
+        if(!index.isValid()&&view_->model()->rowCount()>0) {
+            const auto last=view_->model()->index(view_->model()->rowCount()-1,0);
+            const auto rect=view_->visualRect(last);
+            if(rect.intersects(bounds)&&(point.y()>rect.bottom()||
+               (grid&&point.y()>=rect.top()&&point.x()>rect.right())))index=last;
+        }
+        if(!index.isValid()){target_.clear();indicator_->hide();return;}
+        const auto rect=view_->visualRect(index);
+        target_=index.data(Catalog::PathRole).toString();
+        after_=grid&&point.y()<=rect.bottom()?point.x()>=rect.center().x():point.y()>=rect.center().y();
+        const QRect mark=grid?QRect(after_?rect.right()-2:rect.left(),rect.top(),3,rect.height()):
+            QRect(0,after_?rect.bottom()-2:rect.top(),bounds.width(),3);
+        indicator_->setGeometry(mark.intersected(bounds));
+        indicator_->show();indicator_->raise();
+    }
+    QAbstractItemView* view_;
+    QWidget* indicator_;
+    Move move_;
+    QTimer scroll_;
+    QPoint start_,position_;
+    QString source_,target_;
+    bool enabled_=false,dragging_=false,after_=false;
+};
+FileListView::FileListView(QWidget* parent):QListView(parent),reorder_(new FileReorder(this,[this](const QString& source,const QString& target,bool after){
+    emit fileReordered(source,target,after);
+})) {
     setObjectName("fileList");setSelectionMode(ExtendedSelection);setSelectionBehavior(SelectRows);setSelectionRectVisible(true);setDragEnabled(false);
     setAcceptDrops(true);setDropIndicatorShown(false);setEditTriggers(NoEditTriggers);setUniformItemSizes(true);
     setVerticalScrollMode(ScrollPerPixel);setHorizontalScrollMode(ScrollPerPixel);
@@ -131,6 +241,7 @@ FileListView::FileListView(QWidget* parent):QListView(parent) {
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
     connect(verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{ThumbnailFrame frame(this);emit viewportChanged();});
 }
+void FileListView::setReorderEnabled(bool enabled) {reorder_->setEnabled(enabled);setSelectionRectVisible(!enabled);}
 void FileListView::paintEvent(QPaintEvent* event) {
     ThumbnailFrame frame(this);
     QListView::paintEvent(event);
@@ -144,7 +255,7 @@ void FileListView::setPresentation(bool grid,int size,double aspect) {
     grid_=grid;minimumCell_=size;aspect_=std::clamp(aspect,0.25,4.0);
     setUniformItemSizes(grid);
     setViewMode(grid?IconMode:ListMode);setMovement(Static);setWrapping(grid);setFlow(grid?LeftToRight:TopToBottom);
-    setVerticalScrollMode(ScrollPerPixel);setSelectionRectVisible(true);setSpacing(grid?0:5);updateCellSize();
+    setVerticalScrollMode(ScrollPerPixel);setSpacing(grid?0:5);updateCellSize();
 }
 void FileListView::resizeEvent(QResizeEvent* event) {
     QListView::resizeEvent(event);updateCellSize();emit viewportChanged();
@@ -184,7 +295,10 @@ void FileListView::hideEvent(QHideEvent* e){QListView::hideEvent(e);ThumbnailFra
 void FileListView::dragEnterEvent(QDragEnterEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
 void FileListView::dragMoveEvent(QDragMoveEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
 void FileListView::dropEvent(QDropEvent* e){if(e->mimeData()->hasUrls()){emit pathsDropped(paths(e->mimeData()));e->acceptProposedAction();}}
-FileTableView::FileTableView(QWidget* parent):QTableView(parent),frozen_(new FrozenNameView(this)) {
+FileTableView::FileTableView(QWidget* parent):QTableView(parent),frozen_(new FrozenNameView(this)),
+    reorder_(new FileReorder(this,[this](const QString& source,const QString& target,bool after){
+        emit fileReordered(source,target,after);
+    })) {
     setItemDelegate(new TableThumbnailDelegate(this));
     setObjectName("fileDetails");setSelectionMode(ExtendedSelection);setSelectionBehavior(SelectRows);setDragEnabled(false);setAcceptDrops(true);setDropIndicatorShown(false);
     setVerticalScrollMode(ScrollPerPixel);setHorizontalScrollMode(ScrollPerPixel);
@@ -219,6 +333,7 @@ FileTableView::FileTableView(QWidget* parent):QTableView(parent),frozen_(new Fro
     connect(horizontalHeader(),&QHeaderView::sortIndicatorChanged,frozen_->horizontalHeader(),&QHeaderView::setSortIndicator);
     connect(verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{ThumbnailFrame frame(this);});
 }
+void FileTableView::setReorderEnabled(bool enabled) {reorder_->setEnabled(enabled);}
 void FileTableView::setModel(QAbstractItemModel* model) {
     QTableView::setModel(model);frozen_->setModel(model);
     frozen_->setSelectionModel(selectionModel());

@@ -91,6 +91,8 @@ private:
     QSet<QString>& imageSelection();
     const QSet<QString>& imageSelection() const;
     void changeSelection(const QItemSelection&, const QItemSelection&);
+    void updateReorderMode();
+    void reorderSelected(const QString& path, const QString& target, bool after);
     void selectVisible();
     void clearImageSelection();
     void removeImageSelection();
@@ -181,6 +183,8 @@ private:
     QGroupBox *custom_, *processing_, *raw_;
     QWidget *rawCustom_, *boostTarget_, *queuePanel_;
     QPushButton *thumbnailFit_, *selected_, *visible_, *cancel_, *progressStop_, *remove_, *clear_, *cancelJob_;
+    QPushButton* selectionModeButton_;
+    bool reorderMode_ = false;
     QLabel *counts_, *queueState_, *threadBudget_;
     QPlainTextEdit *inspector_, *outputLog_;
     QTimer* updateTimer_;

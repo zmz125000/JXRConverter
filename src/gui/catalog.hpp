@@ -102,7 +102,7 @@ QString catalogFieldKey(int column);
 struct Filter {
     QString search, text, format, range;
     int status = 0; // All, Finished (3), Failed (4); collection membership is independent.
-    bool restrictPaths = false, videosOnly = false;
+    bool restrictPaths = false, videosOnly = false, manualOrder = false;
     QSet<QString> paths;
     int minWidth = 0, minHeight = 0, minMaxEdge = 0;
     double minMegapixels = 0;
@@ -116,12 +116,16 @@ public:
     explicit CatalogFilter(QObject* parent = nullptr);
     void setFilter(const Filter& filter);
     const Filter& filter() const { return filter_; }
+    QStringList sortedPaths(const QSet<QString>& paths) const;
+    void setManualOrder(const QStringList& paths);
+    bool hasManualOrder() const { return !manualPositions_.isEmpty(); }
     int imageCount() const;
 protected:
     bool filterAcceptsRow(int row, const QModelIndex& parent) const override;
     bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
 private:
     Filter filter_;
+    QHash<QString,int> manualPositions_;
     mutable int imageCount_ = -1;
 };
 }

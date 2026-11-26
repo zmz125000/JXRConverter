@@ -61,6 +61,7 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QStackedWidget>
+#include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -373,6 +374,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     nextJob_=std::clamp(appSettings().value("jobs/nextNumber",1).toLongLong(),qint64(1),qint64(1000000001));
     if(appSettings().value("controls/loadPreviousJobs",false).toBool()){loadJobs();jobHistoryLoaded_=true;}
     refreshJobs();
+    selectionModeButton_=new QPushButton("Select");selectionModeButton_->setObjectName("selectedInteractionMode");actionsLayout->addWidget(selectionModeButton_);
+    connect(selectionModeButton_,&QPushButton::clicked,this,[this]{reorderMode_=!reorderMode_;updateReorderMode();});
+    connect(list_,&FileListView::fileReordered,this,&MainWindow::reorderSelected);
+    connect(table_,&FileTableView::fileReordered,this,&MainWindow::reorderSelected);
     auto* selectAll=new QPushButton("Select all");selectAll->setObjectName("selectAllImages");actionsLayout->addWidget(selectAll);
     connect(selectAll,&QPushButton::clicked,this,&MainWindow::selectVisible);
     auto* deselect=new QPushButton("Deselect");deselect->setObjectName("deselectImages");actionsLayout->addWidget(deselect);connect(deselect,&QPushButton::clicked,this,&MainWindow::clearImageSelection);
@@ -425,7 +430,14 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
     connect(progressStop_,&QPushButton::clicked,this,&MainWindow::stopQueue);outputLayout->addWidget(progressFrame);sideLayout->addWidget(outputPanel,2,1);
-    connect(sidebar,&QTabWidget::currentChanged,this,[this]{updateCounts();if(animationConversionActive())updateAnimationSummary();});
+    const auto setInteractionForPage=[this,sidebar,scroll](int index) {
+        const auto* page=sidebar->widget(index);
+        if(page!=scroll&&page!=videoPage_&&page!=animationPage_)return;
+        reorderMode_=page==animationPage_;
+        updateReorderMode();
+    };
+    connect(sidebar->tabBar(),&QTabBar::tabBarClicked,this,setInteractionForPage);
+    connect(sidebar,&QTabWidget::currentChanged,this,[this,setInteractionForPage](int index){setInteractionForPage(index);updateCounts();if(animationConversionActive())updateAnimationSummary();});
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setChildrenCollapsible(false);splitter->setStretchFactor(0,1);splitter->setSizes({1050,std::max(370,fullControlsWidth)});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
@@ -525,9 +537,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(reset,&QPushButton::clicked,this,&MainWindow::resetFilters);
     // Refresh Today across local midnight, including when the application stays open.
     auto* dateRefresh=new QTimer(this);dateRefresh->setInterval(30000);connect(dateRefresh,&QTimer::timeout,this,[this]{if(today_->isChecked())updateFilter();});dateRefresh->start();
-    connect(sort_,&QComboBox::currentIndexChanged,this,[this]{proxy_->sort(sort_->currentData().toInt(),sortOrder_);updateBackgroundMetadata();});
-    connect(direction,&QPushButton::clicked,this,[this,direction]{sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
-    connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction](int column,Qt::SortOrder order){sortOrder_=order;sort_->setCurrentIndex(sort_->findData(column));direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
+    const auto resetManualSort=[this]{if(statusFilter_->checkedId()==1)proxy_->setManualOrder({});};
+    connect(sort_,&QComboBox::currentIndexChanged,this,[this,resetManualSort]{resetManualSort();proxy_->sort(sort_->currentData().toInt(),sortOrder_);updateBackgroundMetadata();});
+    connect(direction,&QPushButton::clicked,this,[this,direction,resetManualSort]{resetManualSort();sortOrder_=sortOrder_==Qt::AscendingOrder?Qt::DescendingOrder:Qt::AscendingOrder;direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);});
+    connect(table_->horizontalHeader(),&QHeaderView::sortIndicatorChanged,this,[this,direction,resetManualSort](int column,Qt::SortOrder order){resetManualSort();sortOrder_=order;sort_->setCurrentIndex(sort_->findData(column));direction->setText(order==Qt::AscendingOrder?"Ascending":"Descending");});
     connect(smoothScrolling_,&QCheckBox::toggled,this,[this](bool enabled){list_->setSmoothScrolling(enabled);table_->setSmoothScrolling(enabled);});
     connect(autoAspect_,&QCheckBox::toggled,this,[this](bool on){catalog_->setAspectSampling(on);if(on){if(!portraitAspect_->isChecked()&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);}else{aspectSamplePending_=false;aspectTimer_->stop();}});
     connect(portraitAspect_,&QCheckBox::toggled,this,[this](bool on){if(!autoAspect_->isChecked())return;if(!on&&aspectIndex_>=3)setThumbnailAspect(2);requestAspectSample(list_->verticalScrollBar()->value()>0);});
@@ -591,7 +604,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     auto settings=appSettings();restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",200).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
     output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());includeVideos_->setChecked(settings.value("browser/includeVideos",true).toBool());
-    restoreSettings();appliedSearch_=loadFilters_->isChecked()?settings.value("search/applied",search_->text()).toString():QString{};direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
+    restoreSettings();setInteractionForPage(sidebar->currentIndex());appliedSearch_=loadFilters_->isChecked()?settings.value("search/applied",search_->text()).toString():QString{};direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     catalog_->setAspectSampling(autoAspect_->isChecked());updateMode();updateFilter();updatePresentation();updateCounts();requestAspectSample(false);
     QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
 
@@ -1345,6 +1358,25 @@ void MainWindow::changeSelection(const QItemSelection& selected,const QItemSelec
     for(const auto& index:selected.indexes())if(index.column()==0){const auto path=index.data(Catalog::PathRole).toString();imageSelection().insert(path);if(!bulkSelecting_)rememberedImages_.insert(path);}
     updateCounts();showMetadata();
 }
+void MainWindow::updateReorderMode() {
+    const bool selectedTab=statusFilter_->checkedId()==1;
+    const bool reorder=selectedTab&&reorderMode_;
+    selectionModeButton_->setVisible(selectedTab);
+    selectionModeButton_->setText(reorder?"Reorder":"Select");
+    selectionModeButton_->setToolTip(reorder?"Drag files to change their order. Click to switch to selection.":
+        "Drag to box-select files. Click to switch to reordering.");
+    list_->setReorderEnabled(reorder);
+    table_->setReorderEnabled(reorder);
+}
+void MainWindow::reorderSelected(const QString& path,const QString& target,bool after) {
+    if(!reorderMode_||statusFilter_->checkedId()!=1||!selectedImages_.contains(path)||!selectedImages_.contains(target))return;
+    auto order=proxy_->sortedPaths(selectedImages_);
+    if(!order.removeOne(path))return;
+    const auto position=order.indexOf(target);
+    if(position<0)return;
+    order.insert(position+(after?1:0),path);
+    proxy_->setManualOrder(order);
+}
 void MainWindow::selectVisible() {
     for(int row=0;row<proxy_->rowCount();++row){const auto path=proxy_->index(row,0).data(Catalog::PathRole).toString();imageSelection().insert(path);}
     updateFilter();showMetadata();
@@ -1678,13 +1710,15 @@ void MainWindow::updateVideoTab() {
 
 void MainWindow::updateFilter() {
     switchBrowserState();
+    updateReorderMode();
+    if(selectedImages_.isEmpty())proxy_->setManualOrder({});
     selectedTabImages_.intersect(selectedImages_);
     jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
     const auto key=browserScrollKey();const bool changed=key!=scrollKey_;if(changed)saveBrowserScroll();
     Filter f;const int tab=statusFilter_->checkedId();f.status=(tab==3||tab==4)?tab:0;
     f.videosOnly=tab==VideoTab;
     f.restrictPaths=tab==1||tab==2||tab==5;
-    if(tab==1)f.paths=selectedImages_;
+    if(tab==1){f.paths=selectedImages_;f.manualOrder=true;}
     else if(tab==5)f.paths=rememberedImages_;
     else if(tab==2){const QStringList* files=&temporaryJob_.files;for(const auto& job:savedJobs_)if(job.number==viewedJob_)files=&job.files;f.paths=QSet<QString>(files->cbegin(),files->cend());}
     f.search=appliedSearch_;f.text=instant_->text();f.filenameOnly=true;f.today=today_->isChecked();
@@ -1696,8 +1730,6 @@ void MainWindow::updateFilter() {
     const bool dates=metadataFilters_->isChecked()&&dateEnabled_->isChecked()&&!f.today;
     dateEnabled_->setEnabled(!f.today);dateFrom_->setEnabled(dates);dateTo_->setEnabled(dates);
     const bool wasSyncing=syncingSelection_;syncingSelection_=true;proxy_->setFilter(f);
-    list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    table_->setSelectionMode(QAbstractItemView::ExtendedSelection);
     syncSelection();syncingSelection_=wasSyncing;updateBackgroundMetadata();updateCounts();
     if(changed){scrollKey_=key;scrollView_=qobject_cast<QAbstractItemView*>(views_->currentWidget());restoreBrowserScroll();}
 }
@@ -1830,6 +1862,8 @@ void MainWindow::convertFiles(bool selected) {
     if(!video&&!animation&&statusFilter_->checkedId()==VideoTab)return;
     QStringList paths;
     if(!animation&&selected)paths=selectedPaths();
+    else if(animation&&selected&&proxy_->filter().manualOrder&&proxy_->hasManualOrder())
+        paths=proxy_->sortedPaths(imageSelection());
     else {
         auto hidden=selected?imageSelection():QSet<QString>{};
         for(int row=0;row<proxy_->rowCount();++row) {

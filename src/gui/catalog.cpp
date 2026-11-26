@@ -532,6 +532,11 @@ int CatalogFilter::imageCount() const {
     return imageCount_;
 }
 void CatalogFilter::setFilter(const Filter& filter) {
+    if(filter_.manualOrder!=filter.manualOrder&&hasManualOrder()) {
+        filter_=filter;
+        invalidate();
+        return;
+    }
 #if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
     beginFilterChange();
     filter_=filter;
@@ -540,6 +545,27 @@ void CatalogFilter::setFilter(const Filter& filter) {
     filter_=filter;
     invalidateFilter();
 #endif
+}
+QStringList CatalogFilter::sortedPaths(const QSet<QString>& paths) const {
+    const auto* catalog=static_cast<const Catalog*>(sourceModel());
+    QList<QModelIndex> indexes;
+    indexes.reserve(paths.size());
+    for(int row=0;row<catalog->rowCount();++row)
+        if(paths.contains(catalog->record(row).path))indexes.append(catalog->index(row,sortColumn()));
+    std::sort(indexes.begin(),indexes.end(),[this](const QModelIndex& lhs,const QModelIndex& rhs){
+        return sortOrder()==Qt::AscendingOrder?lessThan(lhs,rhs):lessThan(rhs,lhs);
+    });
+    QStringList sorted;
+    sorted.reserve(indexes.size());
+    for(const auto& index:indexes)sorted.append(catalog->record(index.row()).path);
+    return sorted;
+}
+void CatalogFilter::setManualOrder(const QStringList& paths) {
+    if(manualPositions_.isEmpty()&&paths.isEmpty())return;
+    manualPositions_.clear();
+    manualPositions_.reserve(paths.size());
+    for(int position=0;position<paths.size();++position)manualPositions_.insert(paths.at(position),position);
+    if(filter_.manualOrder)invalidate();
 }
 QString catalogFieldKey(int column) {
     static const QStringList keys={"name","format","dimensions","size","date","camera","lens","iso","aperture","shutter","focal","transfer","primaries","bits","status","created","modified","exifdate","width","height","maxedge","megapixels","aspect","hdr","gainmap","raw","path","error","metadatawarning"};
@@ -594,6 +620,11 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
 }
 bool CatalogFilter::lessThan(const QModelIndex& left,const QModelIndex& right) const {
     const auto* model=static_cast<Catalog*>(sourceModel());const auto& a=model->record(left.row());const auto& b=model->record(right.row());
+    if(filter_.manualOrder&&hasManualOrder()) {
+        const int first=manualPositions_.value(a.path,manualPositions_.size());
+        const int second=manualPositions_.value(b.path,manualPositions_.size());
+        if(first!=second)return sortOrder()==Qt::AscendingOrder?first<second:first>second;
+    }
     auto numeric=[&](double x,double y){return x==y?a.path<b.path:x<y;};
     switch(left.column()) {
     case Catalog::Width:return numeric(a.width,b.width);case Catalog::Height:return numeric(a.height,b.height);
