@@ -4,6 +4,7 @@
 #include "updater.hpp"
 #include "output_capture.hpp"
 #include "video_frame.hpp"
+#include <QStandardItemModel>
 #include <QStandardPaths>
 #include <QTextCursor>
 #include <QScrollBar>
@@ -608,7 +609,8 @@ QList<QWidget*> MainWindow::persistentControls() const {
     return QList<QWidget*>{checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,transparencyBackground_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
-        findChild<QPushButton*>("toggleOutput"),videoMode_,videoTransfer_,videoPreset_,videoCrf_,videoMaxEdge_,videoExposure_}
+        findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
+        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_}
         +stillTone_.settings()+videoTone_.settings();
 }
 QList<QWidget*> MainWindow::filterControls() const {
@@ -633,7 +635,6 @@ void MainWindow::restoreSettings() {
         for(int i=0;i<list->count();++i){auto* item=list->item(i);item->setCheckState(saved.contains(item->data(Qt::UserRole).toString())?Qt::Checked:Qt::Unchecked);}
     };
     restoreTargets(targets_,"conversion/targets");
-    restoreTargets(videoTargets_,"video/targets");
     auto* tabs=findChild<QTabWidget*>("settingsTabs");
     const auto oldTab=std::clamp(settings.value("controls/settingsTabs",0).toInt(),0,2);
     const auto page=settings.value("controls/settingsPage",tabs->widget(oldTab?oldTab+1:0)->objectName()).toString();
@@ -652,12 +653,7 @@ void MainWindow::saveSettings() const {
     auto settings=appSettings();
     for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),(widget==stillTone_.mapper||widget==videoTone_.mapper)?static_cast<QComboBox*>(widget)->currentData():widget==sort_?sort_->currentData():widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
-    QStringList videoSaved;
-    for(int row=0;row<videoTargets_->count();++row) {
-        const auto* item=videoTargets_->item(row);
-        if(item->checkState()==Qt::Checked)videoSaved.append(item->data(Qt::UserRole).toString());
-    }
-    settings.setValue("video/targets",videoSaved);
+    saveVideoEncoderSettings();
     settings.setValue("controls/settingsPage",findChild<QTabWidget*>("settingsTabs")->currentWidget()->objectName());
     settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
 }
@@ -757,38 +753,60 @@ QWidget* MainWindow::buildVideoControls() {
     general->addRow("Mode",videoMode_);
     layout->addLayout(general);
 
-    auto* formats=new QGroupBox("Output formats · select one or more");
-    auto* formatLayout=new QVBoxLayout(formats);
-    videoTargets_=new OutputTargetList;
-    videoTargets_->setObjectName("videoConversionTargets");
-    videoTargets_->setSelectionMode(QAbstractItemView::NoSelection);
-    videoTargets_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    const QStringList names={"H.264 · MP4 · SDR","HEVC · MP4","AV1 · MKV"};
-    for(int i=0;i<names.size();++i) {
-        auto* item=new QListWidgetItem(names[i],videoTargets_);
-        item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);
-        item->setData(Qt::UserRole,i);
-        item->setCheckState(i==int(VideoCodec::hevc)?Qt::Checked:Qt::Unchecked);
-    }
-    videoTargets_->viewport()->installEventFilter(this);
-    formatLayout->addWidget(videoTargets_);
-    auto* color=new QFormLayout;
+    auto* formats=new QGroupBox("Output");
+    auto* formatForm=new QFormLayout(formats);
+    videoCodec_=combo({"H.264 / AVC","H.265 / HEVC","AV1"},"videoOutputCodec");
+    videoCodec_->setCurrentIndex(int(VideoCodec::hevc));
+    videoContainer_=combo({"MP4","Matroska (MKV)","QuickTime (MOV)","WebM"},"videoOutputContainer");
     videoTransfer_=combo({"Auto · follow source","SDR","HDR · PQ","HDR · HLG"},"videoOutputTransfer");
-    videoTransfer_->setToolTip("Auto keeps the source transfer where possible and converts HDR to SDR for H.264. PQ and HLG require an HDR source.");
-    color->addRow("Output color",videoTransfer_);
-    formatLayout->addLayout(color);
+    videoTransfer_->setToolTip("Auto follows the source transfer when supported by the selected codec and bit depth. PQ and HLG require an HDR source.");
+    videoDepth_=combo({"Auto","8 bit","10 bit"},"videoOutputDepth");
+    videoDepth_->setItemData(0,0);videoDepth_->setItemData(1,8);videoDepth_->setItemData(2,10);
+    videoChroma_=combo({"4:2:0","4:2:2","4:4:4"},"videoOutputChroma");
+    formatForm->addRow("Codec",videoCodec_);
+    formatForm->addRow("Container",videoContainer_);
+    formatForm->addRow("Dynamic range",videoTransfer_);
+    formatForm->addRow("Bit depth",videoDepth_);
+    formatForm->addRow("Chroma subsampling",videoChroma_);
     layout->addWidget(formats);
 
-    auto* quality=new QGroupBox("Quality");
-    auto* qualityForm=new QFormLayout(quality);
-    videoPreset_=combo({"Lossless","High","Medium","Low","Custom"},"videoQualityPreset");
-    videoPreset_->setCurrentIndex(int(Preset::high));
-    videoPreset_->setToolTip("Lossless retains the encoder input samples after any color, chroma or bit-depth conversion.");
-    videoCrf_=spin(0,51,22,"videoCrf");
-    videoCrf_->setToolTip("Lower CRF gives higher quality and larger files.");
-    qualityForm->addRow("Preset",videoPreset_);
-    qualityForm->addRow("CRF",videoCrf_);
-    layout->addWidget(quality);
+    auto* encoder=new QGroupBox("Video encoder");
+    videoEncoderForm_=new QFormLayout(encoder);
+    videoEncoder_=combo({"x265 (CPU)","SVT-AV1 (CPU)","NVIDIA NVENC (GPU)"},"videoEncoder");
+    videoEncoder_->setToolTip("Uses the selected encoder from your FFmpeg installation. NVENC also requires a compatible NVIDIA GPU and driver.");
+    videoPreset_=combo({},"videoEncoderPreset");
+    videoTune_=combo({},"videoEncoderTune");
+    videoRate_=combo({},"videoRateControl");
+    videoFactor_=spin(0,63,23,"videoQualityFactor");
+    videoFactor_->setToolTip("Lower CRF or QP generally gives higher quality and larger files.");
+    videoBitrate_=spin(100,100000,6000,"videoBitrate");
+    videoBitrate_->setSingleStep(100);
+    videoBitrate_->setSuffix(" kb/s");
+    videoParameters_=new QLineEdit;
+    videoParameters_->setObjectName("videoEncoderParameters");
+    videoParameters_->setPlaceholderText("key=value:key=value");
+    videoParameters_->setToolTip("Advanced options for the selected encoder, passed as a colon-separated list.");
+    auto* reset=new QPushButton("Reset encoder settings");
+    reset->setObjectName("resetVideoEncoder");
+    videoEncoderForm_->addRow("Encoder",videoEncoder_);
+    videoEncoderForm_->addRow("Encoder preset",videoPreset_);
+    videoEncoderForm_->addRow("Tune",videoTune_);
+    videoEncoderForm_->addRow("Rate control",videoRate_);
+    videoEncoderForm_->addRow("Quality factor",videoFactor_);
+    videoEncoderForm_->addRow("Target bitrate",videoBitrate_);
+    videoEncoderForm_->addRow("Encoder parameters",videoParameters_);
+    videoEncoderForm_->addRow(reset);
+    layout->addWidget(encoder);
+
+    auto* audio=new QGroupBox("Audio");
+    videoAudioForm_=new QFormLayout(audio);
+    videoAudio_=combo({"Auto","Copy source tracks","AAC","Opus","No audio"},"videoAudioMode");
+    videoAudio_->setToolTip("Auto uses AAC in MP4 and MOV, copies the audio in MKV, and uses Opus in WebM. Copy requires audio supported by the container.");
+    videoAudioBitrate_=spin(32,960,192,"videoAudioBitrate");
+    videoAudioBitrate_->setSuffix(" kb/s");
+    videoAudioForm_->addRow("Audio codec",videoAudio_);
+    videoAudioForm_->addRow("Audio bitrate",videoAudioBitrate_);
+    layout->addWidget(audio);
 
     layout->addWidget(videoTone_.build(true));
     auto* processing=new QGroupBox("Pixel processing");
@@ -802,34 +820,122 @@ QWidget* MainWindow::buildVideoControls() {
     layout->addWidget(processing);
     layout->addStretch();
 
-    for(auto* box:{videoMode_,videoTransfer_,videoPreset_})
+    for(auto* box:{videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoEncoder_,videoRate_,videoAudio_})
         connect(box,&QComboBox::currentIndexChanged,this,[this]{updateVideoControls();updateCounts();});
+    connect(reset,&QPushButton::clicked,this,[this]{loadVideoEncoderSettings(true);updateVideoControls();});
     connect(videoMaxEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateCounts);
     connect(videoExposure_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateCounts);
-    connect(videoTargets_,&QListWidget::itemChanged,this,&MainWindow::updateCounts);
     return panel;
 }
+
+void MainWindow::loadVideoEncoderSettings(bool reset) {
+    const auto& encoder=videoEncoderSettings(VideoCodec(videoCodec_->currentIndex()),VideoEncoder(videoEncoder_->currentIndex()));
+    videoSettingsEncoder_=encoder.name;
+    auto settings=appSettings();
+    settings.beginGroup("video/encoder/"+encoder.name);
+    if(reset)settings.remove("");
+    const QSignalBlocker blockPreset(videoPreset_), blockTune(videoTune_), blockRate(videoRate_);
+    const auto select=[](QComboBox* box,const QVariant& value) {
+        box->setCurrentIndex(std::max(0,box->findData(value)));
+    };
+    videoPreset_->clear();
+    for(const auto& preset:encoder.presets)videoPreset_->addItem(preset,preset);
+    select(videoPreset_,settings.value("preset",encoder.defaultPreset));
+
+    videoTune_->clear();
+    videoTune_->addItem("None",QString{});
+    for(const auto& tune:encoder.tunes)videoTune_->addItem(tune,tune);
+    select(videoTune_,settings.value("tune",QString{}));
+
+    static const QStringList names={"Constant rate factor (CRF)","Constant quantizer (QP)","Variable bitrate","Lossless"};
+    videoRate_->clear();
+    for(auto rate:encoder.rates)videoRate_->addItem(names[int(rate)],int(rate));
+    select(videoRate_,settings.value("rate",int(encoder.rates.front())).toInt());
+    videoFactor_->setMaximum(encoder.maximumFactor);
+    videoFactor_->setValue(settings.value("factor",encoder.defaultFactor).toInt());
+    videoBitrate_->setValue(settings.value("bitrate",6000).toInt());
+    videoParameters_->setText(settings.value("parameters").toString());
+}
+
+void MainWindow::saveVideoEncoderSettings() const {
+    if(videoSettingsEncoder_.isEmpty())return;
+    auto settings=appSettings();
+    settings.beginGroup("video/encoder/"+videoSettingsEncoder_);
+    settings.setValue("preset",videoPreset_->currentData());
+    settings.setValue("tune",videoTune_->currentData());
+    settings.setValue("rate",videoRate_->currentData());
+    settings.setValue("factor",videoFactor_->value());
+    settings.setValue("bitrate",videoBitrate_->value());
+    settings.setValue("parameters",videoParameters_->text());
+}
+
 void MainWindow::updateVideoControls() {
+    const auto allow=[](QComboBox* box,auto enabled,int fallback=0) {
+        const QSignalBlocker blocker(box);
+        auto* model=static_cast<QStandardItemModel*>(box->model());
+        for(int i=0;i<box->count();++i)model->item(i)->setEnabled(enabled(i));
+        if(box->currentIndex()<0||!enabled(box->currentIndex()))box->setCurrentIndex(fallback);
+    };
+    const auto codec=VideoCodec(std::max(0,videoCodec_->currentIndex()));
+    videoEncoder_->setItemText(int(VideoEncoder::software),
+        codec==VideoCodec::h264?"x264 (CPU)":codec==VideoCodec::hevc?"x265 (CPU)":"libaom (CPU)");
+    allow(videoEncoder_,[codec](int i){return i!=int(VideoEncoder::svt)||codec==VideoCodec::av1;});
+    const auto backend=VideoEncoder(videoEncoder_->currentIndex());
+    const auto& encoder=videoEncoderSettings(codec,backend);
+    if(encoder.name!=videoSettingsEncoder_) {
+        saveVideoEncoderSettings();
+        loadVideoEncoderSettings();
+    }
+    allow(videoContainer_,[codec](int i){return supportsVideoContainer(codec,VideoContainer(i));});
+    const auto container=VideoContainer(videoContainer_->currentIndex());
+    allow(videoTransfer_,[codec](int i){return codec!=VideoCodec::h264||i<=int(VideoTransfer::sdr);});
     const auto transfer=VideoTransfer(videoTransfer_->currentIndex());
     const bool hdr=transfer==VideoTransfer::pq||transfer==VideoTransfer::hlg;
-    const QSignalBlocker blocker(videoTargets_);
-    videoTargets_->item(int(VideoCodec::h264))->setFlags(hdr?Qt::ItemFlags{}:Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);
+    allow(videoDepth_,[&](int i) {
+        const int depth=videoDepth_->itemData(i).toInt();
+        return (!hdr||depth!=8)&&supportsVideoDepth(codec,backend,depth);
+    });
+    allow(videoChroma_,[backend](int i){return i==0||backend==VideoEncoder::software;});
+    videoChroma_->setEnabled(backend==VideoEncoder::software);
+    allow(videoAudio_,[container](int i){return supportsVideoAudio(container,VideoAudio(i));});
+
+    const auto rate=VideoRate(videoRate_->currentData().toInt());
+    videoEncoderForm_->setRowVisible(videoTune_,!encoder.tunes.isEmpty());
+    videoEncoderForm_->setRowVisible(videoParameters_,!encoder.parametersFlag.isEmpty());
+    videoEncoderForm_->setRowVisible(videoFactor_,rate==VideoRate::crf||rate==VideoRate::cqp);
+    static_cast<QLabel*>(videoEncoderForm_->labelForField(videoFactor_))->setText(rate==VideoRate::cqp?"Quantizer (QP)":"Quality factor (CRF)");
+    videoEncoderForm_->setRowVisible(videoBitrate_,rate==VideoRate::bitrate);
+    const auto audio=VideoAudio(videoAudio_->currentIndex());
+    const bool opus=audio==VideoAudio::opus||(audio==VideoAudio::automatic&&container==VideoContainer::webm);
+    videoAudioBitrate_->setMaximum(opus?512:960);
+    videoAudioForm_->setRowVisible(videoAudioBitrate_,audio==VideoAudio::aac||opus||
+        (audio==VideoAudio::automatic&&container!=VideoContainer::mkv));
     videoTone_.group->setEnabled(!hdr);
-    videoCrf_->setEnabled(videoPreset_->currentIndex()==int(Preset::custom));
     videoExposure_->setEnabled(videoMode_->currentIndex()==1);
 }
+
 bool MainWindow::videoConversionActive() const {
     return videoPage_&&findChild<QTabWidget*>("settingsTabs")->currentWidget()==videoPage_;
 }
-QVector<VideoOutput> MainWindow::videoTargets() const {
-    QVector<VideoOutput> result;
-    for(int row=0;row<videoTargets_->count();++row) {
-        const auto* item=videoTargets_->item(row);
-        if(item->checkState()==Qt::Checked&&(item->flags()&Qt::ItemIsEnabled))
-            result.append({VideoCodec(item->data(Qt::UserRole).toInt()),VideoTransfer(videoTransfer_->currentIndex()),
-                           videoCrf_->value(),videoMode_->currentIndex()==1});
-    }
-    return result;
+
+VideoOutput MainWindow::videoTarget() const {
+    VideoOutput output;
+    output.codec=VideoCodec(videoCodec_->currentIndex());
+    output.container=VideoContainer(videoContainer_->currentIndex());
+    output.transfer=VideoTransfer(videoTransfer_->currentIndex());
+    output.encoder=VideoEncoder(videoEncoder_->currentIndex());
+    output.rate=VideoRate(videoRate_->currentData().toInt());
+    output.depth=videoDepth_->currentData().toInt();
+    output.chroma=VideoChroma(videoChroma_->currentIndex());
+    output.audio=VideoAudio(videoAudio_->currentIndex());
+    output.factor=videoFactor_->value();
+    output.bitrate=videoBitrate_->value();
+    output.audioBitrate=videoAudioBitrate_->value();
+    output.preset=videoPreset_->currentData().toString();
+    output.tune=videoTune_->currentData().toString();
+    output.parameters=videoParameters_->text();
+    output.processPixels=videoMode_->currentIndex()==1;
+    return output;
 }
 QWidget* MainWindow::buildControls() {
     auto* panel=new QWidget;panel->setObjectName("conversionControls");auto* layout=new QVBoxLayout(panel);layout->setContentsMargins(14,16,14,16);layout->setSpacing(14);
@@ -1267,8 +1373,7 @@ void MainWindow::openOutputFolder() {
         try {
             const auto layout=outputLayout(viewedJob_);
             if(videoConversionActive()) {
-                const auto videos=videoTargets();
-                path=outputFolder(paths.value(0),output_->text().trimmed(),videoExtension(videos.isEmpty()?VideoCodec::hevc:videos.first().codec),layout);
+                path=outputFolder(paths.value(0),output_->text().trimmed(),videoExtension(videoTarget().container),layout);
             } else path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),layout);
         }
         catch(const std::exception& e){reportError("Cannot open output folder: "+QString::fromUtf8(e.what()),selectedPaths());return;}
@@ -1463,7 +1568,7 @@ void MainWindow::updateCounts() {
         ?QString("%p% (%v/%m/%1/%2)").arg(queue_->skipped()).arg(queue_->failed())
         :QString("%p% (%v/%m)");
     progress_->setFormat(progressCounts+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
-    const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=video?!videoTargets().isEmpty():!selectedTargets().isEmpty();
+    const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=video||!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
     counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
@@ -1521,20 +1626,17 @@ void MainWindow::convertFiles(bool selected) {
 void MainWindow::convertVideos(const QStringList& paths,bool reuseJob,bool quick) {
     if(paths.isEmpty()||routingToken_||(!quick&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
     try {
-        const auto targets=videoTargets();
-        if(targets.isEmpty())throw std::invalid_argument("Select at least one video output format");
         const QString directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
         if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         Options options;
         options.mode=Mode::process;
-        options.quality.preset=Preset(videoPreset_->currentIndex());
         options.overwrite=overwrite_->isEnabled()&&overwrite_->isChecked();
         options.exposure=videoExposure_->isEnabled()?float(videoExposure_->value()):0.f;
         options.max_edge=unsigned(videoMaxEdge_->value());
         videoTone_.apply(options);
         const bool reuseQuick=quick&&quickJob_>=0;
         const auto batch=reuseJob?viewedJob_:reuseQuick?quickJob_:nextJob_;
-        auto jobs=makeVideoJobs(paths,directory,options,targets,outputLayout(batch,quick));
+        auto jobs=makeVideoJobs(paths,directory,options,videoTarget(),outputLayout(batch,quick));
         startConversion(std::move(jobs),batch,false,quick,reuseJob,reuseQuick,quick,directory);
     } catch(const std::exception& error) {
         reportError(QString::fromUtf8(error.what()));
@@ -1749,8 +1851,7 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
             if(!menu->isVisible())menu->popup(button->mapToGlobal(QPoint(0,button->height())));
         });
     }
-    auto* targetList=targets_&&watched==targets_->viewport()?targets_:
-        videoTargets_&&watched==videoTargets_->viewport()?videoTargets_:nullptr;
+    auto* targetList=targets_&&watched==targets_->viewport()?targets_:nullptr;
     if(targetList&&event->type()==QEvent::MouseButtonRelease) {
         auto* mouse=static_cast<QMouseEvent*>(event);
         if(mouse->button()==Qt::LeftButton) {

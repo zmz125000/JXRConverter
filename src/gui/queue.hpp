@@ -36,7 +36,7 @@ struct OutputLayout {
 QString outputFolder(const QString& input, const QString& directory, Target target, const OutputLayout& layout);
 QString outputFolder(const QString& input, const QString& directory, const QString& extension, const OutputLayout& layout);
 QVector<Job> makeJobs(const QStringList& inputs, const QString& directory, const Options& options, const OutputLayout& layout = {}, bool* numbered = nullptr);
-QVector<Job> makeVideoJobs(const QStringList&,const QString&,const Options&,const QVector<VideoOutput>&,const OutputLayout&);
+QVector<Job> makeVideoJobs(const QStringList&,const QString&,const Options&,const VideoOutput&,const OutputLayout&);
 bool outputExists(const QString& path);
 class ConversionQueue : public QObject {
     Q_OBJECT

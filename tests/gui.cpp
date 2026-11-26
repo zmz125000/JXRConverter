@@ -1227,6 +1227,49 @@ private slots:
         QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());
         QCOMPARE(window.catalog()->paths(),QStringList{image});
     }
+    void videoEncoderControls() {
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        window.findChild<QTabWidget*>("settingsTabs")->setCurrentIndex(1);
+        auto* codec=window.findChild<QComboBox*>("videoOutputCodec");
+        auto* container=window.findChild<QComboBox*>("videoOutputContainer");
+        auto* transfer=window.findChild<QComboBox*>("videoOutputTransfer");
+        auto* depth=window.findChild<QComboBox*>("videoOutputDepth");
+        auto* backend=window.findChild<QComboBox*>("videoEncoder");
+        auto* rate=window.findChild<QComboBox*>("videoRateControl");
+        auto* speed=window.findChild<QComboBox*>("videoEncoderPreset");
+        auto* factor=window.findChild<QSpinBox*>("videoQualityFactor");
+        QVERIFY(!window.findChild<QListWidget*>("videoConversionTargets"));
+        QCOMPARE(videoExtension(VideoContainer(container->currentIndex())),QString("mp4"));
+        QCOMPARE(speed->currentText(),QString("medium"));
+
+        depth->setCurrentIndex(depth->findData(8));
+        transfer->setCurrentIndex(int(VideoTransfer::pq));
+        QCOMPARE(depth->currentData().toInt(),0);
+        codec->setCurrentIndex(int(VideoCodec::h264));
+        QCOMPARE(transfer->currentIndex(),int(VideoTransfer::automatic));
+        QVERIFY(!(container->model()->flags(container->model()->index(int(VideoContainer::webm),0))&Qt::ItemIsEnabled));
+
+        factor->setValue(19);
+        codec->setCurrentIndex(int(VideoCodec::av1));
+        container->setCurrentIndex(int(VideoContainer::webm));
+        QCOMPARE(speed->currentText(),QString("6"));
+        QCOMPARE(factor->maximum(),63);
+        backend->setCurrentIndex(int(VideoEncoder::nvenc));
+        QCOMPARE(speed->currentText(),QString("p4"));
+        QCOMPARE(rate->currentData().toInt(),int(VideoRate::cqp));
+
+        backend->setCurrentIndex(int(VideoEncoder::software));
+        codec->setCurrentIndex(int(VideoCodec::h264));
+        QCOMPARE(container->currentIndex(),int(VideoContainer::mp4));
+        QCOMPARE(factor->value(),19);
+        window.findChild<QPushButton*>("resetVideoEncoder")->click();
+        QCOMPARE(factor->value(),23);
+        rate->setCurrentIndex(rate->findData(int(VideoRate::bitrate)));
+        QVERIFY(factor->isHidden());
+        QVERIFY(!window.findChild<QSpinBox*>("videoBitrate")->isHidden());
+    }
     void videoConversionToneMappingAndCancellation() {
         const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
         const auto ffprobe=QStandardPaths::findExecutable("ffprobe");
@@ -1257,17 +1300,26 @@ private slots:
         QCOMPARE(tabs->tabText(1),QString("Video"));
         tabs->setCurrentIndex(1);
         window.findChild<QLineEdit*>("outputDirectory")->setText(outputs);
-        auto* targets=window.findChild<QListWidget*>("videoConversionTargets");
-        targets->item(0)->setCheckState(Qt::Checked);
+        auto* codec=window.findChild<QComboBox*>("videoOutputCodec");
+        auto* container=window.findChild<QComboBox*>("videoOutputContainer");
+        codec->setCurrentIndex(int(VideoCodec::h264));
         auto* convert=window.findChild<QPushButton*>("convertVisible");
         QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
         QSignalSpy written(window.queue(),&ConversionQueue::outputFinished);
         QVERIFY(convert->isEnabled());
         convert->click();
         QTRY_COMPARE_WITH_TIMEOUT(finished.count(),1,30000);
-        QCOMPARE(window.queue()->total(),2);
-        QCOMPARE(finished.last().at(0).toInt(),2);
+        QCOMPARE(window.queue()->total(),1);
+        QCOMPARE(finished.last().at(0).toInt(),1);
+        QCOMPARE(written.size(),1);
+        codec->setCurrentIndex(int(VideoCodec::hevc));
+        container->setCurrentIndex(int(VideoContainer::mov));
+        convert->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),2,30000);
+        QCOMPARE(finished.last().at(0).toInt(),1);
         QCOMPARE(written.size(),2);
+        QVERIFY(written.at(0).at(2).toString().endsWith(".mp4"));
+        QVERIFY(written.at(1).at(2).toString().endsWith(".mov"));
         for(const auto& signal:written) {
             QCOMPARE(signal.at(1).toString(),QFileInfo(video).canonicalFilePath());
             const auto output=signal.at(2).toString();
@@ -1298,7 +1350,11 @@ private slots:
         }
         auto* transfer=window.findChild<QComboBox*>("videoOutputTransfer");
         transfer->setCurrentIndex(int(VideoTransfer::hlg));
-        QVERIFY(!(targets->item(0)->flags()&Qt::ItemIsEnabled));
+        container->setCurrentIndex(int(VideoContainer::mkv));
+        auto* rate=window.findChild<QComboBox*>("videoRateControl");
+        rate->setCurrentIndex(rate->findData(int(VideoRate::cqp)));
+        window.findChild<QComboBox*>("videoOutputChroma")->setCurrentIndex(int(VideoChroma::yuv422));
+
         QVERIFY(!window.findChild<QCheckBox*>("videoSdrToneMap")->isEnabled());
         window.findChild<QPushButton*>("statusVideo")->click();
         auto* view=window.findChild<FileListView*>();
@@ -1307,16 +1363,45 @@ private slots:
         QVERIFY(selected->isEnabled());
         selected->click();
         window.queue()->cancelPending();
-        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),2,30000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),3,30000);
         QCOMPARE(finished.last().at(2).toInt(),1);
         QCOMPARE(written.last().at(3).toString(),QString("Cancelled"));
         QVERIFY(!QFileInfo::exists(written.last().at(2).toString()));
         selected->click();
-        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),3,30000);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(),4,30000);
         QCOMPARE(finished.last().at(0).toInt(),1);
-        process.start(ffprobe,{"-v","error","-select_streams","v:0","-show_entries","stream=color_transfer","-of","csv=p=0",written.last().at(2).toString()});
+        const auto hlg=written.last().at(2).toString();
+        QVERIFY(hlg.endsWith("_hevc_qp23_hlg.mkv"));
+        process.start(ffprobe,{"-v","error","-show_entries","stream=codec_name,color_transfer,pix_fmt","-of","json",hlg});
         QVERIFY(process.waitForFinished());
-        QCOMPARE(process.readAllStandardOutput().trimmed(),QByteArray("arib-std-b67"));
+        const auto streams=QJsonDocument::fromJson(process.readAllStandardOutput()).object().value("streams").toArray();
+        QCOMPARE(streams.size(),2);
+        QCOMPARE(streams.at(0).toObject().value("color_transfer").toString(),QString("arib-std-b67"));
+        QCOMPARE(streams.at(0).toObject().value("pix_fmt").toString(),QString("yuv422p10le"));
+        QCOMPARE(streams.at(1).toObject().value("codec_name").toString(),QString("pcm_s16le"));
+
+        if(encoders.contains("libaom-av1")) {
+            codec->setCurrentIndex(int(VideoCodec::av1));
+            container->setCurrentIndex(int(VideoContainer::webm));
+            transfer->setCurrentIndex(int(VideoTransfer::sdr));
+            window.findChild<QComboBox*>("videoOutputChroma")->setCurrentIndex(int(VideoChroma::yuv420));
+            const bool opusAvailable=encoders.contains("libopus");
+            if(!opusAvailable)window.findChild<QComboBox*>("videoAudioMode")->setCurrentIndex(int(VideoAudio::none));
+            rate->setCurrentIndex(rate->findData(int(VideoRate::bitrate)));
+            window.findChild<QSpinBox*>("videoBitrate")->setValue(400);
+            selected->click();
+            QTRY_COMPARE_WITH_TIMEOUT(finished.count(),5,30000);
+            QCOMPARE(finished.last().at(0).toInt(),1);
+            const auto webm=written.last().at(2).toString();
+            QVERIFY(webm.endsWith("_av1_400k_sdr.webm"));
+            process.start(ffprobe,{"-v","error","-show_entries","stream=codec_name,color_transfer","-of","json",webm});
+            QVERIFY(process.waitForFinished());
+            const auto webmStreams=QJsonDocument::fromJson(process.readAllStandardOutput()).object().value("streams").toArray();
+            QCOMPARE(webmStreams.size(),opusAvailable?2:1);
+            QCOMPARE(webmStreams.at(0).toObject().value("codec_name").toString(),QString("av1"));
+            QCOMPARE(webmStreams.at(0).toObject().value("color_transfer").toString(),QString("bt709"));
+            if(opusAvailable)QCOMPARE(webmStreams.at(1).toObject().value("codec_name").toString(),QString("opus"));
+        }
     }
     void libraryTabScrollPositions() {
         appSettings().clear();MainWindow window;window.resize(1200,700);window.show();

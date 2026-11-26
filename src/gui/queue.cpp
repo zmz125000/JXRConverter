@@ -173,22 +173,20 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
     return result;
 }
 QVector<Job> makeVideoJobs(const QStringList& inputs,const QString& directory,const Options& options,
-                           const QVector<VideoOutput>& targets,const OutputLayout& layout) {
+                           const VideoOutput& target,const OutputLayout& layout) {
     validate(options);
     QVector<Job> jobs;
     QSet<QString> outputs;
     QHash<QString,int> nextSuffix;
     const auto key=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};
     QSet<QString> sources;for(const auto& input:inputs)sources.insert(key(input));
-    static const QStringList presets={"lossless","high","medium","low"};
     Options snapshot=options;
     if(layout.rename_conflicts)snapshot.overwrite=false;
-    for(const auto& input:inputs)for(const auto& target:targets) {
-        const auto extension=videoExtension(target.codec);
+    const auto extension=videoExtension(target.container);
+    const auto suffix="_"+videoCodecName(target.codec)+"_"+videoQualityName(target)+"_"+videoTransferName(target.transfer)+"."+extension;
+    for(const auto& input:inputs) {
         const auto folder=QDir(outputFolder(input,directory,extension,layout));
         const auto stem=QFileInfo(input).completeBaseName();
-        const auto quality=options.quality.preset==Preset::custom?"crf"+QString::number(target.crf):presets[int(options.quality.preset)];
-        const auto suffix="_"+videoCodecName(target.codec)+"_"+quality+"_"+videoTransferName(target.transfer)+"."+extension;
         auto output=folder.absoluteFilePath(stem+suffix);
         auto outputKey=key(output);
         const auto baseKey=outputKey;

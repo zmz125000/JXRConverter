@@ -36,7 +36,7 @@ then outputs to JPG/AVIF Gain Map Ultra HDR and more.
 
 Supported HDR formats: JPG, PNG, JXR, JXL, HEIF, AVIF, OpenEXR, Radiance HDR, PFM, TIFF and RAW.  
 
-The Qt 6 GUI for Windows, Linux and macOS uses FFmpeg for video conversion and frame grabs. It exports H.264, HEVC and AV1 video, with SDR tone mapping and PQ or HLG output for HEVC and AV1. Frames can be exported to 16-bit PNG, JXL and AVIF.
+The Qt 6 GUI for Windows, Linux and macOS uses FFmpeg for video conversion and frame grabs. The Video tab selects H.264, HEVC or AV1 independently from the container and dynamic range. It offers encoder presets, rate control, bit depth, chroma subsampling and audio settings, with SDR tone mapping and PQ or HLG output for HEVC and AV1. Frames can be exported to 16-bit PNG, JXL and AVIF.
 
 special thanks to  [MPCVR](https://github.com/Aleksoid1978/VideoRenderer/) and [SKIV](https://github.com/SpecialKO/SKIV) for the best HDR to SDR tone mappers.
 

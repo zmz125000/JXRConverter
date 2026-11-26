@@ -51,32 +51,65 @@ QSize outputSize(const QSize& source,unsigned maxEdge) {
     return {std::max(2,size.width()&~1),std::max(2,size.height()&~1)};
 }
 
-QString encoderPixelFormat(const VideoStream& stream,bool hdr,VideoCodec codec) {
+QString encoderPixelFormat(const VideoStream& stream, bool hdr, const VideoOutput& target) {
     const auto format=stream.pixelFormat.chopped(2);
     const bool deep=stream.bitDepth>8||format.endsWith("10")||format.endsWith("12")||
         format.endsWith("14")||format.endsWith("16")||format.endsWith("48")||format.endsWith("64");
-    return codec!=VideoCodec::h264&&(hdr||deep)?"yuv420p10le":"yuv420p";
+    const bool tenBit=target.depth==10 || (target.depth==0 && (hdr || (deep && target.codec!=VideoCodec::h264)));
+    if(target.encoder==VideoEncoder::nvenc)return tenBit?"p010le":"nv12";
+    const QString chroma=target.chroma==VideoChroma::yuv444?"444":target.chroma==VideoChroma::yuv422?"422":"420";
+    return "yuv"+chroma+(tenBit?"p10le":"p");
 }
 
-QStringList qualityArguments(VideoCodec codec,Preset preset,int custom,int threads,const QString& contentLight) {
-    QStringList args;
-    if(codec==VideoCodec::h264)args << "-c:v" << "libx264" << "-preset" << "medium";
-    else if(codec==VideoCodec::hevc)args << "-c:v" << "libx265" << "-preset" << "medium" << "-tag:v" << "hvc1";
-    else args << "-c:v" << "libaom-av1" << "-cpu-used" << "6" << "-row-mt" << "1" << "-b:v" << "0";
-    if(preset==Preset::lossless) {
-        if(codec==VideoCodec::h264)args << "-qp" << "0";
-        if(codec==VideoCodec::av1)args << "-aom-params" << "lossless=1";
-    } else {
-        const int crf=preset==Preset::custom?custom:preset==Preset::high?18:preset==Preset::medium?23:29;
-        args << "-crf" << QString::number(codec==VideoCodec::av1&&preset!=Preset::custom?crf+6:crf);
+QStringList encoderArguments(const VideoOutput& target, int threads, const QString& contentLight) {
+    const auto& settings=videoEncoderSettings(target.codec,target.encoder);
+    const auto preset=target.preset.isEmpty()?settings.defaultPreset:target.preset;
+    const bool aom=settings.name=="libaom-av1";
+    const bool x265=settings.name=="libx265";
+    const bool nvenc=target.encoder==VideoEncoder::nvenc;
+    QStringList args={"-c:v",settings.name,aom?"-cpu-used":"-preset",preset};
+    if(aom)args << "-row-mt" << "1";
+    if(!target.tune.isEmpty())args << "-tune" << target.tune;
+    QStringList params;
+    if(!target.parameters.trimmed().isEmpty())params << target.parameters.trimmed();
+    switch(target.rate) {
+    case VideoRate::crf:
+        args << "-crf" << QString::number(target.factor);
+        if(aom)args << "-b:v" << "0";
+        break;
+    case VideoRate::cqp:
+        if(nvenc)args << "-rc" << "constqp";
+        args << "-qp" << QString::number(target.factor);
+        break;
+    case VideoRate::bitrate:
+        if(nvenc)args << "-rc" << "vbr";
+        args << "-b:v" << QString::number(target.bitrate)+"k";
+        break;
+    case VideoRate::lossless:
+        if(x265||aom)params << "lossless=1";
+        if(aom)args << "-b:v" << "0";
+        if(!x265&&!aom)args << "-qp" << "0";
+        break;
     }
-    if(codec==VideoCodec::hevc) {
-        QStringList params={"pools="+QString::number(threads),"log-level=error"};
-        if(preset==Preset::lossless)params << "lossless=1";
+    if(x265) {
+        params << "pools="+QString::number(threads) << "log-level=error";
         if(!contentLight.isEmpty())params << "max-cll="+contentLight;
-        args << "-x265-params" << params.join(':');
     }
+    if(!params.isEmpty()&&!settings.parametersFlag.isEmpty())args << settings.parametersFlag << params.join(':');
     return args;
+}
+
+QStringList audioArguments(const VideoOutput& target, const QString& sourceIndex) {
+    auto audio=target.audio;
+    if(audio==VideoAudio::automatic) {
+        if(target.container==VideoContainer::mkv)audio=VideoAudio::copy;
+        else if(target.container==VideoContainer::webm)audio=VideoAudio::opus;
+        else audio=VideoAudio::aac;
+    }
+    if(audio==VideoAudio::none)return {};
+    QStringList args={"-map",sourceIndex+":a?","-c:a"};
+    if(audio==VideoAudio::copy)return args << "copy";
+    return args << (audio==VideoAudio::aac?"aac":"libopus") << "-b:a" << QString::number(target.audioBitrate)+"k";
 }
 
 void checkCancelled(const std::function<bool()>& cancelled) {
@@ -182,7 +215,62 @@ void streamFrames(const QString& ffmpeg,const QStringList& args,VideoProcess& en
 }
 }
 
-QString videoExtension(VideoCodec codec) {return codec==VideoCodec::av1?"mkv":"mp4";}
+const VideoEncoderSettings& videoEncoderSettings(VideoCodec codec, VideoEncoder encoder) {
+    static const QStringList x26xPresets={"ultrafast","superfast","veryfast","faster","fast","medium","slow","slower","veryslow","placebo"};
+    static const QList<VideoRate> x26xRates={VideoRate::crf,VideoRate::cqp,VideoRate::bitrate,VideoRate::lossless};
+    static const VideoEncoderSettings x264={"libx264",x26xPresets,
+        {"film","animation","grain","stillimage","psnr","ssim","fastdecode","zerolatency"},
+        "medium","-x264-params",23,51,x26xRates};
+    static const VideoEncoderSettings x265={"libx265",x26xPresets,
+        {"psnr","ssim","grain","fastdecode","zerolatency","animation"},
+        "medium","-x265-params",23,51,x26xRates};
+    static const VideoEncoderSettings aom={"libaom-av1",{"0","1","2","3","4","5","6","7","8"},
+        {},"6","-aom-params",30,63,{VideoRate::crf,VideoRate::bitrate,VideoRate::lossless}};
+    static const VideoEncoderSettings svt={"libsvtav1",{"0","1","2","3","4","5","6","7","8","9","10","11","12","13"},
+        {},"8","-svtav1-params",35,63,{VideoRate::crf,VideoRate::bitrate}};
+    static const QStringList nvencPresets={"p1","p2","p3","p4","p5","p6","p7"};
+    static const QStringList nvencTunes={"hq","ll","ull"};
+    static const QList<VideoRate> nvencRates={VideoRate::cqp,VideoRate::bitrate};
+    static const VideoEncoderSettings h264Nvenc={"h264_nvenc",nvencPresets,nvencTunes,"p4",{},23,51,nvencRates};
+    static const VideoEncoderSettings hevcNvenc={"hevc_nvenc",nvencPresets,nvencTunes,"p4",{},23,51,nvencRates};
+    static const VideoEncoderSettings av1Nvenc={"av1_nvenc",nvencPresets,nvencTunes,"p4",{},28,63,nvencRates};
+    if(encoder==VideoEncoder::nvenc)return codec==VideoCodec::h264?h264Nvenc:codec==VideoCodec::hevc?hevcNvenc:av1Nvenc;
+    if(codec==VideoCodec::h264)return x264;
+    if(codec==VideoCodec::hevc)return x265;
+    return encoder==VideoEncoder::svt?svt:aom;
+}
+
+bool supportsVideoContainer(VideoCodec codec, VideoContainer container) {
+    return container!=VideoContainer::webm || codec==VideoCodec::av1;
+}
+
+bool supportsVideoAudio(VideoContainer container, VideoAudio audio) {
+    if(audio==VideoAudio::aac)return container!=VideoContainer::webm;
+    if(audio==VideoAudio::opus)return container==VideoContainer::webm || container==VideoContainer::mkv;
+    return true;
+}
+
+bool supportsVideoDepth(VideoCodec codec, VideoEncoder encoder, int depth) {
+    return depth==0 || depth==8 || (depth==10 && !(codec==VideoCodec::h264 && encoder==VideoEncoder::nvenc));
+}
+
+QString videoExtension(VideoContainer container) {
+    switch(container) {
+    case VideoContainer::mkv: return "mkv";
+    case VideoContainer::mov: return "mov";
+    case VideoContainer::webm: return "webm";
+    default: return "mp4";
+    }
+}
+
+QString videoQualityName(const VideoOutput& target) {
+    switch(target.rate) {
+    case VideoRate::cqp: return "qp"+QString::number(target.factor);
+    case VideoRate::bitrate: return QString::number(target.bitrate)+"k";
+    case VideoRate::lossless: return "lossless";
+    default: return "crf"+QString::number(target.factor);
+    }
+}
 QString videoCodecName(VideoCodec codec) {
     return codec==VideoCodec::h264?"h264":codec==VideoCodec::hevc?"hevc":"av1";
 }
@@ -197,19 +285,26 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     checkCancelled(cancelled);
     const auto ffmpeg=video::executable("ffmpeg");
     if(ffmpeg.isEmpty())throw std::runtime_error("Video conversion requires ffmpeg and ffprobe on PATH.");
+    const auto& encoderSettings=videoEncoderSettings(target.codec,target.encoder);
+    if(!supportsVideoContainer(target.codec,target.container)||!supportsVideoAudio(target.container,target.audio))
+        throw std::invalid_argument("The selected codec or audio mode is incompatible with the container.");
+    if(!encoderSettings.rates.contains(target.rate)||!supportsVideoDepth(target.codec,target.encoder,target.depth)||
+       (target.encoder!=VideoEncoder::software&&target.chroma!=VideoChroma::yuv420))
+        throw std::invalid_argument("The selected rate control or pixel format is incompatible with the encoder.");
     auto stream=video::probeVideo(input,cancelled);
     if(!stream.hdrError.isEmpty())throw std::runtime_error(stream.hdrError.toStdString());
-    const bool av1=target.codec==VideoCodec::av1,h264=target.codec==VideoCodec::h264;
+    const bool h264=target.codec==VideoCodec::h264;
     const auto transfer=target.transfer;
-    const bool hdrOutput=transfer==VideoTransfer::automatic?stream.hdr()&&!h264:transfer!=VideoTransfer::sdr;
+    const bool hdrOutput=transfer==VideoTransfer::automatic?stream.hdr()&&!h264&&target.depth!=8:transfer!=VideoTransfer::sdr;
     if(hdrOutput&&!stream.hdr())throw std::runtime_error("PQ and HLG output require an HDR source. Use Auto or SDR for SDR videos.");
     if(hdrOutput&&h264)throw std::runtime_error("H.264 output uses SDR. Choose HEVC or AV1 for HDR.");
+    if(hdrOutput&&target.depth==8)throw std::runtime_error("HDR output requires auto or 10-bit output depth.");
     const int outputTransfer=!hdrOutput?1:transfer==VideoTransfer::pq?16:transfer==VideoTransfer::hlg?18:stream.transfer;
-    const bool processed=stream.dolbyVision||target.process_pixels||
+    const bool processed=stream.dolbyVision||target.processPixels||
         (stream.hdr()&&stream.transfer!=outputTransfer);
     const QString rgbFormat=QSysInfo::ByteOrder==QSysInfo::LittleEndian?"rgba64le":"rgba64be";
     const auto size=outputSize(stream.size,options.max_edge);
-    const auto pixFmt=encoderPixelFormat(stream,hdrOutput,target.codec);
+    const auto pixFmt=encoderPixelFormat(stream,hdrOutput,target);
     const int budget=int(std::max(1u,options.threads));
     const int decodingThreads=processed?std::clamp(budget/3,1,4):budget;
     const int encodingThreads=processed?std::max(1,budget-decodingThreads):budget;
@@ -240,19 +335,24 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     const QString sourceIndex=processed?"1":"0";
     encode << "-threads" << decodeThreads << "-i" << input << "-map"
            << (processed?QString("0:v:0"):QString("0:%1").arg(stream.index))
-           << "-map" << sourceIndex+":a?" << "-map_metadata" << sourceIndex << "-map_chapters" << sourceIndex;
-    if(av1)encode << "-map" << sourceIndex+":s?" << "-c:s" << "copy" << "-c:a" << "copy";
-    else encode << "-c:a" << "aac" << "-b:a" << "192k" << "-movflags" << "+faststart";
+           << "-map_metadata" << sourceIndex << "-map_chapters" << sourceIndex;
+    encode << audioArguments(target,sourceIndex);
+    const bool quickTime=target.container==VideoContainer::mp4||target.container==VideoContainer::mov;
+    if(target.container==VideoContainer::mkv)encode << "-map" << sourceIndex+":s?" << "-c:s" << "copy";
+    if(quickTime) {
+        encode << "-movflags" << "+faststart";
+        if(target.codec==VideoCodec::hevc)encode << "-tag:v" << "hvc1";
+    }
     const QString light=!processed&&outputTransfer==16&&stream.maxContentLight>0?
         QString("%1,%2").arg(stream.maxContentLight).arg(stream.maxFrameAverageLight):QString{};
-    encode << qualityArguments(target.codec,options.quality.preset,target.crf,encodingThreads,light)
+    encode << encoderArguments(target,encodingThreads,light)
            << "-vf" << filter << "-pix_fmt" << pixFmt << "-threads:v" << encodeThreads
            << "-color_primaries" << primaries << "-color_trc" << trc << "-colorspace" << matrix << "-color_range" << range
            << "-fps_mode" << "passthrough";
-    if(!processed)encode << "-enc_time_base:v" << "-1";
+    if(!processed&&!stream.timeBase.isEmpty())encode << "-enc_time_base:v" << stream.timeBase;
 
     Staging stage(output);
-    encode << "-f" << (av1?"matroska":"mp4") << QString::fromStdString(stage.file.u8string());
+    encode << "-f" << (target.container==VideoContainer::mkv?QString("matroska"):videoExtension(target.container)) << QString::fromStdString(stage.file.u8string());
     const VideoColor destColor{hdrOutput?9u:1u,unsigned(outputTransfer)};
     VideoColor srcColor{};
     if(processed)srcColor={sourcePrimaries(stream),sourceTransfer(stream)};

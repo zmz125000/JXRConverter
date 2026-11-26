@@ -41,6 +41,9 @@ VideoStream readStream(const QByteArray& json) {
     if(nominalRate.size()!=2||nominalRate[1].toInt()<=0||nominalRate[0].toInt()<=0||
        nominalRate[0].toDouble()/nominalRate[1].toDouble()>240)
         stream.frameRate=stream.fps>0?rate.join('/'):QString("30");
+    const auto timeBase=video.value("time_base").toString().split('/');
+    if(timeBase.size()==2&&timeBase[0].toInt()>0&&timeBase[1].toInt()>0)
+        stream.timeBase=timeBase.join('/');
     if(stream.index<0||stream.size.isEmpty())throw std::runtime_error("Video dimensions are unavailable.");
     stream.transferName=video.value("color_transfer").toString();
     stream.primariesName=video.value("color_primaries").toString();

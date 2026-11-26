@@ -10,7 +10,7 @@ struct VideoStream {
     double displayAspect=0;
     double duration=0;
     double fps=0;
-    QString frameRate;
+    QString frameRate, timeBase;
     int primaries=0;
     int transfer=0;
     bool dolbyVision=false;
