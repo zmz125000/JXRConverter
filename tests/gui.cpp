@@ -1484,6 +1484,75 @@ private slots:
         QVERIFY(webp.open(QIODevice::ReadOnly));
         QCOMPARE(webp.readAll().count("ANMF"),2);
     }
+    void animationOutputAsVideo() {
+        const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
+        const auto ffprobe=QStandardPaths::findExecutable("ffprobe");
+        if(ffmpeg.isEmpty()||ffprobe.isEmpty())QSKIP("FFmpeg and ffprobe are unavailable");
+        QProcess process;
+        process.start(ffmpeg,{"-hide_banner","-encoders"});
+        QVERIFY(process.waitForFinished());
+        if(!process.readAllStandardOutput().contains("libx264"))QSKIP("FFmpeg lacks the x264 encoder");
+
+        const auto directory=root("animation-video");
+        const auto wide=makeImage(directory,"a.jpg",80,40,100);
+        const auto tall=makeImage(directory,"b.jpg",24,48,140);
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        window.addPaths({tall,wide});
+        QTRY_COMPARE(window.catalog()->rowCount(),2);
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+        tabs->setCurrentIndex(1);
+        window.findChild<QComboBox*>("videoOutputCodec")->setCurrentIndex(int(VideoCodec::h264));
+        window.findChild<QComboBox*>("videoOutputContainer")->setCurrentIndex(int(VideoContainer::mov));
+        auto* videoRate=window.findChild<QComboBox*>("videoRateControl");
+        videoRate->setCurrentIndex(videoRate->findData(int(VideoRate::cqp)));
+        window.findChild<QSpinBox*>("videoQualityFactor")->setValue(20);
+
+        tabs->setCurrentIndex(2);
+        auto* format=window.findChild<QComboBox*>("animationFormat");
+        auto* transfer=window.findChild<QComboBox*>("animationTransfer");
+        auto* asVideo=window.findChild<QCheckBox*>("animationAsVideo");
+        format->setCurrentIndex(int(jxrc::AnimationFormat::png));
+        transfer->setCurrentIndex(int(jxrc::AnimationTransfer::pq));
+        QVERIFY(!asVideo->isChecked());
+        asVideo->setChecked(true);
+        QVERIFY(!format->isEnabled());
+        QVERIFY(!transfer->isEnabled());
+
+        auto* rate=window.findChild<QDoubleSpinBox*>("animationFrameRate");
+        auto* convert=window.findChild<QPushButton*>("convertVisible");
+        window.findChild<QLineEdit*>("outputDirectory")->setText(root("animation-video-output"));
+        window.findChild<QSpinBox*>("animationMaxEdge")->setValue(40);
+        QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
+        QSignalSpy written(window.queue(),&ConversionQueue::outputFinished);
+        for(const int hz:{1,4}) {
+            rate->setValue(hz);
+            convert->click();
+            const auto expected=hz==1?1:2;
+            QTRY_COMPARE_WITH_TIMEOUT(finished.size(),expected,30000);
+            QVERIFY2(finished.last().at(0).toInt()==1,window.findChild<QPlainTextEdit*>("outputLog")->toPlainText().toUtf8().constData());
+            const auto output=written.last().at(2).toString();
+            QVERIFY(output.endsWith("_animation_h264_qp20_auto.mov"));
+            process.start(ffprobe,{"-v","error","-show_entries","stream=codec_name,color_transfer,nb_frames,duration,width,height",
+                                  "-of","json",output});
+            QVERIFY(process.waitForFinished());
+            QCOMPARE(process.exitCode(),0);
+            const auto streams=QJsonDocument::fromJson(process.readAllStandardOutput()).object().value("streams").toArray();
+            QCOMPARE(streams.size(),1);
+            const auto stream=streams.first().toObject();
+            QCOMPARE(stream.value("codec_name").toString(),QString("h264"));
+            QCOMPARE(stream.value("color_transfer").toString(),QString("bt709"));
+            QCOMPARE(stream.value("width").toInt(),40);
+            QCOMPARE(stream.value("height").toInt(),40);
+            QCOMPARE(stream.value("nb_frames").toString().toInt(),2);
+            QCOMPARE(stream.value("duration").toString().toDouble(),2./hz);
+        }
+        asVideo->setChecked(false);
+        QVERIFY(format->isEnabled());
+        QVERIFY(transfer->isEnabled());
+        QCOMPARE(transfer->currentIndex(),int(jxrc::AnimationTransfer::pq));
+    }
     void animationVideoSlowMotion() {
         const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
         const auto ffprobe=QStandardPaths::findExecutable("ffprobe");

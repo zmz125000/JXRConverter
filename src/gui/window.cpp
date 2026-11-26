@@ -618,7 +618,7 @@ QList<QWidget*> MainWindow::persistentControls() const {
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
-        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_}
+        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_}
         +stillTone_.settings()+videoTone_.settings();
 }
 QList<QWidget*> MainWindow::filterControls() const {
@@ -860,6 +860,12 @@ QWidget* MainWindow::buildAnimationControls() {
     animationEdge_=spin(0,65535,0,"animationMaxEdge");
     animationEdge_->setSpecialValueText("Original size");
     animationEdge_->setSuffix(" px");
+    animationAsVideo_=check("Output as video","animationAsVideo");
+    animationAsVideo_->setToolTip("Use the Video tab’s output settings for a silent video. Each still is encoded as one frame.");
+    form->addRow(animationAsVideo_);
+    animationVideoSummary_=new QLabel;
+    animationVideoSummary_->setWordWrap(true);
+    form->addRow(animationVideoSummary_);
     form->addRow("Format",animationFormat_);
     form->addRow("Dynamic range",animationTransfer_);
     form->addRow("Frame timing",animationRate_);
@@ -908,6 +914,7 @@ QWidget* MainWindow::buildAnimationControls() {
         {"Camera look",cameraLook_},{"Linear HDR",linearHdr_},{"Disable HDR boost",disableRawBoost_}});
     layout->addStretch();
 
+    connect(animationAsVideo_,&QCheckBox::toggled,this,&MainWindow::updateAnimationControls);
     connect(animationFormat_,&QComboBox::currentIndexChanged,this,&MainWindow::updateAnimationControls);
     connect(animationTransfer_,&QComboBox::currentIndexChanged,this,&MainWindow::updateAnimationSummary);
     connect(animationMilliseconds_,&QCheckBox::toggled,this,&MainWindow::updateAnimationControls);
@@ -935,9 +942,11 @@ void MainWindow::updateAnimationControls() {
     }
     if(animationTransfer_->currentIndex()<0||!model->item(animationTransfer_->currentIndex())->isEnabled())
         animationTransfer_->setCurrentIndex(0);
-    animationTransfer_->setEnabled(!sdrOnly);
+    const bool asVideo=animationAsVideo_->isChecked();
+    animationFormat_->setEnabled(!asVideo);
+    animationTransfer_->setEnabled(!asVideo&&!sdrOnly);
 
-    const unsigned minimumDelay=format==AnimationFormat::gif?10000u:1000u;
+    const unsigned minimumDelay=!asVideo&&format==AnimationFormat::gif?10000u:1000u;
     const bool ms=animationMilliseconds_->isChecked();
     const auto delay=std::max(minimumDelay,animationDelayUs_);
     animationRate_->setDecimals(ms?3:4);
@@ -950,6 +959,12 @@ void MainWindow::updateAnimationControls() {
 
 void MainWindow::updateAnimationSummary() {
     const auto format=AnimationFormat(animationFormat_->currentIndex());
+    const bool asVideo=animationAsVideo_->isChecked();
+    animationVideoSummary_->setVisible(asVideo);
+    if(asVideo) {
+        animationVideoSummary_->setText(QString("%1 · %2 · %3\nEdit video settings in Video. Exports without audio.")
+            .arg(videoCodec_->currentText(),videoContainer_->currentText(),videoTransfer_->currentText()));
+    }
     const bool sdr=animationTransfer_->currentIndex()==int(AnimationTransfer::sdr);
     for(const auto& [field,label]:animationSummary_) {
         QString text;
@@ -960,11 +975,13 @@ void MainWindow::updateAnimationSummary() {
         if(field==stillTone_.shoulder)text=stillTone_.shoulderValue->text();
         if(field==stillTone_.range)text=QString("%1 nits").arg(stillTone_.range->value());
         bool applies=field->isEnabled();
-        if(stillTone_.group->isAncestorOf(field))applies&=sdr;
-        if(field==avifDepth_)applies&=format==AnimationFormat::avif;
-        if(field==distance_)applies&=format==AnimationFormat::jxl;
-        if(field==quality_)applies&=format==AnimationFormat::avif||format==AnimationFormat::webp;
-        if(field==autoBitDepth_||field==pngDepth_)applies&=format==AnimationFormat::png&&sdr;
+        if(stillTone_.group->isAncestorOf(field))applies&=!asVideo&&sdr;
+        if(field==exposure_||field==maxEdge_)applies&=!asVideo;
+        if(field==preset_)applies&=!asVideo;
+        if(field==avifDepth_)applies&=!asVideo&&format==AnimationFormat::avif;
+        if(field==distance_)applies&=!asVideo&&format==AnimationFormat::jxl;
+        if(field==quality_)applies&=!asVideo&&(format==AnimationFormat::avif||format==AnimationFormat::webp);
+        if(field==autoBitDepth_||field==pngDepth_)applies&=!asVideo&&format==AnimationFormat::png&&sdr;
         label->setText(text);
         label->setEnabled(applies);
     }
@@ -974,7 +991,8 @@ AnimationOutput MainWindow::animationTarget() const {
     AnimationOutput result;
     result.format=AnimationFormat(animationFormat_->currentIndex());
     result.transfer=AnimationTransfer(animationTransfer_->currentIndex());
-    result.delayUs=std::max(result.format==AnimationFormat::gif?10000u:1000u,animationDelayUs_);
+    if(animationAsVideo_->isChecked())result.video=videoTarget();
+    result.delayUs=std::max(!result.video&&result.format==AnimationFormat::gif?10000u:1000u,animationDelayUs_);
     result.slowMotion=animationSlowMotion_->isChecked();
     result.horizontal=unsigned(animationAlignment_->currentIndex()%3);
     result.vertical=unsigned(animationAlignment_->currentIndex()/3);
@@ -986,13 +1004,18 @@ void MainWindow::convertAnimationFiles(QStringList paths,bool reuseJob,bool quic
     try {
         const auto directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
         if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
+        auto target=animationTarget();
         auto options=optionsForTarget(Target::png);
+        if(target.video) {
+            options.exposure=target.video->processPixels?float(videoExposure_->value()):0.f;
+            options.max_edge=unsigned(videoMaxEdge_->value());
+            videoTone_.apply(options);
+        }
         const auto edge=unsigned(animationEdge_->value());
         if(edge)options.max_edge=options.max_edge?std::min(options.max_edge,edge):edge;
         options.mode=Mode::process;
         const bool reuseQuick=quick&&quickJob_>=0;
         const auto batch=reuseJob?viewedJob_:reuseQuick?quickJob_:nextJob_;
-        auto target=animationTarget();
         target.inputs=std::move(paths);
         auto job=makeAnimationJob(directory,options,std::move(target),outputLayout(batch,quick));
         startConversion({std::move(job)},batch,false,quick,reuseJob,reuseQuick,quick,directory);
@@ -1556,7 +1579,7 @@ void MainWindow::openOutputFolder() {
             if(videoConversionActive()) {
                 path=outputFolder(paths.value(0),output_->text().trimmed(),videoExtension(videoTarget().container),layout);
             } else if(animationConversionActive()) {
-                path=outputFolder(paths.value(0),output_->text().trimmed(),animationExtension(animationTarget().format),layout);
+                path=outputFolder(paths.value(0),output_->text().trimmed(),animationExtension(animationTarget()),layout);
             } else path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),layout);
         }
         catch(const std::exception& e){reportError("Cannot open output folder: "+QString::fromUtf8(e.what()),selectedPaths());return;}

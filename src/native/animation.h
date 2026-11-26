@@ -23,6 +23,7 @@ struct AnimationEncoding {
     AnimationTransfer transfer;
     unsigned width, height, bits, primaries;
     unsigned delay_us;
+    bool video = false;
 };
 
 // Render into the output color space before padding. GIF uses this same
@@ -30,6 +31,7 @@ struct AnimationEncoding {
 JXRC_API std::vector<float> compose_animation_frame(AnimationFrame&&, const AnimationEncoding&,
                                                   unsigned horizontal, unsigned vertical, const Options&);
 JXRC_API std::vector<uint8_t> animation_rgba8(const std::vector<float>&);
+JXRC_API std::vector<uint16_t> animation_rgba16(const std::vector<float>&);
 
 class JXRC_API AnimationEncoder {
 public:

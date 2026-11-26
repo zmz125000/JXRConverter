@@ -218,7 +218,7 @@ Job makeAnimationJob(const QString& directory,const Options& options,AnimationOu
     if(layout.rename_conflicts)snapshot.overwrite=false;
     const auto input=target.inputs.front();
     const auto stem=QFileInfo(input).completeBaseName();
-    const auto folder=QDir(outputFolder(input,directory,animationExtension(target.format),layout));
+    const auto folder=QDir(outputFolder(input,directory,animationExtension(target),layout));
     const auto suffix=animationSuffix(target);
     auto output=folder.absoluteFilePath(stem+suffix);
     const auto key=[](const QString& path){return QDir::cleanPath(QFileInfo(path).absoluteFilePath()).toCaseFolded();};

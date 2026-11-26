@@ -158,7 +158,8 @@ private:
     QWidget *videoPage_ = nullptr, *animationPage_ = nullptr;
     QComboBox *animationFormat_, *animationTransfer_, *animationAlignment_;
     QDoubleSpinBox* animationRate_;
-    QCheckBox *animationMilliseconds_, *animationSlowMotion_;
+    QCheckBox *animationMilliseconds_, *animationSlowMotion_, *animationAsVideo_;
+    QLabel* animationVideoSummary_;
     QSpinBox* animationEdge_;
     QList<std::pair<QWidget*,QLabel*>> animationSummary_;
     unsigned animationDelayUs_=83333;

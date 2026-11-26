@@ -213,12 +213,6 @@ private:
     double peak_=0, average_=0;
 };
 
-std::vector<uint16_t> rgba16(const std::vector<float>& pixels) {
-    std::vector<uint16_t> result(pixels.size());
-    std::transform(pixels.begin(),pixels.end(),result.begin(),[](float v){return uint16_t(std::lround(unit(v)*65535.f));});
-    return result;
-}
-
 void avifCheck(avifResult result) {
     if(result!=AVIF_RESULT_OK)throw std::runtime_error(std::string("AVIF animation: ")+avifResultToString(result));
 }
@@ -241,6 +235,12 @@ struct AvifBytes {
 };
 }
 
+std::vector<uint16_t> animation_rgba16(const std::vector<float>& pixels) {
+    std::vector<uint16_t> result(pixels.size());
+    std::transform(pixels.begin(),pixels.end(),result.begin(),[](float v){return uint16_t(std::lround(unit(v)*65535.f));});
+    return result;
+}
+
 std::vector<float> compose_animation_frame(AnimationFrame&& frame, const AnimationEncoding& format,
                                             unsigned horizontal, unsigned vertical, const Options& o) {
     require(fits_working_image(format.width,format.height),"Invalid animation canvas size.");
@@ -252,9 +252,10 @@ std::vector<float> compose_animation_frame(AnimationFrame&& frame, const Animati
     require(frame.width<=format.width&&frame.height<=format.height,"Frame does not fit the animation canvas.");
     const unsigned x=(format.width-frame.width)*horizontal/2;
     const unsigned y=(format.height-frame.height)*vertical/2;
-    const bool flatten=o.transparency_background==TransparencyBackground::black_remove_alpha||
+    const bool flatten=format.video||o.transparency_background==TransparencyBackground::black_remove_alpha||
                        o.transparency_background==TransparencyBackground::white_remove_alpha;
-    const bool white=o.transparency_background==TransparencyBackground::white_remove_alpha;
+    const bool white=o.transparency_background==TransparencyBackground::white_remove_alpha||
+                     (format.video&&o.transparency_background==TransparencyBackground::white);
     const auto gamut=format.primaries==9?UHDR_CG_BT_2100:UHDR_CG_BT_709;
     const auto fromXyz=skiv::inverse(matrix(format.primaries));
     const auto& toXyz=matrix(frame.primaries);
@@ -265,7 +266,7 @@ std::vector<float> compose_animation_frame(AnimationFrame&& frame, const Animati
             switch(format.transfer) {
             case AnimationTransfer::pq:return linear_to_pq_code(v);
             case AnimationTransfer::hlg:return unit(v);
-            case AnimationTransfer::sdr:return srgb_oetf(v);
+            case AnimationTransfer::sdr:return format.video?bt709_oetf(v):srgb_oetf(v);
             case AnimationTransfer::scrgb:return v*(kSdrWhiteNits/80.f);
             case AnimationTransfer::linear:return v;
             }
@@ -407,7 +408,7 @@ struct AnimationEncoder::Impl {
         return int(ms);
     }
     void add(const std::vector<float>& pixels) {
-        if(png)png->add(rgba16(pixels));
+        if(png)png->add(animation_rgba16(pixels));
         else if(webp) {
             WebPConfig settings{};
             require(WebPConfigInit(&settings)!=0,"Cannot initialize WebP compression.");
@@ -426,7 +427,7 @@ struct AnimationEncoder::Impl {
             avifRGBImageSetDefaults(&rgb,image.get());
             rgb.format=AVIF_RGB_FORMAT_RGBA;
             // libavif accepts full-range RGB16 and scales to the AV1 depth.
-            auto words=rgba16(pixels);
+            auto words=animation_rgba16(pixels);
             rgb.depth=16;
             rgb.pixels=reinterpret_cast<uint8_t*>(words.data());
             require(format.width<=std::numeric_limits<uint32_t>::max()/8,"AVIF animation row is too wide.");
@@ -455,7 +456,7 @@ struct AnimationEncoder::Impl {
                 const JxlPixelFormat input{4,JXL_TYPE_UINT8,JXL_NATIVE_ENDIAN,0};
                 jxlCheck(JxlEncoderAddImageFrame(frame,&input,rgba.data(),rgba.size()));
             } else {
-                const auto rgba=rgba16(pixels);
+                const auto rgba=animation_rgba16(pixels);
                 const JxlPixelFormat input{4,JXL_TYPE_UINT16,JXL_NATIVE_ENDIAN,0};
                 jxlCheck(JxlEncoderAddImageFrame(frame,&input,rgba.data(),rgba.size()*sizeof(uint16_t)));
             }

@@ -10,6 +10,11 @@
 
 #include "ultrahdr_api.h"
 
+inline float bt709_oetf(float value) {
+    const float linear=std::clamp(value,0.f,1.f);
+    return linear<.0180539685f?4.5f*linear:1.0992968268f*std::pow(linear,.45f)-.0992968268f;
+}
+
 class RenderAnalysis;
 /** One captured export quality selection; existing native callers default to High. */
 struct StillEncodeQuality {

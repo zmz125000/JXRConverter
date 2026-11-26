@@ -16,11 +16,6 @@ skiv::Matrix rgb_to_xyz(unsigned primaries) {
     }
 }
 
-float bt709_code(float value) {
-    const float linear=std::clamp(value,0.f,1.f);
-    return linear<.0180539685f?4.5f*linear:1.0992968268f*std::pow(linear,.45f)-.0992968268f;
-}
-
 std::vector<float> render_video_pixels(const uint8_t* codes,size_t count,VideoColor source,bool sdr_output,
                          const Options& options,std::vector<float>& working) {
     uhdr_color_gamut_t gamut;
@@ -92,7 +87,7 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
             float r=float(rgb[0]),g=float(rgb[1]),b=float(rgb[2]);
             if(output.transfer==18)linear_to_hlg_rgb(r,g,b,output_gamut);
             const auto encode=[&](float value) {
-                const float code=output.transfer==16?linear_to_pq_code(value):sdr_output?bt709_code(value):value;
+                const float code=output.transfer==16?linear_to_pq_code(value):sdr_output?bt709_oetf(value):value;
                 return uint16_t(std::lround(std::clamp(code,0.f,1.f)*65535.f));
             };
             const uint16_t pixel_codes[]={encode(r),encode(g),encode(b),65535};
