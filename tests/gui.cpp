@@ -1168,7 +1168,7 @@ private slots:
         drag(list,2,0,true,false);
         QCOMPARE(order(),(QStringList{c,a,b}));
         QCOMPARE(selection->selectedRows().size(),1);
-        QCOMPARE(selection->selectedRows().first().data(Catalog::PathRole).toString(),b);
+        QCOMPARE(selection->selectedRows().first().data(Catalog::PathRole).toString(),c);
 
         tabs->setCurrentIndex(1);
         QCOMPARE(mode->text(),QString("Selected"));
@@ -1218,9 +1218,24 @@ private slots:
         QTRY_COMPARE(written.size(),1);
         QCOMPARE(written.first().at(1).toString(),b);
         QVERIFY(QFileInfo::exists(written.first().at(2).toString()));
+        const auto clickRow=[&](int row,Qt::KeyboardModifiers modifiers=Qt::NoModifier) {
+            QTest::mouseClick(details->viewport(),Qt::LeftButton,modifiers,details->visualRect(model->index(row,0)).center());
+        };
+        QCOMPARE(details->selectionMode(),QAbstractItemView::ExtendedSelection);
+        clickRow(0);
+        clickRow(2,Qt::ControlModifier);
+        QCOMPARE(selection->selectedRows().size(),2);
+        drag(details,2,0,false,false);
+        QCOMPARE(order(),(QStringList{b,c,a})); // Drop onto the moving group.
+        drag(details,2,1,false,false);
+        QCOMPARE(order(),(QStringList{b,a,c}));
+        QCOMPARE(selection->selectedRows().size(),2);
+        clickRow(1);
+        QCOMPARE(selection->selectedRows().size(),1);
+        QCOMPARE(selection->selectedRows().first().data(Catalog::PathRole).toString(),a);
         tabs->setCurrentIndex(0);
         QCOMPARE(mode->text(),QString("Selected"));
-        QCOMPARE(order(),(QStringList{b,c,a}));
+        QCOMPARE(order(),(QStringList{b,a,c}));
     }
     void replacingFilteredSelection() {
         appSettings().clear();MainWindow window;window.show();
@@ -1718,6 +1733,37 @@ private slots:
         const auto fillUp=directory.filePath("fill-up.png");
         QVERIFY(!render(fillUp,flatten));
         QCOMPARE(QImage(fillUp).size(),QSize(4,2));
+    }
+    void animationVideoSettingsSummary() {
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+        auto* image=window.findChild<QWidget*>("animationImageSettings");
+        auto* video=window.findChild<QWidget*>("animationVideoSettings");
+        auto* toggle=window.findChild<QCheckBox*>("animationAsVideo");
+        const auto summary=[&](const QString& name){return video->findChild<QLabel*>(name+"Summary");};
+        tabs->setCurrentIndex(1);
+        auto* codec=window.findChild<QComboBox*>("videoOutputCodec");
+        codec->setCurrentIndex(int(VideoCodec::h264));
+        auto* rate=window.findChild<QComboBox*>("videoRateControl");
+        rate->setCurrentIndex(rate->findData(int(VideoRate::cqp)));
+        window.findChild<QSpinBox*>("videoQualityFactor")->setValue(20);
+        window.findChild<QSpinBox*>("videoMaxEdge")->setValue(720);
+        tabs->setCurrentIndex(2);
+        QVERIFY(image->isVisible());
+        QVERIFY(!video->isVisible());
+        toggle->setChecked(true);
+        QVERIFY(!image->isVisible());
+        QVERIFY(video->isVisible());
+        QCOMPARE(summary("videoOutputCodec")->text(),codec->currentText());
+        QCOMPARE(summary("videoQualityFactor")->text(),QString("20"));
+        QVERIFY(summary("videoQualityFactor")->isVisible());
+        QVERIFY(!summary("videoBitrate")->isVisible());
+        QCOMPARE(summary("videoMaxEdge")->text(),QString("720"));
+        toggle->setChecked(false);
+        QVERIFY(image->isVisible());
+        QVERIFY(!video->isVisible());
     }
     void animationOutputAsVideo() {
         const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");

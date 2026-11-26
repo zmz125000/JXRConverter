@@ -92,7 +92,7 @@ private:
     const QSet<QString>& imageSelection() const;
     void changeSelection(const QItemSelection&, const QItemSelection&);
     void updateReorderMode();
-    void reorderSelected(const QString& path, const QString& target, bool after);
+    void reorderSelected(const QSet<QString>& paths, const QString& target, bool after);
     void selectVisible();
     void clearImageSelection();
     void removeImageSelection();
@@ -161,9 +161,9 @@ private:
     QComboBox *animationFormat_, *animationTransfer_, *animationAlignment_, *animationStack_, *animationResize_;
     QDoubleSpinBox* animationRate_;
     QCheckBox *animationMilliseconds_, *animationSlowMotion_, *animationAsVideo_;
-    QLabel* animationVideoSummary_;
+    QWidget *animationImageSettings_, *animationVideoSettings_;
     QSpinBox* animationEdge_;
-    QList<std::pair<QWidget*,QLabel*>> animationSummary_;
+    QList<std::pair<QWidget*,QLabel*>> animationImageSummary_, animationVideoSummary_;
     unsigned animationDelayUs_=83333;
     QComboBox *videoMode_, *videoCodec_, *videoContainer_, *videoTransfer_, *videoDepth_, *videoChroma_, *videoEncoder_;
     QComboBox *videoPreset_, *videoTune_, *videoRate_, *videoAudio_;

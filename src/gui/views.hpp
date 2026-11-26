@@ -1,5 +1,6 @@
 #pragma once
 #include <QListView>
+#include <QSet>
 #include <QStyledItemDelegate>
 #include <QTableView>
 class QPropertyAnimation;
@@ -18,7 +19,7 @@ public:
     QModelIndexList firstVisibleRow(int count = 2) const;
 signals:
     void pathsDropped(const QStringList& paths);
-    void fileReordered(const QString& path, const QString& target, bool after);
+    void fileReordered(const QSet<QString>& paths, const QString& target, bool after);
     void bulkSelectionChanged(bool selecting);
     void viewportChanged();
 protected:
@@ -54,7 +55,7 @@ public:
     void scrollTo(const QModelIndex&, ScrollHint hint = EnsureVisible) override;
 signals:
     void pathsDropped(const QStringList& paths);
-    void fileReordered(const QString& path, const QString& target, bool after);
+    void fileReordered(const QSet<QString>& paths, const QString& target, bool after);
     void bulkSelectionChanged(bool selecting);
 protected:
     void resizeEvent(QResizeEvent*) override;

@@ -125,7 +125,7 @@ QStringList paths(const QMimeData* mime) {QStringList out;for(const auto& url:mi
 }
 class FileReorder : public QObject {
 public:
-    using Move = std::function<void(const QString&,const QString&,bool)>;
+    using Move = std::function<void(const QSet<QString>&,const QString&,bool)>;
     FileReorder(QAbstractItemView* view, Move move)
         : QObject(view), view_(view), indicator_(new QWidget(view->viewport())), move_(std::move(move)) {
         indicator_->setAttribute(Qt::WA_TransparentForMouseEvents);
@@ -144,7 +144,6 @@ public:
     void setEnabled(bool enabled) {
         enabled_=enabled;
         if(!enabled)reset();
-        view_->setSelectionMode(enabled?QAbstractItemView::NoSelection:QAbstractItemView::ExtendedSelection);
     }
 protected:
     bool eventFilter(QObject*, QEvent* event) override {
@@ -161,9 +160,13 @@ protected:
         }
         case QEvent::MouseMove: {
             auto* mouse=static_cast<QMouseEvent*>(event);
-            if(source_.isEmpty()||!(mouse->buttons()&Qt::LeftButton))return false;
+            if(!(mouse->buttons()&Qt::LeftButton))return false;
+            if(source_.isEmpty())return true;
             position_=mouse->position().toPoint();
             if(!dragging_&&(position_-start_).manhattanLength()>=QApplication::startDragDistance()) {
+                for(const auto& index:view_->selectionModel()->selectedRows(0))
+                    draggedPaths_.insert(index.data(Catalog::PathRole).toString());
+                if(!draggedPaths_.contains(source_))draggedPaths_={source_};
                 dragging_=true;
                 scroll_.start();
             }
@@ -178,10 +181,11 @@ protected:
             if(dragged&&view_->viewport()->rect().contains(pos)) {
                 position_=pos;
                 updateTarget();
-                const auto source=source_, target=target_;
+                const auto paths=std::move(draggedPaths_);
+                const auto target=target_;
                 const bool after=after_;
                 reset();
-                if(!target.isEmpty()&&source!=target)move_(source,target,after);
+                if(!target.isEmpty())move_(paths,target,after);
             } else reset();
             return dragged;
         }
@@ -191,7 +195,7 @@ protected:
     }
 private:
     void reset() {
-        source_.clear();target_.clear();dragging_=false;
+        source_.clear();target_.clear();draggedPaths_.clear();dragging_=false;
         indicator_->hide();scroll_.stop();
     }
     void updateTarget() {
@@ -215,6 +219,7 @@ private:
         if(!index.isValid()){target_.clear();indicator_->hide();return;}
         const auto rect=view_->visualRect(index);
         target_=index.data(Catalog::PathRole).toString();
+        if(draggedPaths_.contains(target_)){target_.clear();indicator_->hide();return;}
         after_=grid&&point.y()<=rect.bottom()?point.x()>=rect.center().x():point.y()>=rect.center().y();
         const QRect mark=grid?QRect(after_?rect.right()-2:rect.left(),rect.top(),3,rect.height()):
             QRect(0,after_?rect.bottom()-2:rect.top(),bounds.width(),3);
@@ -227,10 +232,11 @@ private:
     QTimer scroll_;
     QPoint start_,position_;
     QString source_,target_;
+    QSet<QString> draggedPaths_;
     bool enabled_=false,dragging_=false,after_=false;
 };
-FileListView::FileListView(QWidget* parent):QListView(parent),reorder_(new FileReorder(this,[this](const QString& source,const QString& target,bool after){
-    emit fileReordered(source,target,after);
+FileListView::FileListView(QWidget* parent):QListView(parent),reorder_(new FileReorder(this,[this](const QSet<QString>& paths,const QString& target,bool after){
+    emit fileReordered(paths,target,after);
 })) {
     setObjectName("fileList");setSelectionMode(ExtendedSelection);setSelectionBehavior(SelectRows);setSelectionRectVisible(true);setDragEnabled(false);
     setAcceptDrops(true);setDropIndicatorShown(false);setEditTriggers(NoEditTriggers);setUniformItemSizes(true);
@@ -296,8 +302,8 @@ void FileListView::dragEnterEvent(QDragEnterEvent* e){if(e->mimeData()->hasUrls(
 void FileListView::dragMoveEvent(QDragMoveEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
 void FileListView::dropEvent(QDropEvent* e){if(e->mimeData()->hasUrls()){emit pathsDropped(paths(e->mimeData()));e->acceptProposedAction();}}
 FileTableView::FileTableView(QWidget* parent):QTableView(parent),frozen_(new FrozenNameView(this)),
-    reorder_(new FileReorder(this,[this](const QString& source,const QString& target,bool after){
-        emit fileReordered(source,target,after);
+    reorder_(new FileReorder(this,[this](const QSet<QString>& paths,const QString& target,bool after){
+        emit fileReordered(paths,target,after);
     })) {
     setItemDelegate(new TableThumbnailDelegate(this));
     setObjectName("fileDetails");setSelectionMode(ExtendedSelection);setSelectionBehavior(SelectRows);setDragEnabled(false);setAcceptDrops(true);setDropIndicatorShown(false);

@@ -886,9 +886,6 @@ QWidget* MainWindow::buildAnimationControls() {
     animationAsVideo_=check("Output as video","animationAsVideo");
     animationAsVideo_->setToolTip("Use the Video tab’s output settings for a silent video. Each still is encoded as one frame.");
     form->addRow(animationAsVideo_);
-    animationVideoSummary_=new QLabel;
-    animationVideoSummary_->setWordWrap(true);
-    form->addRow(animationVideoSummary_);
     form->addRow("Format",animationFormat_);
     form->addRow("Dynamic range",animationTransfer_);
     form->addRow("Frame timing",animationRate_);
@@ -903,40 +900,65 @@ QWidget* MainWindow::buildAnimationControls() {
     form->addRow(ordering);
     layout->addWidget(output);
 
-    auto* shared=new QLabel("Edit shared settings in Conversion.");
-    shared->setWordWrap(true);
-    layout->addWidget(shared);
-    const auto summary=[&](const QString& title,const QList<std::pair<QString,QWidget*>>& fields) {
+    const auto settingsSection=[layout](const QString& hint,const char* name) {
+        auto* section=new QWidget;
+        section->setObjectName(name);
+        auto* rows=new QVBoxLayout(section);
+        rows->setContentsMargins(0,0,0,0);
+        rows->setSpacing(layout->spacing());
+        auto* shared=new QLabel(hint);
+        shared->setWordWrap(true);
+        rows->addWidget(shared);
+        layout->addWidget(section);
+        return rows;
+    };
+    auto* imageSettings=settingsSection("Edit shared settings in Conversion.","animationImageSettings");
+    animationImageSettings_=imageSettings->parentWidget();
+    auto* videoSettings=settingsSection("Edit shared settings in Video. Exports without audio.","animationVideoSettings");
+    animationVideoSettings_=videoSettings->parentWidget();
+    const auto summary=[this](QVBoxLayout* section,auto& entries,const QString& title,const QList<std::pair<QString,QWidget*>>& fields) {
         auto* group=new QGroupBox(title);
         auto* rows=new QFormLayout(group);
         rows->setRowWrapPolicy(QFormLayout::WrapLongRows);
-        for(const auto& field:fields) {
+        for(const auto& [name,field]:fields) {
             auto* value=new QLabel;
+            value->setObjectName(field->objectName()+"Summary");
+            value->setTextFormat(Qt::PlainText);
             value->setWordWrap(true);
-            rows->addRow(field.first,value);
-            animationSummary_.append({field.second,value});
+            rows->addRow(name,value);
+            entries.append({field,value});
             const auto changed=[this]{if(animationConversionActive())updateAnimationSummary();};
-            if(auto* box=qobject_cast<QComboBox*>(field.second))connect(box,&QComboBox::currentIndexChanged,this,changed);
-            if(auto* box=qobject_cast<QCheckBox*>(field.second))connect(box,&QCheckBox::toggled,this,changed);
-            if(auto* spinBox=qobject_cast<QSpinBox*>(field.second))connect(spinBox,&QSpinBox::valueChanged,this,changed);
-            if(auto* spinBox=qobject_cast<QDoubleSpinBox*>(field.second))connect(spinBox,&QDoubleSpinBox::valueChanged,this,changed);
-            if(auto* slider=qobject_cast<QSlider*>(field.second))connect(slider,&QSlider::valueChanged,this,changed);
+            if(auto* box=qobject_cast<QComboBox*>(field))connect(box,&QComboBox::currentIndexChanged,this,changed);
+            if(auto* box=qobject_cast<QCheckBox*>(field))connect(box,&QCheckBox::toggled,this,changed);
+            if(auto* spinBox=qobject_cast<QSpinBox*>(field))connect(spinBox,&QSpinBox::valueChanged,this,changed);
+            if(auto* spinBox=qobject_cast<QDoubleSpinBox*>(field))connect(spinBox,&QDoubleSpinBox::valueChanged,this,changed);
+            if(auto* slider=qobject_cast<QSlider*>(field))connect(slider,&QSlider::valueChanged,this,changed);
+            if(auto* edit=qobject_cast<QLineEdit*>(field))connect(edit,&QLineEdit::textChanged,this,changed);
         }
-        layout->addWidget(group);
+        section->addWidget(group);
     };
-    summary("Quality and source settings",{{"Quality preset",preset_},{"JPEG / AVIF / WebP quality",quality_},{"JXL distance",distance_},
+    const auto toneSummary=[&](QVBoxLayout* section,auto& entries,const ToneControls& tone) {
+        summary(section,entries,"SDR tone mapping",{{"HDR tone mapping",tone.enabled},{"Tone mapper",tone.mapper},
+            {"SDR shoulder",tone.shoulder},{"Auto HDR range",tone.autoRange},{"HDR range cap",tone.range},
+            {"Color mapping",tone.color},{"Auto tone curve",tone.autoCurve},{"Shadows",tone.shadows},
+            {"Midtones",tone.midtones},{"Highlights",tone.highlights}});
+    };
+    summary(imageSettings,animationImageSummary_,"Quality and source settings",{{"Quality preset",preset_},{"JPEG / AVIF / WebP quality",quality_},{"JXL distance",distance_},
         {"AVIF max depth",avifDepth_},{"PNG auto bit depth",autoBitDepth_},{"PNG bit depth",pngDepth_},
         {"Gain map reconstruction",reconstruction_},{"Transparency background",transparencyBackground_}});
-    summary("SDR tone mapping",{{"HDR tone mapping",stillTone_.enabled},{"Tone mapper",stillTone_.mapper},
-        {"SDR shoulder",stillTone_.shoulder},{"Auto HDR range",stillTone_.autoRange},{"HDR range cap",stillTone_.range},
-        {"Color mapping",stillTone_.color},{"Auto tone curve",stillTone_.autoCurve},{"Shadows",stillTone_.shadows},
-        {"Midtones",stillTone_.midtones},{"Highlights",stillTone_.highlights}});
-    summary("Pixel processing",{{"Conversion mode",mode_},{"Exposure",exposure_},{"Conversion max edge",maxEdge_},
+    toneSummary(imageSettings,animationImageSummary_,stillTone_);
+    summary(imageSettings,animationImageSummary_,"Pixel processing",{{"Conversion mode",mode_},{"Exposure",exposure_},{"Conversion max edge",maxEdge_},
         {"sRGB clamp",srgbClamp_},{"Extended BT.2020",bt2020_},{"Convert scRGB gamut to BT.2020",convertGamut_}});
-    summary("RAW rendering",{{"HDR mode",rawMode_},{"Auto exposure",rawAutoExposure_},{"Protect highlights",rawProtectHighlights_},
+    summary(imageSettings,animationImageSummary_,"RAW rendering",{{"HDR mode",rawMode_},{"Auto exposure",rawAutoExposure_},{"Protect highlights",rawProtectHighlights_},
         {"Exposure",rawExposure_},{"White balance",wb_},{"Temperature",kelvin_},{"HDR boost target",nits_},{"HDR shoulder",shoulder_},
         {"Highlight stops",highlight_},{"Shadows",shadows_},{"Midtones",midtones_},{"Highlights",highlights_},
         {"Camera look",cameraLook_},{"Linear HDR",linearHdr_},{"Disable HDR boost",disableRawBoost_}});
+    summary(videoSettings,animationVideoSummary_,"Video output",{{"Mode",videoMode_},{"Codec",videoCodec_},{"Container",videoContainer_},
+        {"Dynamic range",videoTransfer_},{"Bit depth",videoDepth_},{"Chroma subsampling",videoChroma_}});
+    summary(videoSettings,animationVideoSummary_,"Video encoder",{{"Encoder",videoEncoder_},{"Encoder preset",videoPreset_},{"Tune",videoTune_},
+        {"Rate control",videoRate_},{"Quality factor",videoFactor_},{"Target bitrate",videoBitrate_},{"Encoder parameters",videoParameters_}});
+    toneSummary(videoSettings,animationVideoSummary_,videoTone_);
+    summary(videoSettings,animationVideoSummary_,"Pixel processing",{{"Exposure",videoExposure_},{"Maximum edge",videoMaxEdge_}});
     layout->addStretch();
 
     connect(animationAsVideo_,&QCheckBox::toggled,this,&MainWindow::updateAnimationControls);
@@ -985,28 +1007,37 @@ void MainWindow::updateAnimationControls() {
 void MainWindow::updateAnimationSummary() {
     const auto format=AnimationFormat(animationFormat_->currentIndex());
     const bool asVideo=animationAsVideo_->isChecked();
-    animationVideoSummary_->setVisible(asVideo);
-    if(asVideo) {
-        animationVideoSummary_->setText(QString("%1 · %2 · %3\nEdit video settings in Video. Exports without audio.")
-            .arg(videoCodec_->currentText(),videoContainer_->currentText(),videoTransfer_->currentText()));
-    }
+    animationImageSettings_->setVisible(!asVideo);
+    animationVideoSettings_->setVisible(asVideo);
+    const auto& tone=asVideo?videoTone_:stillTone_;
     const bool sdr=animationTransfer_->currentIndex()==int(AnimationTransfer::sdr);
-    for(const auto& [field,label]:animationSummary_) {
+    const auto& entries=asVideo?animationVideoSummary_:animationImageSummary_;
+    for(const auto& [field,label]:entries) {
         QString text;
         if(const auto* box=qobject_cast<QComboBox*>(field))text=box->currentText();
         if(const auto* box=qobject_cast<QCheckBox*>(field))text=box->isChecked()?"On":"Off";
         if(const auto* spinBox=qobject_cast<QSpinBox*>(field))text=spinBox->text();
         if(const auto* spinBox=qobject_cast<QDoubleSpinBox*>(field))text=QString::number(spinBox->value(),'g',5)+spinBox->suffix();
-        if(field==stillTone_.shoulder)text=stillTone_.shoulderValue->text();
-        if(field==stillTone_.range)text=QString("%1 nits").arg(stillTone_.range->value());
+        if(const auto* edit=qobject_cast<QLineEdit*>(field))text=edit->text().isEmpty()?QString("Default"):edit->text();
+        if(field==tone.shoulder)text=tone.shoulderValue->text();
+        if(field==tone.range)text=QString("%1 nits").arg(tone.range->value());
         bool applies=field->isEnabled();
-        if(stillTone_.group->isAncestorOf(field))applies&=!asVideo&&sdr;
-        if(field==exposure_||field==maxEdge_)applies&=!asVideo;
-        if(field==preset_)applies&=!asVideo;
-        if(field==avifDepth_)applies&=!asVideo&&format==AnimationFormat::avif;
-        if(field==distance_)applies&=!asVideo&&format==AnimationFormat::jxl;
-        if(field==quality_)applies&=!asVideo&&(format==AnimationFormat::avif||format==AnimationFormat::webp);
-        if(field==autoBitDepth_||field==pngDepth_)applies&=!asVideo&&format==AnimationFormat::png&&sdr;
+        if(asVideo) {
+            const int row=videoEncoderForm_->indexOf(field);
+            if(row>=0) {
+                auto* summaryForm=static_cast<QFormLayout*>(label->parentWidget()->layout());
+                summaryForm->setRowVisible(label,videoEncoderForm_->isRowVisible(field));
+                if(field==videoFactor_)
+                    static_cast<QLabel*>(summaryForm->labelForField(label))->setText(
+                        static_cast<QLabel*>(videoEncoderForm_->labelForField(field))->text());
+            }
+        } else {
+            if(tone.group->isAncestorOf(field))applies&=sdr;
+            if(field==avifDepth_)applies&=format==AnimationFormat::avif;
+            if(field==distance_)applies&=format==AnimationFormat::jxl;
+            if(field==quality_)applies&=format==AnimationFormat::avif||format==AnimationFormat::webp;
+            if(field==autoBitDepth_||field==pngDepth_)applies&=format==AnimationFormat::png&&sdr;
+        }
         label->setText(text);
         label->setEnabled(applies);
     }
@@ -1378,20 +1409,22 @@ void MainWindow::updateReorderMode() {
     const bool reorder=selectedTab&&reorderMode_;
     auto* selectedTabButton=statusFilter_->button(1);
     selectedTabButton->setText(reorderMode_?"Reorder":"Selected");
-    selectedTabButton->setToolTip(reorder?"Drag files to change their order. Click to switch to selection.":
+    selectedTabButton->setToolTip(reorder?"Drag files to change their order. Ctrl-click to select multiple files. Click this tab to switch to box selection.":
         selectedTab?"Drag to box-select files. Click to switch to reordering.":
         reorderMode_?"Open the selection for reordering.":"Show your selection across all views.");
     list_->setReorderEnabled(reorder);
     table_->setReorderEnabled(reorder);
 }
-void MainWindow::reorderSelected(const QString& path,const QString& target,bool after) {
-    if(!reorderMode_||statusFilter_->checkedId()!=1||!selectedImages_.contains(path)||!selectedImages_.contains(target))return;
-    auto order=proxy_->sortedPaths(selectedImages_);
-    if(!order.removeOne(path))return;
-    const auto position=order.indexOf(target);
-    if(position<0)return;
-    order.insert(position+(after?1:0),path);
-    proxy_->setManualOrder(order);
+void MainWindow::reorderSelected(const QSet<QString>& paths,const QString& target,bool after) {
+    if(!reorderMode_||statusFilter_->checkedId()!=1||paths.contains(target)||!selectedImages_.contains(target))return;
+    const auto order=proxy_->sortedPaths(selectedImages_);
+    QStringList moving, remaining;
+    for(const auto& path:order)(paths.contains(path)?moving:remaining).append(path);
+    const auto anchor=remaining.indexOf(target);
+    if(moving.isEmpty()||anchor<0)return;
+    const auto position=anchor+(after?1:0);
+    const auto updated=remaining.first(position)+moving+remaining.sliced(position);
+    if(updated!=order)proxy_->setManualOrder(updated);
 }
 void MainWindow::selectVisible() {
     for(int row=0;row<proxy_->rowCount();++row){const auto path=proxy_->index(row,0).data(Catalog::PathRole).toString();imageSelection().insert(path);}
