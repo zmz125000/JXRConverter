@@ -40,7 +40,8 @@ void range(double value,double low,double high,const char* name) {
 }
 bool linear_jxl(Target t) {return t==Target::jxl_linear||t==Target::jxl_scrgb;}
 bool hlg_target(Target t) {return t==Target::png_hlg||t==Target::jxl_hlg||t==Target::avif_hlg;}
-bool hdr_target(Target t) {return t==Target::jpeg_gainmap||linear_jxl(t)||t==Target::avif_pq||t==Target::avif_gainmap||t==Target::jxl_pq||t==Target::png_hdr||hlg_target(t);}
+bool gain_target(Target t) {return t==Target::jpeg_gainmap||t==Target::avif_gainmap||t==Target::jxl_gainmap;}
+bool hdr_target(Target t) {return gain_target(t)||linear_jxl(t)||t==Target::avif_pq||t==Target::jxl_pq||t==Target::png_hdr||hlg_target(t);}
 std::vector<uint8_t> read(const std::filesystem::path& path,const std::function<bool()>& cancelled={}) {
     if(cancelled&&cancelled())throw std::runtime_error("Image read cancelled");
     std::ifstream f(path,std::ios::binary|std::ios::ate);
@@ -130,7 +131,7 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
 void validate(const Options& o) {
     range(static_cast<int>(o.transparency_background),0,3,"transparency background");
     range(static_cast<int>(o.gain_map_reconstruction),0,2,"gain map reconstruction");
-    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,static_cast<int>(Target::webp),"target");
+    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,static_cast<int>(Target::jxl_gainmap),"target");
     range(static_cast<int>(o.quality.preset),0,4,"preset");
     range(o.quality.jxl_distance,0,3,"JXL distance");range(o.quality.codec_quality,1,100,"codec quality");
     if(o.quality.avif_depth!=8&&o.quality.avif_depth!=10&&o.quality.avif_depth!=12)throw std::invalid_argument("AVIF depth must be 8, 10 or 12");
@@ -148,6 +149,7 @@ void validate(const Options& o) {
         const RawControls d;
         if(o.srgb_clamp||o.exposure||o.max_edge||o.sdr_tone_map||r.hdr_mode!=RawHdrMode::source||r.exposure||r.auto_exposure||r.white_balance||r.kelvin!=d.kelvin||r.highlight_stops||r.shoulder!=d.shoulder||r.target_nits!=d.target_nits||r.shadows||r.midtones||r.highlights||!r.camera_look||r.linear_hdr||!o.extended_bt2020)
             throw std::invalid_argument("Pixel and RAW controls require --mode process");
+        if(o.target==Target::jxl_gainmap)throw std::invalid_argument("JXL gain-map output requires Process pixels mode");
         if(o.target==Target::jxl_pq||o.target==Target::avif_pq||o.target==Target::png_hdr||hlg_target(o.target))
             throw std::invalid_argument("An explicit transfer conversion requires --mode process; preserve uses the source transfer");
     }
@@ -178,7 +180,7 @@ bool scrgb_output(const Options& o) {return o.target==Target::jxl_scrgb;}
 bool convert_gamut(const Options& o) {return o.convert_gamut && !o.srgb_clamp && !scrgb_output(o);}
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
-    const int raw_kind=format==5?(o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap?2:hdr_target(o.target)?1:0):0;
+    const int raw_kind=format==5?(gain_target(o.target)?2:hdr_target(o.target)?1:0):0;
     return std::make_tuple(o.gain_map_reconstruction==GainMapReconstruction::full_image,remove_alpha(o),remove_alpha(o)&&white_background(o),o.mode,format==5?0.f:o.exposure,o.max_edge,o.keep_exif,o.srgb_clamp,format==3&&o.extended_bt2020&&!o.srgb_clamp,(format==3||format==4)&&convert_gamut(o),raw_kind,
         format==4 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) && !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve),
         r.hdr_mode,r.exposure,r.white_balance,r.kelvin,r.highlight_stops,r.shoulder,r.target_nits,
@@ -334,7 +336,7 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
                 regular_to_linear(raster,linear,gamut);
             }
             else {
-                int cg=0;const bool previous=paired_sdr;paired_sdr=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
+                int cg=0;const bool previous=paired_sdr;paired_sdr=gain_target(o.target);
                 struct Reset{bool value;~Reset(){paired_sdr=value;}} reset{previous};
                 rc=decode_raw_f32(bytes.data(),bytes.size(),o.raw,hdr_target(o.target),o.max_edge,linear,sdr_base,w,h,cg);
                 gamut=cg==2?UHDR_CG_BT_2100:cg==1?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
@@ -417,8 +419,8 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
         // either encoded plane's depth. Quantize it at the selected export depth.
         q.source_bits=full_gainmap?32:cache.bits;
         q.analysis=&cache.analysis;
-        const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
-        if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
+        const bool gain_output=gain_target(o.target);
+        if(o.sdr_tone_map&&(sdr_target||gain_output)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
             if(mpcvr&&peak>1.f) {
                 if(cache.mapped_sdr.empty()||cache.mapped_mapper!=o.sdr_tone_mapper) {
@@ -444,7 +446,7 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             return result;
         }
         const float* export_pixels=sdr_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():linear.data();
-        const float* export_base=gain_target&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():sdr_base.empty()?nullptr:sdr_base.data();
+        const float* export_base=gain_output&&o.sdr_tone_map&&!cache.mapped_sdr.empty()?cache.mapped_sdr.data():sdr_base.empty()?nullptr:sdr_base.data();
         const int cg=gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0;
         int rc;
         if(cache.scrgb) {
@@ -474,13 +476,15 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             rc=encode_png_f32(w,h,o.target==Target::png?export_pixels:linear.data(),gamut,transfer,q.png_depth(q.source_bits),path.c_str(),q);
         } else if(o.target==Target::webp) {
             rc=encode_webp_f32(w,h,export_pixels,gamut,path.c_str(),q);
+        } else if(o.target==Target::jxl_gainmap) {
+            rc=encode_jxl_gain_map(w,h,linear.data(),gamut,path.c_str(),q,export_base);
         } else if(o.target==Target::jxl_hlg) {
             rc=encode_jxl_f32(w,h,linear.data(),gamut,true,path.c_str(),q,false,true);
         } else if(o.target==Target::avif_hlg) {
             rc=encode_avif_f32(w,h,linear.data(),gamut,3,path.c_str(),q);
         } else rc=encode_still_export_f32(sdr_target?export_pixels:linear.data(),w,h,cg,static_cast<int>(o.target),path.c_str(),q,export_base);
         require(rc==0,"Image encode failed (codec "+std::to_string(rc)+")");
-        result.width=w;result.height=h;result.gainmap=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
+        result.width=w;result.height=h;result.gainmap=gain_output;
         result.transfer=hlg_target(o.target)?18:o.target==Target::avif_pq||o.target==Target::jxl_pq||o.target==Target::png_hdr?16:0;
         result.encoding=result.gainmap?"gainmap":result.transfer==18?"hlg":result.transfer==16?"pq":(linear_jxl(o.target)||cache.scrgb)?"linear":"sdr";
     }

@@ -10,7 +10,7 @@ void help() {
     std::cout << "jxrconvert " << jxrc::version() << R"( - LocalViewer image conversion library/CLI
 Usage: jxrconvert INPUT OUTPUT --target TARGET [OPTIONS]
 Inputs: JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and LibRaw formats
-Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, avif-gainmap, png, png-hdr, png-hlg, jxl-hlg, avif-hlg, webp
+Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, jxl-gainmap, avif, avif-pq, avif-gainmap, png, png-hdr, png-hlg, jxl-hlg, avif-hlg, webp
   --mode preserve|process       Default: preserve; no automatic processing fallback
   --preset lossless|high|medium|low|custom    Default: high
   --quality 1..100              Custom JPEG/AVIF/WebP quality (selects custom preset)
@@ -83,7 +83,7 @@ int run(const std::vector<std::string>& argv) {
         if(arg.rfind("--raw-",0)==0&&arg!="--raw-mode")raw_custom=true;
         auto value=[&]()->std::string{if(++i>=argc)throw std::invalid_argument("Missing value for "+arg);return argv[i];};
         using T=jxrc::Target;using P=jxrc::Preset;
-        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-scrgb",T::jxl_scrgb},{"jxl-pq",T::jxl_pq},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap},{"png",T::png},{"png-hdr",T::png_hdr},{"png-pq",T::png_hdr},{"png-hlg",T::png_hlg},{"jxl-hlg",T::jxl_hlg},{"avif-hlg",T::avif_hlg},{"webp",T::webp}});target=true;}
+        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-scrgb",T::jxl_scrgb},{"jxl-pq",T::jxl_pq},{"jxl-gainmap",T::jxl_gainmap},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap},{"png",T::png},{"png-hdr",T::png_hdr},{"png-pq",T::png_hdr},{"png-hlg",T::png_hlg},{"jxl-hlg",T::jxl_hlg},{"avif-hlg",T::avif_hlg},{"webp",T::webp}});target=true;}
         else if(arg=="--mode")o.mode=choice<jxrc::Mode>(value(),{{"preserve",jxrc::Mode::preserve},{"process",jxrc::Mode::process}});
         else if(arg=="--preset"){o.quality.preset=choice<P>(value(),{{"lossless",P::lossless},{"high",P::high},{"medium",P::medium},{"low",P::low},{"custom",P::custom}});preset=true;}
         else if(arg=="--quality"){o.quality.codec_quality=integer(value());custom=true;}

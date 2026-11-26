@@ -61,6 +61,7 @@ struct StillEncodeQuality {
     unsigned avif_depth() const { return std::min(source_bits<=8?8u:source_bits<=10?10u:12u, unsigned(preset == 4 ? custom_avif_depth : (preset == 0 || preset == 1) ? 12 : 10)); }
     unsigned jpeg_gain_map_scale() const { return gain_map_scale(); }
     unsigned avif_gain_map_scale() const { return gain_map_scale(); }
+    unsigned jxl_gain_map_scale() const { return gain_map_scale(); }
 
 private:
     unsigned gain_map_scale() const {
@@ -369,6 +370,9 @@ int pack_linear_f16_for_direct(std::vector<uint16_t>& rgba, unsigned w, unsigned
 /** Straight-alpha linear F16 → JXL. PQ uses uint16 codes, linear uses F16. Mutates RGBA. */
 int encode_jxl_f16(unsigned w, unsigned h, uint16_t* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality = 1, bool pq = false);
+int encode_jxl_gain_map(unsigned w, unsigned h, const float* rgba, uhdr_color_gamut_t gamut,
+                        const char* path, StillEncodeQuality quality, const float* sdr_base);
+
 /** Straight-alpha linear F32 → JXL: SDR uint8/uint16; PQ/HLG uint16; linear HDR float32 or requested half. */
 int encode_jxl_f32(unsigned w, unsigned h, const float* rgba, uhdr_color_gamut_t cg,
                    bool hdr, const char* path, StillEncodeQuality quality, bool pq, bool hlg = false);

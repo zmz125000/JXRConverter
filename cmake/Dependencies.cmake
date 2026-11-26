@@ -193,6 +193,8 @@ foreach(flag TOOLS DEVTOOLS BENCHMARK EXAMPLES MANPAGES JNI OPENEXR SJPEG TCMALL
 endforeach()
 set(JPEGXL_BUNDLE_LIBPNG OFF CACHE BOOL "" FORCE)
 add_subdirectory("${libjxl_SOURCE_DIR}" "${libjxl_BINARY_DIR}" EXCLUDE_FROM_ALL)
+# Build the jhgm bundle writer without pulling in the rest of libjxl extras.
+target_sources(jxl_enc-obj PRIVATE "${libjxl_SOURCE_DIR}/lib/extras/gain_map.cc")
 # These upstream SIMD kernels intentionally round double literals to float.
 # Scope the MSVC diagnostic policy to libjxl's own object targets.
 if(MSVC)

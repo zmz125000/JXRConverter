@@ -63,7 +63,7 @@ void orderJobs(QVector<Job>& jobs) {
     // Keep each source's targets together to bound prepared-pixel memory by
     // worker count. RAW has SDR, HDR, and paired HDR/SDR render families.
     QHash<QString,int> order;for(const auto& job:jobs)if(!order.contains(job.input))order.insert(job.input,order.size());
-    auto family=[](Target t){return t==Target::jpeg_gainmap||t==Target::avif_gainmap?2:t==Target::jpeg||t==Target::jxl||t==Target::avif||t==Target::png||t==Target::webp?0:1;};
+    auto family=[](Target t){return t==Target::jpeg_gainmap||t==Target::avif_gainmap||t==Target::jxl_gainmap?2:t==Target::jpeg||t==Target::jxl||t==Target::avif||t==Target::png||t==Target::webp?0:1;};
     std::stable_sort(jobs.begin(),jobs.end(),[&](const Job& a,const Job& b){
         return a.input==b.input?family(a.options.target)<family(b.options.target):order[a.input]<order[b.input];
     });
@@ -139,10 +139,10 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
     validate(options);QVector<Job> result;QSet<QString> outputs;QHash<QString,int> nextSuffix;
     if(numbered)*numbered=false;
     const int target=int(options.target);
-    const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl","sdr.png","hdr.png","hlg.png","hlg.jxl","hlg.avif","sdr.webp"};
+    const QStringList suffixes={"sdr.jpg","gainmap.jpg","sdr.jxl","linear.jxl","sdr.avif","pq.avif","gainmap.avif","pq.jxl","scrgb.jxl","sdr.png","hdr.png","hlg.png","hlg.jxl","hlg.avif","sdr.webp","gainmap.jxl"};
     QString quality;
     if(options.quality.preset==Preset::custom) {
-        const bool jxl=options.target==Target::jxl||options.target==Target::jxl_linear||options.target==Target::jxl_pq||options.target==Target::jxl_scrgb||options.target==Target::jxl_hlg;
+        const bool jxl=options.target==Target::jxl||options.target==Target::jxl_linear||options.target==Target::jxl_pq||options.target==Target::jxl_scrgb||options.target==Target::jxl_hlg||options.target==Target::jxl_gainmap;
         quality=jxl?"d"+QString::number(options.quality.jxl_distance,'g',6):"q"+QString::number(options.quality.codec_quality);
     } else {
         const QStringList presets={"lossless","high","medium","low"};

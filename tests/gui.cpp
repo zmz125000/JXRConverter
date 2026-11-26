@@ -2026,13 +2026,22 @@ private slots:
         auto* button=window.findChild<QToolButton*>("statusJob");auto* cancel=window.findChild<QPushButton*>("cancelJob");
         auto* targets=window.findChild<QListWidget*>("conversionTargets");auto* theme=window.findChild<QComboBox*>("theme");
         QVERIFY(button);QVERIFY(cancel);QVERIFY(targets);QVERIFY(theme);
+        const auto gainTargets=targets->findItems("JXL · gain map",Qt::MatchExactly);
+        QCOMPARE(gainTargets.size(),1);
+        auto* gainTarget=gainTargets.front();
+        QCOMPARE(gainTarget->data(Qt::UserRole).toInt(),int(jxrc::Target::jxl_gainmap));
+        auto* mode=window.findChild<QComboBox*>("conversionMode");QVERIFY(mode);
+        mode->setCurrentIndex(0);QVERIFY(!(gainTarget->flags()&Qt::ItemIsEnabled));
+        mode->setCurrentIndex(1);QVERIFY(gainTarget->flags()&Qt::ItemIsEnabled);
+        auto* animationFormat=window.findChild<QComboBox*>("animationFormat");QVERIFY(animationFormat);
+        QCOMPARE(animationFormat->findText(gainTarget->text()),-1);
         for(int index=0;index<theme->count();++index) {
             theme->setCurrentIndex(index);
             for(int width:{980,1440}) {
                 window.resize(width,900);QTest::qWait(30);
                 QVERIFY(button->width()<=3*cancel->width());QCOMPARE(button->height(),cancel->height());
                 QVERIFY(button->sizeHint().width()<=3*cancel->width());
-                QCOMPARE(targets->count(),15);QCOMPARE(targets->verticalScrollBar()->maximum(),0);
+                QCOMPARE(targets->count(),16);QCOMPARE(targets->verticalScrollBar()->maximum(),0);
                 QVERIFY(targets->viewport()->rect().contains(targets->visualItemRect(targets->item(targets->count()-1))));
             }
         }

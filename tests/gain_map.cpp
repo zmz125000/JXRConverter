@@ -1,5 +1,7 @@
 #include "gain_map.h"
 #include <avif/internal.h>
+#include <jxl/decode_cxx.h>
+#include <jxl/gain_map.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -37,6 +39,45 @@ std::vector<uint8_t> profile(const std::filesystem::path& dir,unsigned cp) {
     std::ifstream file(path,std::ios::binary);std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(file)),{});
     return source_jpeg_icc(bytes.data(),bytes.size());
 }
+uint32_t be32(const uint8_t* p) {
+    return uint32_t(p[0])<<24|uint32_t(p[1])<<16|uint32_t(p[2])<<8|p[3];
+}
+JxlGainMapBundle jxl_gain_bundle(const std::vector<uint8_t>& encoded) {
+    for(size_t offset=0;encoded.size()-offset>=8;) {
+        const uint32_t size=be32(encoded.data()+offset);
+        if(size<8||size>encoded.size()-offset)break;
+        if(!std::memcmp(encoded.data()+offset+4,"jhgm",4)) {
+            JxlGainMapBundle bundle{};
+            size_t count=0;
+            check(JxlGainMapReadBundle(&bundle,encoded.data()+offset+8,size-8,&count)&&count==size-8,
+                  "Invalid JXL gain-map bundle");
+            return bundle;
+        }
+        offset+=size;
+    }
+    throw std::runtime_error("Missing JXL gain-map box");
+}
+std::vector<uint16_t> decode_jxl_gain(const JxlGainMapBundle& bundle,unsigned w,unsigned h) {
+    check(bundle.gain_map_size>=2&&bundle.gain_map[0]==0xff&&bundle.gain_map[1]==0x0a,"Gain image must be a bare codestream");
+    auto decoder=JxlDecoderMake(nullptr);
+    check(decoder&&JxlDecoderSubscribeEvents(decoder.get(),JXL_DEC_BASIC_INFO|JXL_DEC_FULL_IMAGE)==JXL_DEC_SUCCESS&&
+          JxlDecoderSetInput(decoder.get(),bundle.gain_map,bundle.gain_map_size)==JXL_DEC_SUCCESS,"Read gain image");
+    JxlDecoderCloseInput(decoder.get());
+    std::vector<uint16_t> map(size_t(w)*h*3);
+    const JxlPixelFormat format{3,JXL_TYPE_UINT16,JXL_NATIVE_ENDIAN,0};
+    for(;;) {
+        const auto status=JxlDecoderProcessInput(decoder.get());
+        if(status==JXL_DEC_BASIC_INFO) {
+            JxlBasicInfo info{};
+            check(JxlDecoderGetBasicInfo(decoder.get(),&info)==JXL_DEC_SUCCESS&&info.xsize==w&&info.ysize==h&&
+                  info.bits_per_sample==12&&!info.have_animation,"Static JXL gain-image dimensions or depth");
+        } else if(status==JXL_DEC_NEED_IMAGE_OUT_BUFFER) {
+            check(JxlDecoderSetImageOutBuffer(decoder.get(),&format,map.data(),map.size()*2)==JXL_DEC_SUCCESS,"Gain image buffer");
+        } else if(status==JXL_DEC_FULL_IMAGE)return map;
+        else throw std::runtime_error("Could not decode the JXL gain image");
+    }
+}
+
 }
 
 void gain_map_f32_tests(const std::filesystem::path& dir) {
@@ -167,10 +208,48 @@ void gain_map_f32_tests(const std::filesystem::path& dir) {
         if(ordinaryReference.empty())ordinaryReference=read(output);else check(read(output)==ordinaryReference,"Gain-map policy changed a non-gain-map HDR source");
     }
     jxrc::ConversionSession session(source);jxrc::Options options;options.mode=jxrc::Mode::process;options.gain_map_reconstruction=jxrc::GainMapReconstruction::full_image;options.quality.preset=jxrc::Preset::lossless;
-    for(auto target:{jxrc::Target::jxl_linear,jxrc::Target::avif_gainmap,jxrc::Target::jxl_pq,jxrc::Target::png_hdr,jxrc::Target::png_hlg,jxrc::Target::jxl_hlg,jxrc::Target::avif_hlg}) {
+    for(auto target:{jxrc::Target::jxl_linear,jxrc::Target::avif_gainmap,jxrc::Target::jxl_gainmap,jxrc::Target::jxl_pq,jxrc::Target::png_hdr,jxrc::Target::png_hlg,jxrc::Target::jxl_hlg,jxrc::Target::avif_hlg}) {
         options.target=target;const auto shared=dir/("gain-shared-"+std::to_string(int(target))),independent=dir/("gain-independent-"+std::to_string(int(target)));
-        session.convert(shared,options);jxrc::convert(source,independent,options);
+        const auto result=session.convert(shared,options);jxrc::convert(source,independent,options);
         check(read(shared)==read(independent),"Gain-map multi-output F32 cache changed output");
+
+        if(target==jxrc::Target::jxl_gainmap) {
+            check(result.gainmap&&result.encoding=="gainmap","JXL output was not reported as gain map");
+            const auto encoded=read(shared);
+            const auto bundle=jxl_gain_bundle(encoded);
+            check(bundle.has_color_encoding&&bundle.color_encoding.transfer_function==JXL_TRANSFER_FUNCTION_PQ&&
+                  bundle.color_encoding.primaries==JXL_PRIMARIES_P3,"JXL alternate rendition color signaling");
+            const auto map=decode_jxl_gain(bundle,16,12);
+            std::vector<float> decodedBase;
+            bool isHdr=true;
+            check(decode_jxl_to_linear_f32(encoded.data(),encoded.size(),decodedBase,w,h,&gamut,&isHdr,&transfer,
+                                           false,nullptr)==0&&w==16&&h==12&&!isHdr&&
+                  gamut==UHDR_CG_DISPLAY_P3,"SDR fallback decode");
+            const auto* meta=bundle.gain_map_metadata;
+            check(bundle.gain_map_metadata_size==141&&be32(meta)==0&&meta[4]==0xc0&&be32(meta+5)==0,
+                  "ISO 21496-1 JXL gain-map metadata");
+            near(float(be32(meta+13))/be32(meta+17),std::log2(hdr[(16-1)*4]),.002f,"Gain-map headroom");
+            for(size_t i=0;i<decodedBase.size()/4;++i)for(unsigned c=0;c<3;++c) {
+                const auto* channel=meta+21+c*40;
+                const float lo=float(int32_t(be32(channel)))/be32(channel+4);
+                const float hi=float(int32_t(be32(channel+8)))/be32(channel+12);
+                const float offset=float(be32(channel+24))/be32(channel+28);
+                const float alternateOffset=float(be32(channel+32))/be32(channel+36);
+                const float gain=std::exp2(lo+(hi-lo)*map[i*3+c]/65535.f);
+                near(decodedBase[i*4+c],originalSdr[i*4+c],.002f,"JXL gain map discarded the original SDR base");
+                near((decodedBase[i*4+c]+offset)*gain-alternateOffset,hdr[i*4+c],.002f,"JXL map failed HDR reconstruction");
+            }
+            auto reduced=options;
+            reduced.quality.preset=jxrc::Preset::medium;
+            reduced.sdr_tone_map=true;
+            const auto smaller=dir/"reduced-gain.jxl";
+            session.convert(smaller,reduced);
+            const auto smallerBytes=read(smaller);
+            decode_jxl_gain(jxl_gain_bundle(smallerBytes),8,6);
+            std::vector<float> toneMapped;
+            check(decode_jxl_to_linear_f32(smallerBytes.data(),smallerBytes.size(),toneMapped,w,h,&gamut,&isHdr,&transfer,
+                                           false,nullptr)==0&&toneMapped!=decodedBase,"JXL tone-mapped base");
+        }
         if(target==jxrc::Target::avif_gainmap) {
             const auto encoded=read(shared);std::vector<float> rendered,paired;
             check(decode_avif_to_linear_f32(encoded.data(),encoded.size(),rendered,w,h,&hasGain,&transfer,&gamut,nullptr,&paired)==0,"Regenerated gain-map decode");

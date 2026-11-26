@@ -686,7 +686,7 @@ void MainWindow::saveSettings() const {
 }
 QGroupBox* MainWindow::ToneControls::build(bool video) {
     group=new QGroupBox("SDR tone mapping");auto* toneForm=new QFormLayout(group);
-    enabled=check("Tone map HDR to SDR","sdrToneMap",true);enabled->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(enabled);
+    enabled=check("Tone map HDR to SDR","sdrToneMap",true);enabled->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG, JXL and AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(enabled);
     autoRange=check("Auto HDR range","sdrAutoHdrRange",true);autoRange->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(autoRange);
     autoCurve=check("Auto tone curve","sdrAutoToneCurve",Options{}.sdr_auto_tone_curve);
     autoCurve->setToolTip(video?
@@ -1165,15 +1165,16 @@ QWidget* MainWindow::buildControls() {
     auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");mode_->setCurrentIndex(1);general->addRow("Mode",mode_);layout->addLayout(general);
     auto* outputFormats=new QGroupBox("Output formats · select one or more");outputFormats->setObjectName("outputFormats");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new OutputTargetList;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG","WebP · SDR"};
+    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG","WebP · SDR","JXL · gain map"};
     const QList<Target> targetOrder={Target::jpeg,Target::jpeg_gainmap,
         Target::png,Target::png_hdr,Target::png_hlg,
-        Target::jxl,Target::jxl_linear,Target::jxl_scrgb,Target::jxl_pq,Target::jxl_hlg,
+        Target::jxl,Target::jxl_linear,Target::jxl_scrgb,Target::jxl_pq,Target::jxl_hlg,Target::jxl_gainmap,
         Target::avif,Target::avif_pq,Target::avif_hlg,Target::avif_gainmap,Target::webp};
     for(const auto target:targetOrder) {
         const int id=int(target);auto* item=new QListWidgetItem(targetNames[id],targets_);
         item->setData(Qt::UserRole,id);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(target==Target::avif?Qt::Checked:Qt::Unchecked);
         if(target==Target::png_hlg||target==Target::jxl_hlg||target==Target::avif_hlg)item->setToolTip("HLG uses a 1000-nit reference display. Values outside its representable range are clipped.");
+        if(target==Target::jxl_gainmap)item->setToolTip("Encode an SDR base and HDR gain map. Use Full reconstruction to regenerate HDR from a JPEG, AVIF or HEIC gain-map source.");
     }
     targets_->viewport()->installEventFilter(this);
     outputFormatsLayout->addWidget(targets_);
