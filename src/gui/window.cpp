@@ -628,13 +628,10 @@ void MainWindow::restoreSettings() {
             else if(widget==sort_)sort_->setCurrentIndex(std::max(0,sort_->findData(settings.value(key).toInt())));
             else widget->setProperty(settingProperty(widget),settings.value(key));}
     }
-    const auto restoreTargets=[&](QListWidget* list,const QString& key) {
-        if(!settings.contains(key))return;
-        const auto saved=settings.value(key).toStringList();
-        const QSignalBlocker blocker(list);
-        for(int i=0;i<list->count();++i){auto* item=list->item(i);item->setCheckState(saved.contains(item->data(Qt::UserRole).toString())?Qt::Checked:Qt::Unchecked);}
-    };
-    restoreTargets(targets_,"conversion/targets");
+    if(settings.contains("conversion/targets")) {
+        const auto saved=settings.value("conversion/targets").toStringList();const QSignalBlocker blocker(targets_);
+        for(int i=0;i<targets_->count();++i){auto* item=targets_->item(i);item->setCheckState(saved.contains(item->data(Qt::UserRole).toString())?Qt::Checked:Qt::Unchecked);}
+    }
     auto* tabs=findChild<QTabWidget*>("settingsTabs");
     const auto oldTab=std::clamp(settings.value("controls/settingsTabs",0).toInt(),0,2);
     const auto page=settings.value("controls/settingsPage",tabs->widget(oldTab?oldTab+1:0)->objectName()).toString();
@@ -662,7 +659,9 @@ QGroupBox* MainWindow::ToneControls::build(bool video) {
     enabled=check("Tone map HDR to SDR","sdrToneMap",true);enabled->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(enabled);
     autoRange=check("Auto HDR range","sdrAutoHdrRange",true);autoRange->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(autoRange);
     autoCurve=check("Auto tone curve","sdrAutoToneCurve",Options{}.sdr_auto_tone_curve);
-    autoCurve->setToolTip("Automatically dim midtones in bright HDR scenes while preserving shadows and peak highlights. Dark, backlit, and SDR scenes remain neutral.");toneForm->addRow(autoCurve);
+    autoCurve->setToolTip(video?
+        "Automatically dim midtones in bright HDR scenes while preserving shadows and peak highlights. Dark, backlit, and SDR scenes remain neutral.":
+        "Automatically dim bright HDR midtones in bright daylight scenes while preserving shadows and peak highlights. Dark, backlit, and SDR scenes remain neutral. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(autoCurve);
     mapper=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","MPCVR","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
     // Stable IDs retain selections saved before the visual list was reordered.
     const int mapperIds[]={3,4,5,6,0,1,2};for(int i=0;i<mapper->count();++i)mapper->setItemData(i,mapperIds[i]);
@@ -1851,11 +1850,10 @@ bool MainWindow::eventFilter(QObject* watched,QEvent* event) {
             if(!menu->isVisible())menu->popup(button->mapToGlobal(QPoint(0,button->height())));
         });
     }
-    auto* targetList=targets_&&watched==targets_->viewport()?targets_:nullptr;
-    if(targetList&&event->type()==QEvent::MouseButtonRelease) {
+    if(targets_&&watched==targets_->viewport()&&event->type()==QEvent::MouseButtonRelease) {
         auto* mouse=static_cast<QMouseEvent*>(event);
         if(mouse->button()==Qt::LeftButton) {
-            auto* item=targetList->itemAt(mouse->position().toPoint());
+            auto* item=targets_->itemAt(mouse->position().toPoint());
             if(item&&(item->flags()&Qt::ItemIsEnabled))item->setCheckState(item->checkState()==Qt::Checked?Qt::Unchecked:Qt::Checked);
             return true;
         }
