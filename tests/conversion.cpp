@@ -858,6 +858,61 @@ static void png_content_light(const fs::path& dir) {
     }
 }
 
+static void webp_outputs(const fs::path& dir) {
+    const auto load=[](const fs::path& path) {
+        const auto data=bytes(path);
+        return decode_regular(data.data(),data.size());
+    };
+    const auto input=dir/"webp-source.png";
+    Exiv2::ExifData metadata;
+    metadata["Exif.Image.Orientation"]=uint16_t(6);
+    metadata["Exif.Image.Make"]="JXRC Camera";
+    Exiv2::Blob exif;
+    Exiv2::ExifParser::encode(exif,Exiv2::littleEndian,metadata);
+    write(input,png_chunk(png_chunk(raster_png16,"cICP",{12,13,0,1}),"eXIf",exif));
+    jxrc::Options o;o.target=jxrc::Target::webp;o.quality.preset=jxrc::Preset::lossless;o.keep_exif=true;
+    const auto output=dir/fs::u8path(u8"轉換.webp");
+    const auto result=jxrc::convert(input,output,o);
+    const auto webp=load(output);
+    check(result.width==2&&result.height==3&&webp.width==2&&webp.height==3,"WebP orientation dimensions");
+    check(webp.format=="WebP"&&webp.bits==8&&webp.orientation==1,"WebP output format or orientation");
+    check(!webp.icc.empty()&&!webp.exif.empty(),"WebP lost ICC or requested EXIF");
+    Exiv2::ExifData retained;
+    Exiv2::ExifParser::decode(retained,webp.exif.data(),webp.exif.size());
+    check(retained["Exif.Image.Make"].toString()=="JXRC Camera","WebP lost photographic EXIF");
+    const unsigned order[]={3,0,4,1,5,2};
+    for(unsigned i=0;i<6;++i)for(unsigned c=0;c<4;++c)
+        check(webp.pixels[i*4+c]==(expected_png16[order[i]*4+c]+128)/257,"Lossless WebP changed rotated 8-bit RGBA codes");
+
+    o.keep_exif=false;o.quality.preset=jxrc::Preset::custom;o.quality.codec_quality=10;
+    const auto lossyPath=dir/"webp-lossy.webp";
+    jxrc::convert(input,lossyPath,o);
+    const auto lossy=load(lossyPath);const auto encoded=bytes(lossyPath);
+    const char vp8[]="VP8 ";
+    check(std::search(encoded.begin(),encoded.end(),vp8,vp8+4)!=encoded.end(),"WebP custom preset did not produce lossy VP8");
+    check(lossy.icc==webp.icc&&lossy.exif.empty(),"WebP custom export changed profile or kept disabled EXIF");
+    for(unsigned i=0;i<6;++i)
+        check(lossy.pixels[i*4+3]==webp.pixels[i*4+3],"Lossy WebP changed alpha");
+
+    o.quality.preset=jxrc::Preset::lossless;
+    const auto hdr=dir/"webp-hdr-source.png";
+    const float hdrPixels[]={.5f,.5f,.5f,.25f,2.f,2.f,2.f,1.f,8.f,8.f,8.f,1.f};
+    check(encode_png_f32(3,1,hdrPixels,UHDR_CG_BT_2100,16,16,hdr.u8string().c_str(),StillEncodeQuality(0))==0,"WebP HDR fixture");
+    const auto clipped=dir/"webp-clipped.webp",toned=dir/"webp-toned.webp";
+    fails([&]{jxrc::convert(hdr,clipped,o);});
+    check(!fs::exists(clipped),"WebP published out of Preserve mode HDR failure");
+    o.mode=jxrc::Mode::process;
+    jxrc::ConversionSession session(hdr);session.convert(clipped,o);
+    o.sdr_tone_map=true;o.sdr_tone_mapper=jxrc::SdrToneMapper::logarithmic;o.sdr_auto_tone_curve=false;
+    session.convert(toned,o);
+    const auto before=load(clipped),after=load(toned);
+    check(!jxrc::inspect(toned).hdr&&before.pixels[4]==255&&after.pixels[4]<255,"WebP did not use the SDR tone map");
+    check(after.pixels[3]==64&&after.pixels[3]==before.pixels[3],"Processed WebP changed alpha");
+    o.target=jxrc::Target::png;o.quality.auto_bit_depth=false;o.quality.png_depth=8;
+    const auto reference=dir/"webp-tone-reference.png";session.convert(reference,o);
+    check(load(reference).pixels==after.pixels,"WebP and PNG SDR quantization differ");
+}
+
 static void png_outputs(const fs::path& dir) {
     png_content_light(dir);
     for(unsigned depth:{8u,16u})for(unsigned cp:{1u,9u,12u})for(unsigned tc:{13u,16u,18u}) {
@@ -1538,22 +1593,111 @@ static void transparency_background(const fs::path& dir) {
     fails([&]{jxrc::validate(invalid);});
 }
 
+static void mpcvr_tone_mapping(const fs::path& dir) {
+    const float levels[]={2.f,75.f,420.f,1100.f};
+    std::vector<float> pixels;
+    for(const float nits:levels) {
+        const float linear=nits/kSdrWhiteNits;
+        pixels.insert(pixels.end(),{linear,linear,linear,.5f});
+    }
+    const auto source=dir/"mpcvr-pq.png";
+    check(encode_png_f32(4,1,pixels.data(),UHDR_CG_BT_2100,16,16,source.u8string().c_str(),StillEncodeQuality(0))==0,
+          "MPCVR HDR source");
+    jxrc::ConversionSession session(source);
+    jxrc::Options o;o.mode=jxrc::Mode::process;o.target=jxrc::Target::png;o.sdr_tone_map=true;
+    o.sdr_tone_mapper=jxrc::SdrToneMapper::mpcvr;
+    const auto output=dir/"mpcvr-sdr.png";
+    session.convert(output,o);
+    const auto encoded=bytes(output);
+    const auto png=decode_regular(encoded.data(),encoded.size());
+    check(png.transfer==13&&png.primaries==9,"MPCVR SDR PNG color tags");
+    auto sample=[&](unsigned i) {
+        uint16_t code;std::memcpy(&code,png.pixels.data()+2*i,sizeof code);return code;
+    };
+    const float blackNearby=2.f/kSdrWhiteNits;
+    const int srgbShadow=int(std::lround(65535.f*(1.055f*std::pow(blackNearby,1.f/2.4f)-.055f)));
+    check(std::abs(int(sample(0))-srgbShadow)<=3,"MPCVR output does not use the encoder's sRGB transfer");
+    check(sample(0)<sample(4)&&sample(4)<sample(8)&&sample(8)<sample(12)&&sample(12)>=65534,
+          "MPCVR curve did not preserve highlight gradations or reach 203-nit white");
+    for(unsigned i=0;i<4;++i)check(sample(i*4+3)==32768,"MPCVR changed straight alpha");
+
+    o.sdr_shoulder=.91f;o.sdr_hdr_range_nits=300;o.sdr_auto_hdr_range=false;
+    o.sdr_auto_tone_curve=false;o.sdr_color_mapping=jxrc::SdrColorMapping::per_channel;
+    o.sdr_shadows=.8f;o.sdr_midtones=-.7f;o.sdr_highlights=.9f;
+    const auto edited=dir/"mpcvr-ignored-controls.png";
+    jxrc::convert(source,edited,o);
+    check(bytes(edited)==encoded,"MPCVR used controls meant for another tone mapper");
+    o.sdr_auto_hdr_range=true;
+    const auto automatic=dir/"mpcvr-auto-range.png";
+    jxrc::convert(source,automatic,o);
+    check(bytes(automatic)==encoded,"Auto HDR range changed MPCVR");
+
+    o.target=jxrc::Target::png_hdr;
+    const auto hdr=dir/"mpcvr-hdr.png",reference=dir/"mpcvr-hdr-reference.png";
+    session.convert(hdr,o);o.sdr_tone_map=false;session.convert(reference,o);
+    check(bytes(hdr)==bytes(reference),"MPCVR affected a PQ HDR output");
+}
+
 static void sdr_tone_mapping(const fs::path& dir) {
     check(jxrc::Options{}.sdr_auto_tone_curve,"Auto tone curve should default to on");
     check(jxrc::Options{}.sdr_color_mapping==jxrc::SdrColorMapping::luminance,"Default SDR color mapping");
     const std::array<float,3> luma={.2126f,.7152f,.0722f};
     const std::vector<float> dim={.14f,.14f,.14f,1.f,4.f,4.f,4.f,0.f};
+    const std::vector<float> brightSdr={.9f,.9f,.9f,1.f,.85f,.85f,.85f,1.f};
+    std::vector<float> darkBacklit;
+    for(int i=0;i<60;++i)darkBacklit.insert(darkBacklit.end(),{.02f,.02f,.02f,1.f});
+    for(int i=0;i<40;++i)darkBacklit.insert(darkBacklit.end(),{1.2f,1.2f,1.2f,1.f});
+    std::vector<float> nightNeon;
+    for(int i=0;i<85;++i)nightNeon.insert(nightNeon.end(),{.015f,.015f,.015f,1.f});
+    for(int i=0;i<15;++i)nightNeon.insert(nightNeon.end(),{5.f,5.f,5.f,1.f});
+    std::vector<float> mildSunny;
+    for(int i=0;i<30;++i)mildSunny.insert(mildSunny.end(),{.08f,.08f,.08f,1.f});
+    for(int i=0;i<50;++i)mildSunny.insert(mildSunny.end(),{.35f,.35f,.35f,1.f});
+    for(int i=0;i<20;++i)mildSunny.insert(mildSunny.end(),{1.6f,1.6f,1.6f,1.f});
     const std::vector<float> halfHdr={.4f,.4f,.4f,1.f,4.f,4.f,4.f,1.f};
-    check(auto_sdr_midtones(dim,luma)==0.f,"Invisible HDR changed automatic midtones");
-    check(auto_sdr_midtones(halfHdr,luma)==-.72f,"Visible HDR did not adjust automatic midtones");
+    check(!analyze_auto_sdr_tone(dim,luma).active(),"Invisible HDR triggered automatic tone curve");
+    check(!analyze_auto_sdr_tone(brightSdr,luma).active(),"Pure SDR scene triggered automatic tone curve");
+    check(!analyze_auto_sdr_tone(darkBacklit,luma).active(),"Dark backlit scene triggered automatic tone curve");
+    check(!analyze_auto_sdr_tone(nightNeon,luma).active(),"Dark night scene with HDR lights triggered automatic tone curve");
+    const auto mildTone=analyze_auto_sdr_tone(mildSunny,luma);
+    const auto brightTone=analyze_auto_sdr_tone(halfHdr,luma);
+    check(mildTone.active()&&brightTone.active()&&brightTone.strength_ev>mildTone.strength_ev&&brightTone.strength_ev<=1.2001f,"Auto tone curve did not scale within the -1.2 EV limit");
+    // Preserve deep shadows and extreme highlights while strictly increasing across 0..10000 nits.
+    {
+        float sr=.005f,sg=.005f,sb=.005f;
+        apply_auto_sdr_tone(sr,sg,sb,brightTone,luma);
+        check(sr==.005f&&sg==.005f&&sb==.005f,"Auto tone curve altered deep shadows");
+        float hr=25.f,hg=25.f,hb=25.f;
+        apply_auto_sdr_tone(hr,hg,hb,brightTone,luma);
+        check(hr==25.f&&hg==25.f&&hb==25.f,"Auto tone curve altered extreme highlights");
+        float mr=1.2f,mg=.6f,mb=.3f;
+        apply_auto_sdr_tone(mr,mg,mb,brightTone,luma);
+        check(mr<1.2f&&std::abs(mg/mr-.5f)<1e-6f&&std::abs(mb/mr-.25f)<1e-6f,"Auto tone curve failed to dim midtones or changed hue");
+        float prev=-1.f;
+        for(int k=-600;k<=550;++k) {
+            float v=std::exp2(float(k)*.01f),r=v,g=v,b=v;
+            apply_auto_sdr_tone(r,g,b,brightTone,luma);
+            check(r>prev,"Auto tone curve is not strictly monotonic");
+            prev=r;
+        }
+    }
     const auto mapper=jxrc::SdrToneMapper::reinhard;
     const auto mapping=jxrc::SdrColorMapping::max_rgb;
     const auto automatic=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,.3f,.7f},false,true);
-    const auto manual=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,-.72f,.7f});
-    check(automatic==manual,"Auto curve changed settings beyond midtones");
+    const auto automaticIgnoredMid=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,-.9f,.7f},false,true);
+    const auto automaticNoShadows=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{0.f,.3f,.7f},false,true);
+    const auto manualNeutral=tone_map_sdr_base(halfHdr,.5f,406.f,mapper,mapping,luma,{.2f,0.f,.7f},false,false);
+    check(automatic==automaticIgnoredMid,"Auto curve used manual midtones");
+    check(automatic!=automaticNoShadows,"Auto curve discarded manual shadows/highlights");
+    check(automatic[0]<manualNeutral[0],"Auto curve did not dim bright HDR midtones");
     const auto automaticSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,.3f,.7f},true);
-    const auto manualSkiv=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,-.72f,.7f});
-    check(automaticSkiv==manualSkiv,"SKIV manual did not use the automatic midtone setting");
+    const auto automaticSkivIgnoredMid=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,-.9f,.7f},true);
+    const auto manualSkivNeutral=tone_map_skiv_manual(halfHdr,0,.5f,406.f,mapping,luma,{.2f,0.f,.7f},false);
+    check(automaticSkiv==automaticSkivIgnoredMid,"SKIV manual auto curve used manual midtones");
+    check(automaticSkiv[0]<manualSkivNeutral[0],"SKIV manual auto curve did not dim bright HDR midtones");
+    const auto backlitAuto=tone_map_skiv_manual(darkBacklit,0,.5f,2000.f,mapping,luma,{},true);
+    const auto backlitOff=tone_map_skiv_manual(darkBacklit,0,.5f,2000.f,mapping,luma,{},false);
+    check(backlitAuto==backlitOff,"SKIV manual auto curve dimmed a dark backlit scene");
     const std::vector<float> zoneInput={.03f,.02f,.01f,.4f,.4f,.3f,.2f,.8f,4.f,3.f,2.f,1.f};
     const auto neutralZones=tone_map_sdr_base(zoneInput,.67f,1000.f);
     const auto shadowZones=tone_map_sdr_base(zoneInput,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::max_rgb,{.2126f,.7152f,.0722f},{.5f,0,0},true);
@@ -1786,11 +1930,12 @@ int main(int argc,char** argv) try {
     if(argc==2 && std::string(argv[1])=="--gainmap-f32") {gain_map_f32_tests(dir);non_gain_full_routes(dir);std::cout<<"Gain-map F32 tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--color-metadata") {output_color_metadata(dir);shared_output_analysis(dir);std::cout<<"Output color metadata tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--exif") {exif_retention(dir);std::cout<<"EXIF retention tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--webp") {webp_outputs(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--png-hlg") {png_outputs(dir);hlg_outputs(dir);std::cout<<"PNG output and HLG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--transparency") {transparency_background(dir);return 0;}
     if(argc==2 && std::string(argv[1])=="--hdr-png") {hdr_png(dir);std::cout<<"HDR PNG tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--skiv") {skiv_tone_mapping(dir);std::cout<<"SKIV tone mapping tests passed\n";return 0;}
-    if(argc==2 && std::string(argv[1])=="--sdr-tone-map") {sdr_tone_mapping(dir);std::cout<<"SDR tone mapping tests passed\n";return 0;}
+    if(argc==2 && std::string(argv[1])=="--sdr-tone-map") {sdr_tone_mapping(dir);mpcvr_tone_mapping(dir);std::cout<<"SDR tone mapping tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--raw-auto-exposure") {raw_auto_exposure(dir);std::cout<<"RAW auto exposure tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--pq-jxl-peak") {pq_jxl_peak(dir);std::cout<<"PQ JXL content-peak tests passed\n";return 0;}
     if(argc==2 && std::string(argv[1])=="--srgb-clamp") {srgb_clamping(dir);signed_float_jxl(dir);std::cout<<"sRGB clamp tests passed\n";return 0;}

@@ -12,9 +12,9 @@ enum class Mode { preserve, process };
 enum class TransparencyBackground { white, black, white_remove_alpha, black_remove_alpha };
 enum class GainMapReconstruction { off, automatic, full_image };
 // Append targets to retain saved GUI target identifiers.
-enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg };
+enum class Target { jpeg, jpeg_gainmap, jxl, jxl_linear, avif, avif_pq, avif_gainmap, jxl_pq, jxl_scrgb, png, png_hdr, png_hlg, jxl_hlg, avif_hlg, webp };
 enum class SdrColorMapping { max_rgb, luminance, per_channel };
-enum class SdrToneMapper { reinhard, extended_reinhard, logarithmic, skiv, skiv_custom, skiv_manual };
+enum class SdrToneMapper { reinhard, extended_reinhard, logarithmic, skiv, skiv_custom, skiv_manual, mpcvr };
 enum class Preset { lossless, high, medium, low, custom };
 struct Quality {
     Preset preset = Preset::high;
@@ -52,7 +52,7 @@ struct Options {
     float sdr_shadows = 0, sdr_midtones = 0, sdr_highlights = 0; // SDR-only tonal adjustments, -1..1.
     float sdr_shoulder = 0.50f; // Linear fraction of 203-nit SDR white left unchanged.
     int sdr_hdr_range_nits = 2000; // Ceiling in nits; a lower image peak maps to SDR white.
-    bool sdr_auto_tone_curve = true; // Choose midtones from the visible HDR area.
+    bool sdr_auto_tone_curve = true; // Dim bright HDR midtones automatically, preserving shadows and highlights.
     bool : 8; // Preserve the shared-library layout after removing the old option.
     bool sdr_auto_hdr_range = false; // Use the prepared F32 image peak instead.
     unsigned max_edge = 0;

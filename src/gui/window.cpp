@@ -77,7 +77,7 @@ namespace {
 constexpr int VideoTab = 6;
 
 bool isHdrTarget(Target target) {
-    return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png;
+    return target!=Target::jpeg&&target!=Target::jxl&&target!=Target::avif&&target!=Target::png&&target!=Target::webp;
 }
 Target sdrEquivalent(Target target) {
     switch(target) {
@@ -666,11 +666,14 @@ QGroupBox* MainWindow::ToneControls::build(bool video) {
     enabled=check("Tone map HDR to SDR","sdrToneMap",true);enabled->setToolTip("Map HDR highlights into SDR outputs and the SDR base of new JPEG/AVIF gain maps. HDR gain-map reconstruction remains unchanged. Off clips above 203 nits as before.");toneForm->addRow(enabled);
     autoRange=check("Auto HDR range","sdrAutoHdrRange",true);autoRange->setToolTip("Use the full image range instead of the manual cap. SKIV (custom) uses its own 99.94th-percentile luminance peak. All outputs share the prepared F32 image.");toneForm->addRow(autoRange);
     autoCurve=check("Auto tone curve","sdrAutoToneCurve",Options{}.sdr_auto_tone_curve);
-    autoCurve->setToolTip("Adjust midtones based on how much of the source exceeds SDR white. The selected tone mapper, shadows and highlights still apply.");toneForm->addRow(autoCurve);
-    mapper=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
+    autoCurve->setToolTip("Automatically dim midtones in bright HDR scenes while preserving shadows and peak highlights. Dark, backlit, and SDR scenes remain neutral.");toneForm->addRow(autoCurve);
+    mapper=combo({"SKIV · full details, dimmed image","SKIV (custom) · highlight details","SKIV (manual)","MPCVR","Logarithmic · preserve colors","Extended Reinhard","Reinhard · smooth highlights"},"sdrToneMapper");
     // Stable IDs retain selections saved before the visual list was reordered.
-    const int mapperIds[]={3,4,5,0,1,2};for(int i=0;i<6;++i)mapper->setItemData(i,mapperIds[i]);
+    const int mapperIds[]={3,4,5,6,0,1,2};for(int i=0;i<mapper->count();++i)mapper->setItemData(i,mapperIds[i]);
     mapper->setCurrentIndex(1);toneForm->addRow("Tone mapper",mapper);
+    mapper->setItemData(mapper->findData(6),video?
+        "MPCVR measures each frame's peak and maps to a fixed 203-nit SDR white.":
+        "MPCVR measures the image peak and maps to a fixed 203-nit SDR white.",Qt::ToolTipRole);
     mapper->setToolTip("Logarithmic spreads highlight texture over more SDR levels. Extended Reinhard is intermediate; Reinhard gives the softest highlights. SKIV uses its own ICtCp intensity/chroma mapping and a 99.94th-percentile peak. SKIV (custom) adds the manual shoulder and HDR range controls. SKIV (manual) applies Shadows, Midtones and Highlights to HDR pixels first, then feeds them into SKIV’s curve with Max RGB, Luminance or Per channel replacing its ICtCp color mapping.");
     color=combo({"Max RGB","Luminance","Per channel"},"sdrColorMapping");color->setCurrentIndex(int(Options{}.sdr_color_mapping));toneForm->addRow("Color mapping",color);
     color->setToolTip("Max RGB preserves RGB ratios. Luminance scales using the working gamut luminance and clips channels above SDR white. Per channel compresses RGB independently and can change hue and saturation. In SKIV (manual), this replaces SKIV’s internal ICtCp intensity/chroma mapping; tonal edits run first.");
@@ -721,23 +724,26 @@ void MainWindow::ToneControls::sync() {
     update();
 }
 void MainWindow::ToneControls::update() {
-    const bool tone=enabled->isChecked(),skiv=mapper->currentData().toInt()>=3,customSkiv=mapper->currentData().toInt()==4||mapper->currentData().toInt()==5,manualSkiv=mapper->currentData().toInt()==5;
-    const bool tonalControls=tone&&(!skiv||manualSkiv);
+    const int mapperId=mapper->currentData().toInt();
+    const bool tone=enabled->isChecked(),mpcvr=mapperId==6;
+    const bool skiv=mapperId>=3&&mapperId<=5,customSkiv=mapperId==4||mapperId==5,manualSkiv=mapperId==5;
+    const bool tonalControls=tone&&!mpcvr&&(!skiv||manualSkiv);
+    const bool rangeControls=tone&&!mpcvr&&(!skiv||customSkiv);
     const bool automaticCurve=tonalControls&&autoCurve->isChecked();
     mapper->setEnabled(tone);color->setEnabled(tonalControls);
     shadows->parentWidget()->setEnabled(tonalControls);
     midtones->parentWidget()->setEnabled(tonalControls&&!automaticCurve);
     highlights->parentWidget()->setEnabled(tonalControls);
-    shoulder->setEnabled(tone&&(!skiv||customSkiv));
-    const bool manualRange=tone&&(!skiv||customSkiv)&&!autoRange->isChecked();
+    shoulder->setEnabled(rangeControls);
+    const bool manualRange=rangeControls&&!autoRange->isChecked();
     range->setEnabled(manualRange);rangeInput->setEnabled(manualRange);
-    autoRange->setEnabled(tone&&(!skiv||customSkiv));autoCurve->setEnabled(tonalControls);
+    autoRange->setEnabled(rangeControls);autoCurve->setEnabled(tonalControls);
     shoulderValue->setText(QString("%1% (%2 nits)").arg(shoulder->value()).arg(qRound(shoulder->value()*2.03)));
 }
 void MainWindow::ToneControls::apply(Options& o) const {
     o.sdr_shadows=float(shadows->value());o.sdr_midtones=float(midtones->value());o.sdr_highlights=float(highlights->value());o.sdr_color_mapping=static_cast<SdrColorMapping>(color->currentIndex());
-    const SdrToneMapper mappers[]={SdrToneMapper::logarithmic,SdrToneMapper::extended_reinhard,SdrToneMapper::reinhard,SdrToneMapper::skiv,SdrToneMapper::skiv_custom,SdrToneMapper::skiv_manual};
-    o.sdr_tone_mapper=mappers[std::clamp(mapper->currentData().toInt(),0,5)];
+    const SdrToneMapper mappers[]={SdrToneMapper::logarithmic,SdrToneMapper::extended_reinhard,SdrToneMapper::reinhard,SdrToneMapper::skiv,SdrToneMapper::skiv_custom,SdrToneMapper::skiv_manual,SdrToneMapper::mpcvr};
+    o.sdr_tone_mapper=mappers[std::clamp(mapper->currentData().toInt(),0,6)];
     o.sdr_tone_map=enabled->isChecked();o.sdr_shoulder=shoulder->value()/100.f;o.sdr_hdr_range_nits=range->value();o.sdr_auto_hdr_range=autoRange->isChecked();o.sdr_auto_tone_curve=autoCurve->isChecked();
 }
 QWidget* MainWindow::buildVideoControls() {
@@ -830,11 +836,11 @@ QWidget* MainWindow::buildControls() {
     auto* general=new QFormLayout;mode_=combo({"Preserve source values","Process pixels"},"conversionMode");mode_->setCurrentIndex(1);general->addRow("Mode",mode_);layout->addLayout(general);
     auto* outputFormats=new QGroupBox("Output formats · select one or more");outputFormats->setObjectName("outputFormats");auto* outputFormatsLayout=new QVBoxLayout(outputFormats);
     targets_=new OutputTargetList;targets_->setObjectName("conversionTargets");targets_->setSelectionMode(QAbstractItemView::NoSelection);targets_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG"};
+    const QStringList targetNames={"JPEG · SDR","JPEG · gain map","JXL · SDR","JXL · linear HDR","AVIF · SDR / source","AVIF · PQ","AVIF · gain map","JXL · PQ","JXL · scRGB HDR","PNG · SDR / source","PNG · PQ","PNG · HLG","JXL · HLG","AVIF · HLG","WebP · SDR"};
     const QList<Target> targetOrder={Target::jpeg,Target::jpeg_gainmap,
         Target::png,Target::png_hdr,Target::png_hlg,
         Target::jxl,Target::jxl_linear,Target::jxl_scrgb,Target::jxl_pq,Target::jxl_hlg,
-        Target::avif,Target::avif_pq,Target::avif_hlg,Target::avif_gainmap};
+        Target::avif,Target::avif_pq,Target::avif_hlg,Target::avif_gainmap,Target::webp};
     for(const auto target:targetOrder) {
         const int id=int(target);auto* item=new QListWidgetItem(targetNames[id],targets_);
         item->setData(Qt::UserRole,id);item->setFlags(Qt::ItemIsEnabled|Qt::ItemIsUserCheckable);item->setCheckState(target==Target::avif?Qt::Checked:Qt::Unchecked);
@@ -865,7 +871,7 @@ QWidget* MainWindow::buildControls() {
     auto* qualityGroup=new QGroupBox("Quality");auto* qualityLayout=new QFormLayout(qualityGroup);preset_=combo({"Lossless","High","Medium","Low","Custom"},"qualityPreset");preset_->setCurrentIndex(1);qualityLayout->addRow("Preset",preset_);
     auto* warning=new QLabel("JPEG remains lossy with every preset.");warning->setWordWrap(true);qualityLayout->addRow(warning);
     custom_=new QGroupBox("Custom quality");auto* customForm=new QFormLayout(custom_);quality_=spin(1,100,90,"codecQuality");distance_=real(0,3,0.5,0.05,"jxlDistance");avifDepth_=combo({"10 bit","12 bit","8 bit"},"avifDepth");downsize_=check("Halve gain-map dimensions","downsizeGainmap");
-    customForm->addRow("JPEG / AVIF",quality_);customForm->addRow("JXL distance",distance_);avifDepth_->setToolTip("Maximum AVIF depth. 8-bit sources remain 8-bit; AVIF supports up to 12 bits per channel.");customForm->addRow("AVIF max depth",avifDepth_);customForm->addRow(downsize_);qualityLayout->addRow(custom_);layout->addWidget(qualityGroup);
+    customForm->addRow("JPEG / AVIF / WebP",quality_);customForm->addRow("JXL distance",distance_);avifDepth_->setToolTip("Maximum AVIF depth. 8-bit sources remain 8-bit; AVIF supports up to 12 bits per channel.");customForm->addRow("AVIF max depth",avifDepth_);customForm->addRow(downsize_);qualityLayout->addRow(custom_);layout->addWidget(qualityGroup);
     auto* pngGroup=new QGroupBox("PNG options");auto* pngForm=new QFormLayout(pngGroup);autoBitDepth_=check("Auto bit depth","autoBitDepth",true);pngDepth_=combo({"8 bit","16 bit"},"pngDepth");pngDepth_->setCurrentIndex(1);pngForm->addRow(autoBitDepth_);pngForm->addRow("PNG bit depth",pngDepth_);layout->addWidget(pngGroup);
     connect(autoBitDepth_,&QCheckBox::toggled,this,[this](bool automatic){pngDepth_->setEnabled(!automatic);});pngDepth_->setEnabled(!autoBitDepth_->isChecked());
     autoBitDepth_->setToolTip("PNG uses 8 bits for 8-bit sources and 16 bits for deeper sources. Disable to choose PNG depth directly. Independent of quality presets.");
@@ -942,7 +948,7 @@ QWidget* MainWindow::buildControls() {
     dateFolders_->setToolTip("Create today’s folder using the system’s short date format. Filename separators become hyphens.");
     jobFolders_=check("Create job subfolder","jobSubfolders");destinationLayout->addWidget(jobFolders_);jobFolders_->setToolTip("Group this batch in Job-N (or Temporary). The date folder is controlled separately.");
     formatFolders_=check("Create format subfolders","formatSubfolders");destinationLayout->addWidget(formatFolders_);
-    formatFolders_->setToolTip("Group outputs by format: avif, jxl or jpg.");
+    formatFolders_->setToolTip("Group outputs by format: jpg, png, jxl, avif or webp.");
     flattenFolders_=check("Flatten subfolder rules","flattenSubfolders");destinationLayout->addWidget(flattenFolders_);
     flattenFolders_->setToolTip("Join enabled folder names with hyphens in parent–date–job–format order. Off creates nested folders in that order.");
     jumpToJob_=check("Jump to job tab","jumpToJobTab");destinationLayout->addWidget(jumpToJob_);jumpToJob_->setToolTip("Show a conversion’s job when it is queued. Off keeps the current image-list tab and job.");
@@ -971,8 +977,8 @@ void MainWindow::updateMode() {
     const QSignalBlocker blocker(targets_);bool removed=false;
     for(int i=0;i<targets_->count();++i) {
         auto* item=targets_->item(i);
-        const int target=item->data(Qt::UserRole).toInt();
-        if(target!=3&&target!=5&&target!=7&&target!=8&&target<10)continue;
+        const auto target=Target(item->data(Qt::UserRole).toInt());
+        if(!isHdrTarget(target)||target==Target::jpeg_gainmap||target==Target::avif_gainmap)continue;
         if(!process&&item->checkState()==Qt::Checked){item->setCheckState(Qt::Unchecked);removed=true;}
         item->setFlags(process?Qt::ItemIsEnabled|Qt::ItemIsUserCheckable:Qt::ItemFlags{});
     }

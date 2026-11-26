@@ -7,8 +7,8 @@
   <a href="https://github.com/zmz125000/JXRConverter/actions/workflows/release.yml">
     <img src="https://github.com/zmz125000/JXRConverter/actions/workflows/release.yml/badge.svg" alt="Github Actions">
   </a>
-  <a href="/LICENSE">
-    <img src="https://img.shields.io/github/license/zmz125000/JXRConverter" alt="LICENSE">
+  <a href="#license">
+    <img src="https://img.shields.io/badge/license-MIT%20%2B%20GPLv3-blue" alt="MIT and GPLv3 notices">
   </a>
   <a href="https://github.com/zmz125000/JXRConverter/releases">
     <img src="https://img.shields.io/github/v/release/zmz125000/JXRConverter" alt="Release">
@@ -99,7 +99,7 @@ build/jxrconvert camera.dng output.avif --mode process --target avif-gainmap \
   --raw-highlight-stops 1 --raw-shoulder 0.6 --raw-target-nits 1500
 ```
 
-Targets are `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `jxl-hlg`, `avif`, `avif-pq`, `avif-hlg`, `avif-gainmap`, `png`, `png-hdr` (also `png-pq`), and `png-hlg`. Generic targets in preservation mode retain the source transfer, so `--target png` can retain a PQ or HLG source. Explicit PQ and HLG targets require `--mode process`.
+Targets are `jpeg`, `jpeg-gainmap`, `jxl`, `jxl-linear`, `jxl-scrgb`, `jxl-pq`, `jxl-hlg`, `avif`, `avif-pq`, `avif-hlg`, `avif-gainmap`, `png`, `png-hdr` (also `png-pq`), `png-hlg`, and `webp`. WebP is 8-bit SDR with lossy and lossless presets, alpha, ICC profiles, and optional EXIF. Use `--mode process` to render HDR to WebP. Other generic targets in preservation mode retain the source transfer, so `--target png` can retain a PQ or HLG source. Explicit PQ and HLG targets require `--mode process`.
 
 PNG uses direct integer samples for preservation and untouched SDR exports, retaining source profiles and straight alpha. Pixel edits use the float32 path. PNG cannot preserve gain maps or extended floating HDR directly; use process mode to render those inputs. `--png-depth 8|16` sets PNG precision independently of quality presets. Auto bit depth defaults on (8 bits for 8-bit sources, 16 for deeper sources); use `--no-auto-bit-depth` to apply the selected depth directly.
 
@@ -107,7 +107,9 @@ HLG PNG, JXL and AVIF exports accept display-linear float32 RGB (1.0 = 203 nits)
 
 Preservation mode retains compatible source metadata and avoids linearization, tone mapping, and HDR reconstruction. Codec quantization and color/bit-depth conversion can still change sample values. JPEG is lossy, including with the `lossless` preset. `--jpeg-transcoding` passes compressed SDR JPEG data directly to libjxl when exporting SDR JXL without exposure or resizing. Gain-map sources are rejected on this path.
 
-Process mode decodes and processes linear-light pixels. SDR targets clip above 203 nits by default. `--sdr-tone-map` enables highlight compression. Its default mapper is `skiv-custom`: SKIV’s ICtCp intensity/chroma curve anchored at the manual SDR shoulder and SDR white. Pixels below the shoulder stay unchanged. `--sdr-tone-mapper skiv` uses SKIV’s original export settings (120-nit PQ target, 10000-nit cap, 1.18 intensity exponent, and 99.94th-percentile luminance). Stock SKIV and SKIV (custom) ignore Auto tone curve, color mapping, and tonal-zone adjustments; only SKIV (custom) uses our shoulder and HDR range controls. `--sdr-tone-mapper skiv-manual` adds Shadows, Midtones, and Highlights before the SKIV (custom) curve, keeping the HDR range until SKIV compresses it. Its color mapping replaces SKIV’s internal ICtCp mapping: Max RGB and Luminance scale RGB together using their chosen metric; Per channel applies the SKIV curve independently to each channel. Auto tone curve is enabled by default for mappers that support it. It selects midtones while Shadows and Highlights remain manual. Use `--no-sdr-auto-tone-curve` to set midtones manually. The other choices are `logarithmic`, `extended-reinhard`, and `reinhard`; `--sdr-hdr-range` caps the range, using the actual image peak when it is lower. `--sdr-auto-hdr-range` uses the image peak without a cap. The same SDR mapping supplies new JPEG/AVIF gain-map bases. RAW source mode follows sensor headroom up to 10,000 nits. `--raw-mode boost` opens highlights toward the default 1,500-nit target. RAW adjustment flags select custom mode unless `--raw-mode` is explicitly supplied. Gain-map output from an SDR source does not add highlight detail.
+Process mode decodes and processes linear-light pixels. SDR targets clip above 203 nits by default. `--sdr-tone-map` enables highlight compression. Its default mapper is `skiv-custom`: SKIV’s ICtCp intensity/chroma curve anchored at the manual SDR shoulder and SDR white. Pixels below the shoulder stay unchanged. `--sdr-tone-mapper skiv` uses SKIV’s original export settings (120-nit PQ target, 10000-nit cap, 1.18 intensity exponent, and 99.94th-percentile luminance). Stock SKIV and SKIV (custom) ignore Auto tone curve, color mapping, and tonal-zone adjustments; only SKIV (custom) uses our shoulder and HDR range controls. `--sdr-tone-mapper skiv-manual` adds Shadows, Midtones, and Highlights before the SKIV (custom) curve, keeping the HDR range until SKIV compresses it. Its color mapping replaces SKIV’s internal ICtCp mapping: Max RGB and Luminance scale RGB together using their chosen metric; Per channel applies the SKIV curve independently to each channel. Auto tone curve is enabled by default for mappers that support it. It automatically dims bright HDR midtones in bright daylight scenes (keeping shadows, peak highlights, and dark/SDR scenes neutral) while Shadows and Highlights remain manual. Use `--no-sdr-auto-tone-curve` to set midtones manually. The other choices are `logarithmic`, `extended-reinhard`, and `reinhard`; `--sdr-hdr-range` caps the range, using the actual image peak when it is lower. `--sdr-auto-hdr-range` uses the image peak without a cap. The same SDR mapping supplies new JPEG/AVIF gain-map bases. RAW source mode follows sensor headroom up to 10,000 nits. `--raw-mode boost` opens highlights toward the default 1,500-nit target. RAW adjustment flags select custom mode unless `--raw-mode` is explicitly supplied. Gain-map output from an SDR source does not add highlight detail.
+
+MPCVR is available via `--mode process --sdr-tone-map --sdr-tone-mapper mpcvr`. It uses the measured image peak, a fixed 203-nit SDR target, and its own spline and color mapping. The destination encoder applies its regular SDR transfer function and color profile.
 
 `--threads N` sets the per-conversion codec CPU budget (`0` keeps automatic defaults). Presets are `lossless`, `high`, `medium`, `low`, and `custom`. `--quality`, `--jxl-distance`, `--avif-depth`, and `--downsize-gainmap` select the custom preset and conflict with an explicitly selected non-custom preset. Existing output files require `--overwrite`. Failed conversions do not publish partial destination files, and input and output must refer to different files.
 
@@ -141,4 +143,4 @@ Those links are unrelated to the project.
 
 ## License
 
-JXRConverter's original code ported from LocalViewer, is licensed under [MIT](LICENSE).
+JXRConverter’s original code is licensed under [MIT](LICENSE). The MPCVR tone mapper is licensed under GPLv3. Distributions of the combined engine and apps are covered by [GPLv3](COPYING). [Third-party notices](NOTICE)

@@ -353,7 +353,7 @@ private slots:
     }
     void skivToneMapControls() {
         appSettings().clear();MainWindow window;
-        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),6);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
+        auto* mapper=window.findChild<QComboBox*>("sdrToneMapper");QCOMPARE(mapper->count(),7);QCOMPARE(mapper->currentText(),QString("SKIV (custom) · highlight details"));
         QVERIFY(window.options().sdr_tone_mapper==jxrc::SdrToneMapper::skiv_custom);QVERIFY(window.options().sdr_auto_tone_curve);
         auto* shoulder=window.findChild<QSlider*>("sdrShoulder");auto* range=window.findChild<QSpinBox*>("sdrHdrRangeInput");
         QCOMPARE(shoulder->value(),50);
@@ -364,6 +364,12 @@ private slots:
         for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})QVERIFY(!window.findChild<QDoubleSpinBox*>(name)->isEnabled());
         mapper->setCurrentIndex(0);QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::skiv);
         QVERIFY(!shoulder->isEnabled());QVERIFY(!range->isEnabled());QVERIFY(!autoRange->isEnabled());
+        const int mpcvr=mapper->findText("MPCVR");QVERIFY(mpcvr>=0);QCOMPARE(mpcvr+1,mapper->findData(0));
+        mapper->setCurrentIndex(mpcvr);QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::mpcvr);
+        QVERIFY(mapper->isEnabled());QVERIFY(!shoulder->isEnabled());QVERIFY(!range->isEnabled());QVERIFY(!autoRange->isEnabled());
+        QVERIFY(!window.findChild<QCheckBox*>("sdrAutoToneCurve")->isEnabled());
+        QVERIFY(!window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());
+        for(const auto* name:{"sdrShadows","sdrMidtones","sdrHighlights"})QVERIFY(!window.findChild<QDoubleSpinBox*>(name)->isEnabled());
         mapper->setCurrentIndex(mapper->findData(5));QCOMPARE(window.options().sdr_tone_mapper,jxrc::SdrToneMapper::skiv_manual);
         QVERIFY(shoulder->isEnabled());QVERIFY(range->isEnabled());
         QVERIFY(window.findChild<QComboBox*>("sdrColorMapping")->isEnabled());
@@ -922,6 +928,32 @@ private slots:
         view->customContextMenuRequested(view->visualRect(index).center());QVERIFY(chosen);QTRY_COMPARE(finished.count(),2);QCOMPARE(window.queue()->total(),1);QVERIFY(QFileInfo::exists(root("context-output")+"/b_high_pq.avif"));QCOMPARE(jxrc::inspect(std::filesystem::u8path((root("context-output")+"/b_high_pq.avif").toStdString())).transfer,std::string("PQ"));
         QCOMPARE(window.options().target,jxrc::Target::jxl);
     }
+    void webpOutputQueue() {
+        appSettings().clear();
+        MainWindow window;window.show();
+        const auto source=makeImage(root("webp-source"),"photo.jpg",64,48,100);
+        window.addPaths({source});QTRY_COMPARE(window.catalog()->rowCount(),1);
+        const auto destination=root("webp-output");
+        window.findChild<QLineEdit*>("outputDirectory")->setText(destination);
+        window.findChild<QCheckBox*>("formatSubfolders")->setChecked(true);
+        window.findChild<QComboBox*>("conversionMode")->setCurrentIndex(int(jxrc::Mode::preserve));
+        auto* targets=window.findChild<QListWidget*>("conversionTargets");
+        bool found=false;
+        for(int i=0;i<targets->count();++i) {
+            auto* item=targets->item(i);
+            const bool webp=item->data(Qt::UserRole).toInt()==int(jxrc::Target::webp);
+            if(webp){found=true;QVERIFY(item->flags()&Qt::ItemIsEnabled);}
+            item->setCheckState(webp?Qt::Checked:Qt::Unchecked);
+        }
+        QVERIFY(found);
+        QSignalSpy finished(window.queue(),&ConversionQueue::batchFinished);
+        auto* convert=window.findChild<QPushButton*>("convertVisible");
+        QVERIFY(convert->isEnabled());convert->click();
+        QTRY_COMPARE(finished.count(),1);
+        const auto output=destination+"/webp/photo_high_sdr.webp";
+        QVERIFY(QFileInfo::exists(output));
+        QCOMPARE(jxrc::inspect(std::filesystem::u8path(output.toStdString())).format,std::string("WebP"));
+    }
     void fileDatesAreAvailableBeforeImageInspection() {
         appSettings().clear();
         const auto temporaryDirectory=root("immediate-file-dates");QDir().mkpath(temporaryDirectory);
@@ -1472,7 +1504,7 @@ private slots:
                 window.resize(width,900);QTest::qWait(30);
                 QVERIFY(button->width()<=3*cancel->width());QCOMPARE(button->height(),cancel->height());
                 QVERIFY(button->sizeHint().width()<=3*cancel->width());
-                QCOMPARE(targets->count(),14);QCOMPARE(targets->verticalScrollBar()->maximum(),0);
+                QCOMPARE(targets->count(),15);QCOMPARE(targets->verticalScrollBar()->maximum(),0);
                 QVERIFY(targets->viewport()->rect().contains(targets->visualItemRect(targets->item(targets->count()-1))));
             }
         }

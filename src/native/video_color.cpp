@@ -40,7 +40,9 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
         RenderAnalysis analysis;
         analysis.bind(working.data(),count,gamut);
         const float peak=analysis.peak();
-        if(peak>1.f||options.sdr_shadows||options.sdr_midtones||options.sdr_highlights) {
+        if(options.sdr_tone_mapper==SdrToneMapper::mpcvr) {
+            if(peak>1.f)mapped=tone_map_mpcvr_base(working,gamut,double(peak)*kSdrWhiteNits);
+        } else if(peak>1.f||options.sdr_shadows||options.sdr_midtones||options.sdr_highlights) {
             const float range=peak*kSdrWhiteNits;
             mapped=map_sdr_pixels(working,gamut==UHDR_CG_BT_2100?2:gamut==UHDR_CG_DISPLAY_P3?1:0,
                                   options.sdr_auto_hdr_range?range:std::min(range,float(options.sdr_hdr_range_nits)),options);

@@ -128,14 +128,14 @@ void jpeg_linear(const std::vector<uint8_t>& bytes,std::vector<Sample>& pixels,u
 void validate(const Options& o) {
     range(static_cast<int>(o.transparency_background),0,3,"transparency background");
     range(static_cast<int>(o.gain_map_reconstruction),0,2,"gain map reconstruction");
-    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,13,"target");
+    range(static_cast<int>(o.mode),0,1,"mode");range(static_cast<int>(o.target),0,static_cast<int>(Target::webp),"target");
     range(static_cast<int>(o.quality.preset),0,4,"preset");
     range(o.quality.jxl_distance,0,3,"JXL distance");range(o.quality.codec_quality,1,100,"codec quality");
     if(o.quality.avif_depth!=8&&o.quality.avif_depth!=10&&o.quality.avif_depth!=12)throw std::invalid_argument("AVIF depth must be 8, 10 or 12");
     if(o.quality.png_depth!=8&&o.quality.png_depth!=16)throw std::invalid_argument("PNG depth must be 8 or 16");
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
-    range(static_cast<int>(o.sdr_tone_mapper),0,5,"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
+    range(static_cast<int>(o.sdr_tone_mapper),0,static_cast<int>(SdrToneMapper::mpcvr),"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
     range(o.sdr_shoulder,0,0.99,"SDR shoulder");range(o.sdr_hdr_range_nits,204,10000,"SDR HDR range");
     range(o.sdr_shadows,-1,1,"SDR shadows");range(o.sdr_midtones,-1,1,"SDR midtones");range(o.sdr_highlights,-1,1,"SDR highlights");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");
@@ -163,7 +163,7 @@ struct ConversionSession::Impl {
     int mapped_cap=0;
     RenderAnalysis analysis;
     unsigned w=0,h=0,bits=32,input_width=0,input_height=0;
-    bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,raster_hdr=false;
+    bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,source_hdr=false;
     uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
     int format=-1;
     bool ready=false;
@@ -201,7 +201,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     }
     if(cache.format<0){
         auto source=read(input);const int format=kind(source);
-        if(format!=6 && format!=5){const auto info=inspect_bytes(source);cache.gainmap=info.gainmap;cache.bits=info.bits;cache.input_width=info.width;cache.input_height=info.height;cache.half_jxr=format==4&&info.hdr&&info.bits==16;cache.integer_sdr=!info.hdr&&(format==0||format==1||format==7||(format==3&&is_integer_jxl(source.data(),source.size())));}
+        if(format!=6 && format!=5){const auto info=inspect_bytes(source);cache.gainmap=info.gainmap;cache.source_hdr=info.hdr;cache.bits=info.bits;cache.input_width=info.width;cache.input_height=info.height;cache.half_jxr=format==4&&info.hdr&&info.bits==16;cache.integer_sdr=!info.hdr&&(format==0||format==1||format==7||(format==3&&is_integer_jxl(source.data(),source.size())));}
         cache.bytes=std::move(source);cache.format=format;
     }
     const auto& bytes=cache.bytes;const int format=cache.format;Staging stage(output);
@@ -212,14 +212,15 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     q.gain_map_reconstruction=static_cast<int>(o.gain_map_reconstruction);
     const bool full_gainmap=cache.gainmap&&o.gain_map_reconstruction==GainMapReconstruction::full_image;
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
-    const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png;
+    const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png||o.target==Target::webp;
     const bool base_only=cache.gainmap&&!full_gainmap&&sdr_target;
-    const bool tonal_controls=o.sdr_tone_mapper==SdrToneMapper::skiv_manual||!skiv_tone_mapper(o.sdr_tone_mapper);
+    const bool mpcvr=o.sdr_tone_mapper==SdrToneMapper::mpcvr;
+    const bool tonal_controls=!mpcvr&&(o.sdr_tone_mapper==SdrToneMapper::skiv_manual||!skiv_tone_mapper(o.sdr_tone_mapper));
     const std::array<float,3> zones=tonal_controls?std::array<float,3>{
         o.sdr_shadows,o.sdr_auto_tone_curve?0.f:o.sdr_midtones,o.sdr_highlights}:std::array<float,3>{};
     const bool tonal_edits=o.sdr_tone_map&&zones!=std::array<float,3>{};
     if(cache.gainmap&&!full_gainmap) {
-        const bool source_target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap||o.target==Target::jxl||o.target==Target::avif||o.target==Target::avif_gainmap||o.target==Target::png;
+        const bool source_target=sdr_target||o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         // Off/Auto can edit the stored SDR base, but rebuilding a gain map
         // or producing an HDR target requires the complete reconstruction.
         require(source_target&&(base_only||(!o.exposure&&!o.max_edge&&!o.srgb_clamp)),
@@ -228,10 +229,10 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     Result result;
     std::unique_ptr<RegularImage> regular;
     bool direct_sdr=false;
-    if(o.mode==Mode::process && (o.target==Target::jxl||o.target==Target::avif||o.target==Target::jpeg||o.target==Target::png) && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
-        if(format==6&&!cache.raster_hdr) {
+    if(o.mode==Mode::process && sdr_target && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
+        if(format==6&&!cache.source_hdr) {
             regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
-            cache.raster_hdr=regular->hdr();direct_sdr=!cache.raster_hdr;
+            cache.source_hdr=regular->hdr();direct_sdr=!cache.source_hdr;
         } else direct_sdr=cache.integer_sdr;
     }
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
@@ -242,11 +243,13 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
+    if(o.target==Target::webp && o.mode==Mode::preserve && cache.source_hdr && !base_only)
+        throw std::runtime_error("WebP is SDR; use Process pixels mode for HDR input");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
     bool source_done=false;
     if(direct_gainmap || direct_sdr || direct_jxl || (o.mode==Mode::preserve && format!=4&&!full_gainmap)) {
         require(format==0||format==1||format==3||format==6||format==7,"Source preservation supports JPEG, AVIF, HEIC, JXL and regular raster images; use --mode process for RAW/JXR");
-        int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:o.target==Target::png?3:2;
+        int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:o.target==Target::png?3:o.target==Target::webp?kWebpSourceTarget:2;
         int rc=0;
         if(o.jpeg_transcoding && format==0&&!cache.gainmap) {
             require(is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))!=1,"JPEG coefficient transcoding cannot retain a gain map");
@@ -259,6 +262,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         } else {
             if(format==6) {
                 if(!regular)regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
+                if(o.target==Target::webp)require(!regular->hdr(),"WebP is SDR; use Process pixels mode for HDR input");
                 require(regular->floating_pixels.empty(),"Floating-point HDR input requires Process pixels mode");
                 if(o.keep_exif&&regular->format=="TIFF")regular->exif=portable_source_exif(bytes.data(),bytes.size(),regular->width,regular->height,regular->orientation);
                 rc=convert_regular_source(*regular,target,path.c_str(),q,o.keep_exif,info);
@@ -267,7 +271,10 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             // processing. Only actual transparency requires linear compositing.
             const bool flatten=rc==-97&&q.remove_alpha;
             if(flatten&&cache.gainmap&&!base_only)throw std::runtime_error("Select Full gain-map reconstruction to remove alpha from a transparent gain-map source");
-            require(rc>0 || (rc==0&&direct_sdr) || flatten,"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
+            const bool webp_render=o.target==Target::webp&&o.mode==Mode::process;
+            if(rc==0&&o.target==Target::webp&&!webp_render)
+                throw std::runtime_error("WebP cannot preserve this source color encoding; use Process pixels mode");
+            require(rc>0 || (rc==0&&(direct_sdr||webp_render)) || flatten,"Source conversion unavailable or failed (codec "+std::to_string(rc)+"); no pixel-processing fallback was used");
         }
         if(rc>0) {
             source_done=true;
@@ -303,7 +310,7 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
             }
             else if(format==6) {
                 const auto raster=regular?std::move(*regular):decode_regular(bytes.data(),bytes.size());
-                w=raster.width;h=raster.height;raster_orientation=raster.orientation;cache.bits=raster.bits;cache.raster_hdr=raster.hdr();
+                w=raster.width;h=raster.height;raster_orientation=raster.orientation;cache.bits=raster.bits;cache.source_hdr=raster.hdr();
                 if(o.keep_exif)exif=raster.format=="TIFF"?portable_source_exif(bytes.data(),bytes.size(),w,h,raster.orientation):raster.exif;
                 regular_to_linear(raster,linear,gamut);
             }
@@ -394,7 +401,12 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         const bool gain_target=o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         if(o.sdr_tone_map&&(sdr_target||gain_target)&&!cache.scrgb) {
             const float peak=cache.analysis.peak();
-            if(peak>1.f||tonal_edits) {
+            if(mpcvr&&peak>1.f) {
+                if(cache.mapped_sdr.empty()||cache.mapped_mapper!=o.sdr_tone_mapper) {
+                    cache.mapped_sdr=tone_map_mpcvr_base(linear,gamut,double(peak)*kSdrWhiteNits);
+                    cache.mapped_mapper=o.sdr_tone_mapper;
+                }
+            } else if(peak>1.f||tonal_edits) {
                 // The manual range is a ceiling. Fit a dimmer source to its
                 // actual peak; only values above the ceiling are clipped.
                 const float range=o.sdr_auto_hdr_range?peak*kSdrWhiteNits:
@@ -435,6 +447,8 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
         } else if(o.target==Target::png||o.target==Target::png_hdr||o.target==Target::png_hlg) {
             const int transfer=o.target==Target::png_hlg?18:o.target==Target::png_hdr?16:13;
             rc=encode_png_f32(w,h,o.target==Target::png?export_pixels:linear.data(),gamut,transfer,q.png_depth(q.source_bits),path.c_str(),q);
+        } else if(o.target==Target::webp) {
+            rc=encode_webp_f32(w,h,export_pixels,gamut,path.c_str(),q);
         } else if(o.target==Target::jxl_hlg) {
             rc=encode_jxl_f32(w,h,linear.data(),gamut,true,path.c_str(),q,false,true);
         } else if(o.target==Target::avif_hlg) {

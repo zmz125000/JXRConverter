@@ -8,18 +8,16 @@ that author-owned code from the broader upstream application.
 
 ## Source license and combined distributions
 
-The current engine links Exiv2 (`src/native/exif_metadata.cpp` and
-`CMakeLists.txt`). Exiv2 is GPL-2.0-or-later. Distributions of this combined engine,
-CLI and desktop application must comply with GPLv3, whose text remains in
-`COPYING`. MIT permits inclusion of project code in that GPL-covered combination;
-it does not relicense Exiv2. Moving Exiv2 into a separate shared library alone
-does not remove those obligations.
+The engine includes the MPC Video Renderer HDR-to-SDR spline
+(`src/native/mpcvr_tone_map.cpp`, GPLv3) and links Exiv2 (GPL-2.0-or-later).
+Distributions of the combined engine, CLI and desktop application must comply
+with GPLv3, whose text is in `COPYING`. The MIT permission for JXRConverter’s
+original code remains in `LICENSE`.
 
-To distribute the engine under terms that permit non-GPL applications to link
-it, replace Exiv2 with a compatible implementation or obtain suitable separate
-licensing permission. The remaining dependencies retain their own licenses;
-MIT licensing of project code does not remove the LGPL requirements of libheif,
-libde265, LibRaw or Qt in distributions that include them.
+Distributing the engine under terms that permit linking by non-GPL applications
+would require separate licensing permission or compatible replacements for both
+the MPCVR port and Exiv2. The other dependencies retain their own terms,
+including the LGPL requirements of libheif, libde265, LibRaw and Qt.
 
 See the [GNU FAQ on changing licenses](https://www.gnu.org/licenses/gpl-faq.html#CanDeveloperThirdParty)
 and [Exiv2's license](https://github.com/Exiv2/exiv2/blob/main/LICENSE.txt).
@@ -31,6 +29,7 @@ The codec dependencies can remain linked into the shared JXRConverter engine:
 | Dependency | Selected license / notices |
 |---|---|
 | Exiv2 | GPL v2 or later, compatible with this GPLv3 application |
+| MPC Video Renderer HDR-to-SDR spline | GPLv3, attributed in `NOTICE` |
 | libheif, libde265 | LGPL v3 or later; corresponding sources and build scripts available for rebuilding/relinking |
 | LibRaw | LGPL v2.1 option, with the complete application/library sources and build scripts supplied for rebuilding/relinking; the CDDL alternative is not selected |
 | Ultra HDR | Apache-2.0/MIT and retained third-party notices |

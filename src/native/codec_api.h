@@ -3,6 +3,7 @@
 #include "jxrc/converter.hpp"
 
 // Private interfaces between the portable pipeline and extracted codecs.
+inline constexpr int kWebpSourceTarget = 4;
 int convert_source(const uint8_t*,size_t,int,int,const char*,StillEncodeQuality,bool,int*);
 int decode_jxl_to_linear_f16(const uint8_t*,size_t,std::vector<uint16_t>&,unsigned&,unsigned&,uhdr_color_gamut_t*,bool*,int*,bool,unsigned,bool,std::vector<uint8_t>*,int*);
 int decode_avif_to_linear_f16(const uint8_t*,size_t,std::vector<uint16_t>&,unsigned&,unsigned&,int*,int*,uhdr_color_gamut_t*,unsigned,std::vector<uint8_t>*);
@@ -17,6 +18,9 @@ void normalize_exif(std::vector<uint8_t>&);
 void scale_rgba_f16_max_edge(std::vector<uint16_t>&,unsigned&,unsigned&,unsigned);
 void scale_rgba_f32_max_edge(std::vector<float>&,unsigned&,unsigned&,unsigned);
 int encode_still_export_f32(const float*,unsigned,unsigned,int,int,const char*,StillEncodeQuality,const float* sdr_base = nullptr);
+// Linear input and output in the encoder gamut, with 1.0 representing 203 nits.
+std::vector<float> tone_map_mpcvr_base(std::vector<float>,uhdr_color_gamut_t,double source_peak_nits);
+int encode_webp_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,const char*,StillEncodeQuality);
 int encode_png_f32(unsigned,unsigned,const float*,uhdr_color_gamut_t,int,int,const char*,StillEncodeQuality);
 struct avifImage;
 struct avifRGBImage;

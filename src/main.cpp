@@ -10,10 +10,10 @@ void help() {
     std::cout << "jxrconvert " << jxrc::version() << R"( - LocalViewer image conversion library/CLI
 Usage: jxrconvert INPUT OUTPUT --target TARGET [OPTIONS]
 Inputs: JPEG, HEIC/HEIF, AVIF, JXL, PNG, WebP, TIFF, BMP, GIF, JPEG XR and LibRaw formats
-Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, avif-gainmap, png, png-hdr, png-hlg, jxl-hlg, avif-hlg
+Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, avif-gainmap, png, png-hdr, png-hlg, jxl-hlg, avif-hlg, webp
   --mode preserve|process       Default: preserve; no automatic processing fallback
   --preset lossless|high|medium|low|custom    Default: high
-  --quality 1..100              Custom JPEG/AVIF quality (selects custom preset)
+  --quality 1..100              Custom JPEG/AVIF/WebP quality (selects custom preset)
   --jxl-distance 0..3           Custom JXL distance (selects custom preset)
   --avif-depth 8|10|12          Custom AVIF maximum depth (selects custom preset)
   --png-depth 8|16              PNG depth (independent of codec quality presets)
@@ -29,12 +29,13 @@ Targets: jpeg, jpeg-gainmap, jxl, jxl-linear, jxl-scrgb, jxl-pq, avif, avif-pq, 
 Processing controls (PQ/HLG targets require process mode):
   HLG uses the BT.2100 1000-nit reference display (gamma 1.2).
   --sdr-tone-map                Map HDR highlights into SDR outputs and gain-map bases
-  --sdr-tone-mapper skiv-custom|skiv-manual|skiv|logarithmic|extended-reinhard|reinhard (default skiv-custom)
+  --sdr-tone-mapper skiv-custom|skiv-manual|skiv|mpcvr|logarithmic|extended-reinhard|reinhard (default skiv-custom)
+                               MPCVR measures the source peak and uses fixed 203-nit SDR white.
   --sdr-color-mapping max-rgb|luminance|per-channel  Default: luminance
   --sdr-shadows -1..1 --sdr-midtones -1..1 --sdr-highlights -1..1  Default: 0
   --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.50)
   --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 2000)
-  --sdr-auto-tone-curve         Choose midtones automatically (default on; supported in SKIV manual)
+  --sdr-auto-tone-curve         Dim bright HDR midtones automatically (default on; supported in SKIV manual)
   --no-sdr-auto-tone-curve      Use the manual midtones control
   --sdr-auto-hdr-range          Use the F32 image peak instead of fixed nits
   --exposure -3..3              Non-RAW linear-light exposure in stops
@@ -57,6 +58,7 @@ RAW controls (process mode):
   --raw-linear-hdr              Bypass camera look in HDR
 Lossless is a codec preset; JPEG remains lossy. Preserve retains source transfer,
 profiles and transferable gain maps; it does not promise bit-identical RGB.
+WebP is 8-bit SDR. Use process mode to convert HDR to WebP.
 Plain JPEG/AVIF targets also retain existing base + gain maps in process mode
 when exposure is zero and resizing is disabled.
 )";
@@ -81,7 +83,7 @@ int run(const std::vector<std::string>& argv) {
         if(arg.rfind("--raw-",0)==0&&arg!="--raw-mode")raw_custom=true;
         auto value=[&]()->std::string{if(++i>=argc)throw std::invalid_argument("Missing value for "+arg);return argv[i];};
         using T=jxrc::Target;using P=jxrc::Preset;
-        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-scrgb",T::jxl_scrgb},{"jxl-pq",T::jxl_pq},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap},{"png",T::png},{"png-hdr",T::png_hdr},{"png-pq",T::png_hdr},{"png-hlg",T::png_hlg},{"jxl-hlg",T::jxl_hlg},{"avif-hlg",T::avif_hlg}});target=true;}
+        if(arg=="--target") {o.target=choice<T>(value(),{{"jpeg",T::jpeg},{"jpeg-gainmap",T::jpeg_gainmap},{"jxl",T::jxl},{"jxl-linear",T::jxl_linear},{"jxl-scrgb",T::jxl_scrgb},{"jxl-pq",T::jxl_pq},{"avif",T::avif},{"avif-pq",T::avif_pq},{"avif-gainmap",T::avif_gainmap},{"png",T::png},{"png-hdr",T::png_hdr},{"png-pq",T::png_hdr},{"png-hlg",T::png_hlg},{"jxl-hlg",T::jxl_hlg},{"avif-hlg",T::avif_hlg},{"webp",T::webp}});target=true;}
         else if(arg=="--mode")o.mode=choice<jxrc::Mode>(value(),{{"preserve",jxrc::Mode::preserve},{"process",jxrc::Mode::process}});
         else if(arg=="--preset"){o.quality.preset=choice<P>(value(),{{"lossless",P::lossless},{"high",P::high},{"medium",P::medium},{"low",P::low},{"custom",P::custom}});preset=true;}
         else if(arg=="--quality"){o.quality.codec_quality=integer(value());custom=true;}
@@ -98,7 +100,7 @@ int run(const std::vector<std::string>& argv) {
         else if(arg=="--overwrite")o.overwrite=true;
         else if(arg=="--srgb-clamp")o.srgb_clamp=true;
         else if(arg=="--sdr-tone-map")o.sdr_tone_map=true;
-        else if(arg=="--sdr-tone-mapper")o.sdr_tone_mapper=choice<jxrc::SdrToneMapper>(value(),{{"skiv-manual",jxrc::SdrToneMapper::skiv_manual},{"skiv",jxrc::SdrToneMapper::skiv},{"skiv-custom",jxrc::SdrToneMapper::skiv_custom},{"logarithmic",jxrc::SdrToneMapper::logarithmic},{"reinhard",jxrc::SdrToneMapper::reinhard},{"extended-reinhard",jxrc::SdrToneMapper::extended_reinhard}});
+        else if(arg=="--sdr-tone-mapper")o.sdr_tone_mapper=choice<jxrc::SdrToneMapper>(value(),{{"skiv-manual",jxrc::SdrToneMapper::skiv_manual},{"skiv",jxrc::SdrToneMapper::skiv},{"skiv-custom",jxrc::SdrToneMapper::skiv_custom},{"mpcvr",jxrc::SdrToneMapper::mpcvr},{"logarithmic",jxrc::SdrToneMapper::logarithmic},{"reinhard",jxrc::SdrToneMapper::reinhard},{"extended-reinhard",jxrc::SdrToneMapper::extended_reinhard}});
         else if(arg=="--sdr-color-mapping")o.sdr_color_mapping=choice<jxrc::SdrColorMapping>(value(),{{"max-rgb",jxrc::SdrColorMapping::max_rgb},{"luminance",jxrc::SdrColorMapping::luminance},{"per-channel",jxrc::SdrColorMapping::per_channel}});
         else if(arg=="--sdr-shadows")o.sdr_shadows=number(value());
         else if(arg=="--sdr-midtones")o.sdr_midtones=number(value());

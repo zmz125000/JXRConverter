@@ -147,7 +147,7 @@ Image jpeg_image(const void* bytes,size_t size, StillEncodeQuality quality, bool
 int write_rgb_jpeg(unsigned,unsigned,const void*,const StillSourceColor&,const char*,StillEncodeQuality);
 int jpeg_to_integer(const void* data,size_t size,int target,const char* path,StillEncodeQuality quality,bool keep_exif,int* info) {
     auto raster=decode_jpeg(static_cast<const uint8_t*>(data),size,false,true);
-    if(raster.cmyk && (target==3 || (target==1 && raster.icc.empty())))
+    if(raster.cmyk && (target==3 || target==kWebpSourceTarget || (target==1 && raster.icc.empty())))
         raster=decode_jpeg(static_cast<const uint8_t*>(data),size);
     return convert_regular_source(raster,target,path,quality,keep_exif,info);
 }
@@ -279,13 +279,20 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
     if(info.exponent_bits_per_sample && t!=16 && t!=18 && info.intensity_target>255.f) {
         unsupported=true;return Image(nullptr,avifImageDestroy);
     }
-    if(target==3) {
+    if(target==3 || target==kWebpSourceTarget) {
         StillSourceColor source;source.bits=info.bits_per_sample>8?16:8;
         source.cmyk=cmyk;source.gray=info.num_color_channels==1;
         source.primaries=p;source.transfer=t;source.icc=icc.data();source.icc_size=icc.size();
         quality.exif=exif.data();quality.exif_size=exif.size();
-        const int rc=encode_png_source(info.xsize,info.ysize,pixels.data(),info.bits_per_sample>8,source,output,quality);
-        encoded_result=rc==0?1:rc;
+        const bool sixteen=info.bits_per_sample>8;
+        if(target==kWebpSourceTarget) {
+            source.exponent_bits=info.exponent_bits_per_sample;
+            encoded_result=encode_webp_source(info.xsize,info.ysize,pixels.data(),sixteen,source,output,quality);
+            unsupported=encoded_result==0;
+        } else {
+            const int rc=encode_png_source(info.xsize,info.ysize,pixels.data(),sixteen,source,output,quality);
+            encoded_result=rc==0?1:rc;
+        }
         output_info[0]=info.xsize;output_info[1]=info.ysize;output_info[2]=0;output_info[3]=t;
         return Image(nullptr,avifImageDestroy);
     }
@@ -595,7 +602,7 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
         avifImageFreePlanes(image,AVIF_PLANES_A);
     }
     const bool gain=image->gainMap && image->gainMap->image;
-    if(gain && target==3)return -96;
+    if(gain && (target==3||target==kWebpSourceTarget))return -96;
     info[0]=image->width;info[1]=image->height;info[2]=gain && target!=1;info[3]=image->transferCharacteristics;
     if(gain && target!=1) {
         const auto oldW=image->gainMap->image->width,oldH=image->gainMap->image->height;
@@ -639,12 +646,13 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
     const bool sixteen=image->depth>8;
     std::vector<uint8_t> rgb;
     if(!rgb_pixels(image,sixteen?16:8,rgb))return -91;
-    if(target==3) {
+    if(target==3 || target==kWebpSourceTarget) {
         if(color.orientation>=5)std::swap(info[0],info[1]);
         if(!keep_exif)quality.exif_size=0;
         if(color.primaries==0||color.primaries==2)color.primaries=1;
         if(color.transfer==0||color.transfer==2)color.transfer=13;
     }
+    if(target==kWebpSourceTarget)return encode_webp_source(image->width,image->height,rgb.data(),sixteen,color,path,quality);
     const int rc=target==3?encode_png_source(image->width,image->height,rgb.data(),sixteen,color,path,quality):
         encode_jxl_source(image->width,image->height,rgb.data(),sixteen,color,path,quality);
     return rc==0?1:rc;
@@ -731,7 +739,7 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         uhdr_compressed_image_t source{const_cast<uint8_t*>(data),size_t(size),size_t(size),UHDR_CG_UNSPECIFIED,UHDR_CT_UNSPECIFIED,UHDR_CR_FULL_RANGE};
         const bool gain=ok(uhdr_dec_set_image(jpeg.get(),&source)) && ok(uhdr_dec_probe(jpeg.get()));
         const auto* base=gain?uhdr_dec_get_base_image(jpeg.get()):nullptr;
-        if(target==1 || target==3 || (target==0&&!gain)) {
+        if(target==1 || target==3 || target==kWebpSourceTarget || (target==0&&!gain)) {
             int info[5]{};
             const int rc=jpeg_to_integer(base?base->data:data,base?base->data_sz:size,target,path.get(),quality,keep_exif,info);
             std::copy(info,info+5,out_info);return rc;
@@ -771,7 +779,7 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         if(!exif.empty() && avifGetExifOrientationOffset(exif.data(),exif.size(),&offset)==AVIF_RESULT_OK && offset<exif.size())exif[offset]=1;
     } else return 0;
     avifImage* source_image=decoded_image?decoded_image:image.get();
-    if((target==1||target==3)&&source_image->gainMap&&quality.gain_map_reconstruction!=2) {
+    if((target==1||target==3||target==kWebpSourceTarget)&&source_image->gainMap&&quality.gain_map_reconstruction!=2) {
         // These SDR/source formats cannot carry an ISO gain map. Off/Auto
         // deliberately export the stored base; Full uses the F32 render path.
         avifGainMapDestroy(source_image->gainMap);source_image->gainMap=nullptr;
@@ -840,13 +848,15 @@ int convert_regular_source(const RegularImage& raster, int target, const char* p
     if(exif.empty())exif=orientation_exif(raster.orientation);
     quality.exif=exif.data();quality.exif_size=exif.size();
     info[0]=raster.width;info[1]=raster.height;info[2]=0;info[3]=raster.transfer;
-    if(target==3) {
+    if(target==3 || target==kWebpSourceTarget) {
         StillSourceColor color;color.bits=raster.bits;color.orientation=raster.orientation;
         color.channels=raster.channels;color.cmyk=raster.cmyk;color.gray=raster.gray;
         color.primaries=raster.primaries;color.transfer=raster.transfer;
         color.icc=raster.icc.data();color.icc_size=raster.icc.size();
         if(!keep_exif)quality.exif_size=0;
         if(color.orientation>=5)std::swap(info[0],info[1]);
+        if(target==kWebpSourceTarget)
+            return encode_webp_source(raster.width,raster.height,raster.pixels.data(),raster.bits>8,color,path,quality);
         const int rc=encode_png_source(raster.width,raster.height,raster.pixels.data(),raster.bits>8,color,path,quality);
         return rc==0?1:rc;
     }
