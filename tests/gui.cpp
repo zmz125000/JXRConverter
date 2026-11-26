@@ -1584,7 +1584,7 @@ private slots:
     void animationFramePlacement() {
         using namespace jxrc;
         const AnimationEncoding layout{AnimationFormat::jxl,AnimationTransfer::linear,4,2,16,1,1000000};
-        const Options options;
+        const Options options{};
         AnimationPlacement placement;
         std::vector<float> background;
         const auto compose=[&](unsigned width,unsigned height,std::vector<float> rgba) {
