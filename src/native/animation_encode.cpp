@@ -241,17 +241,89 @@ std::vector<uint16_t> animation_rgba16(const std::vector<float>& pixels) {
     return result;
 }
 
-std::vector<float> compose_animation_frame(AnimationFrame&& frame, const AnimationEncoding& format,
-                                            unsigned horizontal, unsigned vertical, const Options& o) {
-    require(fits_working_image(format.width,format.height),"Invalid animation canvas size.");
-    if(frame.width>format.width||frame.height>format.height) {
-        const double scale=std::min(double(format.width)/frame.width,double(format.height)/frame.height);
-        const unsigned edge=std::max(1u,unsigned(std::floor(std::max(frame.width,frame.height)*scale)));
-        scale_rgba_f32_max_edge(frame.rgba,frame.width,frame.height,edge);
+namespace {
+struct AnimationSampleAxis {
+    double left, right;
+    unsigned first, last;
+    bool interpolate;
+
+    double weight(unsigned i) const {
+        if(interpolate)return i==first?1.-(left-first):left-first;
+        return std::min(right,double(i)+1.)-std::max(left,double(i));
     }
-    require(frame.width<=format.width&&frame.height<=format.height,"Frame does not fit the animation canvas.");
-    const unsigned x=(format.width-frame.width)*horizontal/2;
-    const unsigned y=(format.height-frame.height)*vertical/2;
+};
+
+AnimationSampleAxis animation_sample_axis(double pixel,double step,unsigned extent) {
+    if(step<=1.) {
+        const double center=std::clamp((pixel+.5)*step-.5,0.,double(extent-1));
+        const unsigned first=unsigned(center);
+        return {center,center,first,std::min(first+1,extent-1),true};
+    }
+    const double left=pixel*step;
+    const double right=std::min(double(extent),(pixel+1.)*step);
+    return {left,right,std::min(unsigned(left),extent-1),std::min(unsigned(std::ceil(right))-1,extent-1),false};
+}
+
+std::array<float,4> sample_animation_frame(const AnimationFrame& frame,
+                                          const AnimationSampleAxis& x,const AnimationSampleAxis& y) {
+    // Interpolate enlargements and area-filter reductions in premultiplied linear light.
+    double r=0,g=0,b=0,alpha=0,area=0;
+    for(unsigned row=y.first;row<=y.last;++row) {
+        const double wy=y.weight(row);
+        for(unsigned col=x.first;col<=x.last;++col) {
+            const double weight=wy*x.weight(col);
+            const auto* p=frame.rgba.data()+(size_t(row)*frame.width+col)*4;
+            const double coverage=weight*unit(p[3]);
+            if(coverage>0) {
+                if(std::isfinite(p[0]))r+=coverage*p[0];
+                if(std::isfinite(p[1]))g+=coverage*p[1];
+                if(std::isfinite(p[2]))b+=coverage*p[2];
+                alpha+=coverage;
+            }
+            area+=weight;
+        }
+    }
+    if(alpha<=0||area<=0)return {};
+    return {float(r/alpha),float(g/alpha),float(b/alpha),float(alpha/area)};
+}
+
+double animation_offset(unsigned canvas,double frame,unsigned align) {
+    const double gap=double(canvas)-frame;
+    return std::copysign(std::floor(std::abs(gap)*align/2.),gap);
+}
+}
+
+std::vector<float> compose_animation_frame(AnimationFrame&& frame, const AnimationEncoding& format,
+                                            const AnimationPlacement& placement,const Options& o,
+                                            std::vector<float>& stack) {
+    require(fits_working_image(format.width,format.height)&&fits_working_image(frame.width,frame.height),
+            "Invalid animation frame or canvas size.");
+    const double fit=std::min(double(format.width)/frame.width,double(format.height)/frame.height);
+    double scale=fit;
+    switch(placement.resize) {
+    case AnimationResize::off:
+        if(fit<1.) {
+            const unsigned edge=std::max(1u,unsigned(std::floor(std::max(frame.width,frame.height)*fit)));
+            scale_rgba_f32_max_edge(frame.rgba,frame.width,frame.height,edge);
+        }
+        scale=1.;
+        break;
+    case AnimationResize::fit_up:break;
+    case AnimationResize::fit_down:scale=std::min(1.,fit);break;
+    case AnimationResize::fill:scale=std::max(double(format.width)/frame.width,double(format.height)/frame.height);break;
+    }
+    const double width=std::max(1.,std::round(frame.width*scale));
+    const double height=std::max(1.,std::round(frame.height*scale));
+    const double left=animation_offset(format.width,width,placement.horizontal);
+    const double top=animation_offset(format.height,height,placement.vertical);
+    const bool resample=width!=frame.width||height!=frame.height;
+    const auto count=size_t(format.width)*format.height;
+    const bool inPlace=!resample&&frame.width==format.width&&frame.height==format.height;
+    auto canvas=inPlace?std::move(frame.rgba):std::vector<float>(count*4);
+    const bool stacking=placement.stack!=AnimationStack::off;
+    const bool updateStack=stacking&&(stack.empty()||placement.stack==AnimationStack::previous);
+    if(stacking&&stack.empty())stack.resize(count*4);
+
     const bool flatten=format.video||o.transparency_background==TransparencyBackground::black_remove_alpha||
                        o.transparency_background==TransparencyBackground::white_remove_alpha;
     const bool white=o.transparency_background==TransparencyBackground::white_remove_alpha||
@@ -259,39 +331,62 @@ std::vector<float> compose_animation_frame(AnimationFrame&& frame, const Animati
     const auto gamut=format.primaries==9?UHDR_CG_BT_2100:UHDR_CG_BT_709;
     const auto fromXyz=skiv::inverse(matrix(format.primaries));
     const auto& toXyz=matrix(frame.primaries);
-    const auto encode=[&](float r,float g,float b,float a) {
-        if(format.transfer==AnimationTransfer::hlg)linear_to_hlg_rgb(r,g,b,gamut);
-        const auto channel=[&](float v) {
-            if(!std::isfinite(v))return 0.f;
-            switch(format.transfer) {
-            case AnimationTransfer::pq:return linear_to_pq_code(v);
-            case AnimationTransfer::hlg:return unit(v);
-            case AnimationTransfer::sdr:return format.video?bt709_oetf(v):srgb_oetf(v);
-            case AnimationTransfer::scrgb:return v*(kSdrWhiteNits/80.f);
-            case AnimationTransfer::linear:return v;
-            }
-            return 0.f;
-        };
-        return std::array<float,4>{channel(r),channel(g),channel(b),a};
+    const auto channel=[&](float v) {
+        if(!std::isfinite(v))return 0.f;
+        switch(format.transfer) {
+        case AnimationTransfer::pq:return linear_to_pq_code(v);
+        case AnimationTransfer::hlg:return unit(v);
+        case AnimationTransfer::sdr:return format.video?bt709_oetf(v):srgb_oetf(v);
+        case AnimationTransfer::scrgb:return v*(kSdrWhiteNits/80.f);
+        case AnimationTransfer::linear:return v;
+        }
+        return 0.f;
     };
-    const bool inPlace=frame.width==format.width&&frame.height==format.height;
-    auto canvas=inPlace?std::move(frame.rgba):std::vector<float>(size_t(format.width)*format.height*4);
-    if(!inPlace&&flatten) {
-        const float fill=white?1.f:0.f;
-        const auto background=encode(fill,fill,fill,1);
-        for(size_t i=0;i<canvas.size();i+=4)std::copy(background.begin(),background.end(),canvas.data()+i);
-    }
     const unsigned jobs=std::clamp(o.threads,1u,4u);
-    hdr_parallel_pixels(size_t(frame.width)*frame.height,jobs,[&](size_t begin,size_t end,unsigned) {
-        for(size_t pixel=begin;pixel<end;++pixel) {
-            const auto* p=(inPlace?canvas:frame.rgba).data()+pixel*4;
-            const double alpha=unit(p[3]);
-            skiv::RGB rgb={p[0],p[1],p[2]};
-            if(frame.primaries!=format.primaries)rgb=skiv::transform(fromXyz,skiv::transform(toXyz,rgb));
-            if(flatten)for(auto& c:rgb)c=c*alpha+(white?1.-alpha:0.);
-            const auto code=encode(float(rgb[0]),float(rgb[1]),float(rgb[2]),flatten?1.f:float(alpha));
-            const size_t target=(size_t(y+pixel/frame.width)*format.width+x+pixel%frame.width)*4;
-            std::copy(code.begin(),code.end(),canvas.data()+target);
+    hdr_parallel_pixels(format.height,jobs,[&](size_t begin,size_t end,unsigned) {
+        for(size_t row=begin;row<end;++row) {
+            const double y=double(row)-top;
+            const bool inRow=y>=0&&y<height;
+            const auto sy=inRow&&resample?animation_sample_axis(y,frame.height/height,frame.height):AnimationSampleAxis{};
+            for(unsigned col=0;col<format.width;++col) {
+                const double x=col-left;
+                const bool inside=inRow&&x>=0&&x<width;
+                if(!inside&&!stacking&&!flatten)continue;
+                const size_t i=(row*format.width+col)*4;
+                auto* out=canvas.data()+i;
+                std::array<float,4> pixel{};
+                if(inside) {
+                    if(resample)pixel=sample_animation_frame(frame,animation_sample_axis(x,frame.width/width,frame.width),sy);
+                    else {
+                        const auto* source=inPlace?out:frame.rgba.data()+(size_t(y)*frame.width+size_t(x))*4;
+                        std::copy_n(source,4,pixel.begin());
+                    }
+                }
+                double alpha=unit(pixel[3]);
+                skiv::RGB rgb={pixel[0],pixel[1],pixel[2]};
+                if(inside&&frame.primaries!=format.primaries)rgb=skiv::transform(fromXyz,skiv::transform(toXyz,rgb));
+                if(stacking) {
+                    auto* background=stack.data()+i;
+                    const double uncovered=1.-alpha;
+                    for(unsigned c=0;c<3;++c) {
+                        const double source=alpha>0&&std::isfinite(rgb[c])?rgb[c]*alpha:0.;
+                        rgb[c]=source+background[c]*uncovered;
+                    }
+                    alpha+=background[3]*uncovered;
+                    if(updateStack) {
+                        for(unsigned c=0;c<3;++c)background[c]=float(rgb[c]);
+                        background[3]=float(alpha);
+                    }
+                    if(flatten) {
+                        if(white)for(auto& c:rgb)c+=1.-alpha;
+                    } else if(alpha>0)for(auto& c:rgb)c/=alpha;
+                } else if(flatten) {
+                    for(auto& c:rgb)c=(alpha>0?c*alpha:0.)+(white?1.-alpha:0.);
+                }
+                float r=float(rgb[0]),g=float(rgb[1]),b=float(rgb[2]);
+                if(format.transfer==AnimationTransfer::hlg)linear_to_hlg_rgb(r,g,b,gamut);
+                out[0]=channel(r);out[1]=channel(g);out[2]=channel(b);out[3]=flatten?1.f:float(alpha);
+            }
         }
     });
     return canvas;
@@ -301,6 +396,52 @@ std::vector<uint8_t> animation_rgba8(const std::vector<float>& pixels) {
     std::vector<uint8_t> result(pixels.size());
     std::transform(pixels.begin(),pixels.end(),result.begin(),[](float v){return uint8_t(std::lround(unit(v)*255.f));});
     return result;
+}
+
+void clear_gif_canvas_between_frames(const std::filesystem::path& path,const std::function<bool()>& cancelled) {
+    std::fstream file(path,std::ios::binary|std::ios::in|std::ios::out);
+    const auto check=[&]{require(bool(file),"Cannot update GIF frame disposal.");};
+    const auto byte=[&] {
+        const int value=file.get();
+        check();
+        return unsigned(value);
+    };
+    const auto skipBlocks=[&] {
+        for(unsigned size=byte();size;size=byte())file.ignore(size);
+    };
+    const auto paletteSize=[](unsigned packed){return 3u<<(1+(packed&7));};
+    std::array<unsigned char,13> header{};
+    file.read(reinterpret_cast<char*>(header.data()),header.size());
+    check();
+    require(header[0]=='G'&&header[1]=='I'&&header[2]=='F'&&(header[10]&128),"Invalid GIF animation header.");
+    file.ignore(paletteSize(header[10]));
+    for(unsigned block=byte();block!=0x3b;block=byte()) {
+        if(cancelled())throw std::runtime_error("Animation conversion cancelled");
+        if(block==0x21) {
+            if(byte()!=0xf9){skipBlocks();continue;}
+            require(byte()==4,"Invalid GIF frame control block.");
+            const auto offset=file.tellg();
+            std::array<char,4> control{};
+            file.read(control.data(),control.size());
+            check();
+            // The palette filter reserves a transparent index even for opaque
+            // frames. FFmpeg can omit its flag on frames using the global palette.
+            if(!(control[0]&1))control[3]=char(header[11]);
+            control[0]=char((control[0]&~0x1c)|0x09); // Restore to transparent background.
+            file.seekp(offset);
+            file.write(control.data(),control.size());
+            file.seekg(offset+std::streamoff(control.size()));
+            require(byte()==0,"Invalid GIF frame control terminator.");
+        } else if(block==0x2c) {
+            file.ignore(8); // Frame position and dimensions.
+            const auto packed=byte();
+            if(packed&128)file.ignore(paletteSize(packed));
+            file.ignore(1); // LZW code size.
+            skipBlocks();
+        } else throw std::runtime_error("Invalid GIF animation block.");
+    }
+    file.flush();
+    check();
 }
 
 struct AnimationEncoder::Impl {

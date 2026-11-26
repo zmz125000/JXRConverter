@@ -6,6 +6,14 @@ namespace jxrc {
 
 enum class AnimationFormat { gif, webp, png, jxl, avif };
 enum class AnimationTransfer { sdr, pq, hlg, linear, scrgb };
+enum class AnimationStack { off, first, previous };
+enum class AnimationResize { off, fit_up, fit_down, fill };
+
+struct AnimationPlacement {
+    AnimationStack stack = AnimationStack::off;
+    AnimationResize resize = AnimationResize::off;
+    unsigned horizontal = 1, vertical = 1; // Start, center, end on each axis.
+};
 
 struct AnimationFrame {
     unsigned width = 0, height = 0;
@@ -26,12 +34,12 @@ struct AnimationEncoding {
     bool video = false;
 };
 
-// Render into the output color space before padding. GIF uses this same
-// operation, then sends its sRGB RGBA8 frames to FFmpeg for palette encoding.
+// The optional stack stores premultiplied linear pixels in the output gamut.
 JXRC_API std::vector<float> compose_animation_frame(AnimationFrame&&, const AnimationEncoding&,
-                                                  unsigned horizontal, unsigned vertical, const Options&);
+                                                  const AnimationPlacement&, const Options&, std::vector<float>& stack);
 JXRC_API std::vector<uint8_t> animation_rgba8(const std::vector<float>&);
 JXRC_API std::vector<uint16_t> animation_rgba16(const std::vector<float>&);
+JXRC_API void clear_gif_canvas_between_frames(const std::filesystem::path&, const std::function<bool()>& cancelled);
 
 class JXRC_API AnimationEncoder {
 public:

@@ -631,7 +631,7 @@ QList<QWidget*> MainWindow::persistentControls() const {
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
-        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_}
+        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_,animationStack_,animationResize_}
         +stillTone_.settings()+videoTone_.settings();
 }
 QList<QWidget*> MainWindow::filterControls() const {
@@ -867,6 +867,10 @@ QWidget* MainWindow::buildAnimationControls() {
     animationMilliseconds_=check("Milliseconds","animationMilliseconds");
     animationSlowMotion_=check("Slow motion","animationSlowMotion");
     animationSlowMotion_->setToolTip("Keep every decoded video frame and play it at the chosen rate. At 1 Hz, one second of 24 Hz video becomes 24 seconds.");
+    animationStack_=combo({"Off","First frame","Previous frames"},"animationStack");
+    animationStack_->setToolTip("Use the first frame or the accumulated previous frames behind transparent areas.");
+    animationResize_=combo({"Off","Fit (upscale)","Fit (downscale)","Fill (up/down)"},"animationResize");
+    animationResize_->setToolTip("Upscale to fit the largest width and height, downscale to fit the smallest, or fill the first frame’s dimensions and crop.");
     animationAlignment_=combo({"Top left","Top","Top right","Left","Center","Right","Bottom left","Bottom","Bottom right"},"animationAlignment");
     animationAlignment_->setCurrentIndex(4);
     animationAlignment_->setToolTip("Place smaller frames on a shared canvas. Empty space follows the transparency setting in Conversion.");
@@ -884,6 +888,8 @@ QWidget* MainWindow::buildAnimationControls() {
     form->addRow("Frame timing",animationRate_);
     form->addRow(animationMilliseconds_);
     form->addRow(animationSlowMotion_);
+    form->addRow("Stack frames",animationStack_);
+    form->addRow("Resize",animationResize_);
     form->addRow("Alignment",animationAlignment_);
     form->addRow("Max edge",animationEdge_);
     auto* ordering=new QLabel("Combines files in list order. Each still contributes one frame.");
@@ -1007,8 +1013,10 @@ AnimationOutput MainWindow::animationTarget() const {
     if(animationAsVideo_->isChecked())result.video=videoTarget();
     result.delayUs=std::max(!result.video&&result.format==AnimationFormat::gif?10000u:1000u,animationDelayUs_);
     result.slowMotion=animationSlowMotion_->isChecked();
-    result.horizontal=unsigned(animationAlignment_->currentIndex()%3);
-    result.vertical=unsigned(animationAlignment_->currentIndex()/3);
+    result.placement.stack=AnimationStack(animationStack_->currentIndex());
+    result.placement.resize=AnimationResize(animationResize_->currentIndex());
+    result.placement.horizontal=unsigned(animationAlignment_->currentIndex()%3);
+    result.placement.vertical=unsigned(animationAlignment_->currentIndex()/3);
     return result;
 }
 

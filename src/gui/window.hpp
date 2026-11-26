@@ -158,7 +158,7 @@ private:
     QComboBox *transparencyBackground_, *reconstruction_, *sort_, *range_, *mode_, *preset_, *avifDepth_, *pngDepth_, *rawMode_, *wb_;
     QListWidget* targets_ = nullptr;
     QWidget *videoPage_ = nullptr, *animationPage_ = nullptr;
-    QComboBox *animationFormat_, *animationTransfer_, *animationAlignment_;
+    QComboBox *animationFormat_, *animationTransfer_, *animationAlignment_, *animationStack_, *animationResize_;
     QDoubleSpinBox* animationRate_;
     QCheckBox *animationMilliseconds_, *animationSlowMotion_, *animationAsVideo_;
     QLabel* animationVideoSummary_;

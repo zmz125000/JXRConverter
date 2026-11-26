@@ -13,7 +13,7 @@ struct AnimationOutput {
     AnimationTransfer transfer = AnimationTransfer::sdr;
     unsigned delayUs = 83333;
     bool slowMotion = false;
-    unsigned horizontal = 1, vertical = 1; // Start, center, end on each axis.
+    AnimationPlacement placement;
 };
 
 QString animationExtension(const AnimationOutput&);

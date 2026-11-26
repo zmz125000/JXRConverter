@@ -1581,6 +1581,108 @@ private slots:
         QVERIFY(webp.open(QIODevice::ReadOnly));
         QCOMPARE(webp.readAll().count("ANMF"),2);
     }
+    void animationFramePlacement() {
+        using namespace jxrc;
+        const AnimationEncoding layout{AnimationFormat::jxl,AnimationTransfer::linear,4,2,16,1,1000000};
+        const Options options;
+        AnimationPlacement placement;
+        std::vector<float> background;
+        const auto compose=[&](unsigned width,unsigned height,std::vector<float> rgba) {
+            return compose_animation_frame({width,height,1,std::move(rgba)},layout,placement,options,background);
+        };
+        placement.resize=AnimationResize::fit_up;
+        const auto enlarged=compose(2,1,{1,0,0,1, 0,0,1,0});
+        QCOMPARE(enlarged[4],1.f);        // Transparency is premultiplied when interpolating.
+        QCOMPARE(enlarged[6],0.f);
+        QCOMPARE(enlarged[7],.75f);
+        QCOMPARE(enlarged[11],.25f);
+        QCOMPARE(enlarged[15],0.f);
+
+        placement.resize=AnimationResize::fill;
+        std::vector<float> stripes(4*4*4,1.f);
+        for(size_t i=0;i<stripes.size();i+=4)stripes[i]=float(i/16)/4.f;
+        placement.vertical=0;
+        QCOMPARE(compose(4,4,stripes)[0],0.f);
+        placement.vertical=1;
+        QCOMPARE(compose(4,4,stripes)[0],.25f);
+        placement.vertical=2;
+        QCOMPARE(compose(4,4,stripes)[0],.5f);
+
+        placement.resize=AnimationResize::fit_down;
+        std::vector<float> alternating(8*4*4,1.f);
+        for(size_t i=0;i<alternating.size();i+=4)alternating[i]=float(i/4%2);
+        QCOMPARE(compose(8,4,alternating)[0],.5f);
+
+        placement.resize=AnimationResize::off;
+        placement.horizontal=placement.vertical=0;
+        placement.stack=AnimationStack::previous;
+        QCOMPARE(compose(1,1,{1,0,0,.5f})[3],.5f);
+        const auto blended=compose(1,1,{0,1,0,.5f});
+        QCOMPARE(blended[0],1.f/3.f);
+        QCOMPARE(blended[1],2.f/3.f);
+        QCOMPARE(blended[3],.75f);
+    }
+    void animationStackAndResize() {
+        using namespace jxrc;
+        const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
+        if(ffmpeg.isEmpty())QSKIP("FFmpeg is unavailable");
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto save=[&](const char* name,const QImage& image) {
+            const auto path=directory.filePath(QString::fromLatin1(name));
+            return image.save(path)?path:QString{};
+        };
+        QImage first(4,2,QImage::Format_RGBA8888);
+        first.fill(Qt::red);
+        QImage overlay(2,2,QImage::Format_RGBA8888);
+        overlay.fill(Qt::transparent);
+        overlay.setPixelColor(0,0,Qt::green);
+        const auto green=save("green.png",overlay);
+        overlay.fill(Qt::transparent);
+        overlay.setPixelColor(1,0,Qt::blue);
+        AnimationOutput target;
+        target.inputs={save("red.png",first),green,save("blue.png",overlay)};
+        QVERIFY(!target.inputs.contains(QString{}));
+        target.delayUs=1000000;
+        target.placement.horizontal=target.placement.vertical=0;
+        const auto render=[&](const QString& path,const Options& options={}) {
+            return convertAnimation(std::filesystem::u8path(path.toUtf8().constData()),options,target,[]{return false;},[](int){});
+        };
+        const auto decode=[&](const QString& path) {
+            QProcess process;
+            process.start(ffmpeg,{"-v","error","-i",path,"-pix_fmt","rgba","-fps_mode","passthrough","-f","rawvideo","pipe:1"});
+            if(!process.waitForFinished()||process.exitCode()!=0)return QByteArray{};
+            return process.readAllStandardOutput();
+        };
+        const auto checkColor=[](const QByteArray& rgba,int offset,const QColor& expected) {
+            const int rgb[]={expected.red(),expected.green(),expected.blue()};
+            for(int c=0;c<3;++c)QVERIFY(std::abs(int(uchar(rgba[offset+c]))-rgb[c])<=2);
+            QCOMPARE(uchar(rgba[offset+3]),uchar(255));
+        };
+        for(const auto stack:{AnimationStack::off,AnimationStack::first,AnimationStack::previous}) {
+            target.placement.stack=stack;
+            const auto path=directory.filePath(QString("stack-%1.gif").arg(int(stack)));
+            QVERIFY(!render(path));
+            const auto pixels=decode(path);
+            constexpr int frameBytes=4*2*4;
+            QCOMPARE(pixels.size(),3*frameBytes);
+            checkColor(pixels,frameBytes,Qt::green);
+            checkColor(pixels,2*frameBytes+4,Qt::blue);
+            if(stack==AnimationStack::off)QCOMPARE(uchar(pixels[2*frameBytes+3]),uchar(0));
+            else checkColor(pixels,2*frameBytes,stack==AnimationStack::first?Qt::red:Qt::green);
+        }
+        target.format=AnimationFormat::png;
+        target.placement.resize=AnimationResize::fit_down;
+        Options flatten;
+        flatten.transparency_background=TransparencyBackground::white_remove_alpha;
+        const auto output=directory.filePath("down.png");
+        QVERIFY(!render(output,flatten));
+        QCOMPARE(QImage(output).size(),QSize(2,2));
+        const auto pixels=decode(output);
+        QCOMPARE(pixels.size(),3*2*2*4);
+        checkColor(pixels,2*2*2*4,Qt::green);
+        checkColor(pixels,2*2*2*4+4,Qt::blue);
+    }
     void animationOutputAsVideo() {
         const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
         const auto ffprobe=QStandardPaths::findExecutable("ffprobe");

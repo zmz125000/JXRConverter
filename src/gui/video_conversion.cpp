@@ -456,8 +456,9 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
                       const std::function<bool()>& cancelled,const std::function<void(int)>& progress) {
     validate(options);
     checkCancelled(cancelled);
+    const auto& placement=target.placement;
     if(target.inputs.isEmpty()||target.delayUs<1000||target.delayUs>600000000||
-       target.horizontal>2||target.vertical>2)
+       placement.horizontal>2||placement.vertical>2)
         throw std::invalid_argument("Invalid animation frame timing or alignment.");
     const bool asVideo=target.video.has_value();
     const bool gif=!asVideo&&target.format==AnimationFormat::gif, webp=!asVideo&&target.format==AnimationFormat::webp;
@@ -526,7 +527,9 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         }
         source.size=animationSize(source.size,options.max_edge);
         if(source.size.isEmpty())throw std::runtime_error("Animation source dimensions are unavailable.");
-        canvas=canvas.expandedTo(source.size);
+        if(sources.isEmpty())canvas=source.size;
+        else if(placement.resize==AnimationResize::fit_down)canvas=canvas.boundedTo(source.size);
+        else if(placement.resize!=AnimationResize::fill)canvas=canvas.expandedTo(source.size);
         sources.append(std::move(source));
     }
     if(gif||asVideo||std::any_of(sources.cbegin(),sources.cend(),[](const auto& source){return source.isVideo();})) {
@@ -598,13 +601,24 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         if(canvas.width()>65535||canvas.height()>65535)throw std::runtime_error("GIF animation exceeds the codec dimensions.");
         const QStringList args={"-hide_banner","-loglevel","error","-nostdin","-xerror","-y",
             "-filter_complex_threads",threads,"-f","rawvideo","-pixel_format","rgba","-video_size",size,"-framerate",rate,"-i","pipe:0",
-            "-filter_complex","split[frames][palette];[palette]palettegen=stats_mode=single[p];[frames][p]paletteuse=new=1",
+            "-filter_complex","split[frames][palette];[palette]palettegen=stats_mode=single:reserve_transparent=1[p];[frames][p]paletteuse=new=1:alpha_threshold=128",
+            "-gifflags","0",
             "-loop","0","-final_delay",QString::number(qRound(target.delayUs/10000.)),
             "-f","gif",QString::fromStdString(stage.file.u8string())};
         ffmpegEncoder=std::make_unique<VideoProcess>(ffmpeg,args);
     } else native=std::make_unique<AnimationEncoder>(stage.file,encoding,options);
 
     const auto errorMessage=asVideo?"Animation video encode failed":"GIF encode failed";
+    std::vector<float> stack;
+    bool transparentGif=false;
+    auto renderOptions=options;
+    if(placement.stack!=AnimationStack::off||placement.resize!=AnimationResize::off) {
+        // Preserve transparency through rendering. Flatten the completed canvas if requested.
+        if(renderOptions.transparency_background==TransparencyBackground::black_remove_alpha)
+            renderOptions.transparency_background=TransparencyBackground::black;
+        else if(renderOptions.transparency_background==TransparencyBackground::white_remove_alpha)
+            renderOptions.transparency_background=TransparencyBackground::white;
+    }
     const auto send=[&](const char* data,qsizetype bytes) {
         writeFrame(*ffmpegEncoder,data,bytes,cancelled,[&] {
             ffmpegEncoder->readErrors();
@@ -613,13 +627,16 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
     };
     const auto addFrame=[&](AnimationFrame&& frame) {
         checkCancelled(cancelled);
-        auto pixels=compose_animation_frame(std::move(frame),encoding,target.horizontal,target.vertical,options);
+        auto pixels=compose_animation_frame(std::move(frame),encoding,placement,options,stack);
         if(native)native->add(pixels);
         else if(asVideo) {
             const auto rgba=animation_rgba16(pixels);
             send(reinterpret_cast<const char*>(rgba.data()),qsizetype(rgba.size()*sizeof(uint16_t)));
         } else {
             const auto rgba=animation_rgba8(pixels);
+            if(!transparentGif)for(size_t i=3;i<rgba.size();i+=4) {
+                if(rgba[i]<128){transparentGif=true;break;}
+            }
             send(reinterpret_cast<const char*>(rgba.data()),qsizetype(rgba.size()));
         }
     };
@@ -634,7 +651,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         };
         try {
             if(!source.isVideo()) {
-                addFrame(AnimationImageRenderer::render(pathFromQt(source.path),options,!sdr,cancelled));
+                addFrame(AnimationImageRenderer::render(pathFromQt(source.path),renderOptions,!sdr,cancelled));
             } else {
                 auto stream=source.video;
                 const VideoColor color{sourcePrimaries(stream),sourceTransfer(stream)};
@@ -671,6 +688,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
             ffmpegEncoder->readErrors();
         }
         ffmpegEncoder->checkExit(errorMessage);
+        if(transparentGif)clear_gif_canvas_between_frames(stage.file,cancelled);
     }
     checkCancelled(cancelled);
     if(std::filesystem::file_size(stage.file)==0)throw std::runtime_error("The animation encoder produced no output.");
