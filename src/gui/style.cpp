@@ -47,6 +47,7 @@ void applyDesktopStyle(int theme) {
         QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit { padding: 5px; }
         QPushButton[primary="true"] { background: #2e8069; color: white; }
         QPushButton[primary="true"][noSelection="true"] { background: #c4e3d3; color: #567565; }
+        QPushButton#convertSelected:disabled { background: palette(button); color: palette(button-text); }
         QPushButton#cancelQueue[running="true"], QPushButton#stopProgress { background: #b83e3e; color: white; }
         QPushButton#toggleOutput { padding: 2px 7px; }
         QPushButton#stopProgress { padding: 1px; }

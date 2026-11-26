@@ -573,15 +573,21 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         const auto pixFmt=encoderPixelFormat(sourceBits>8,!sdr,video);
         const auto matrix=sdr?"bt709":"bt2020";
         const auto trc=sdr?"bt709":transfer==AnimationTransfer::pq?"smpte2084":"arib-std-b67";
-        const auto filter=QString("scale=in_range=pc:out_range=tv:out_color_matrix=%1:flags=accurate_rnd+full_chroma_int,format=%2")
-            .arg(matrix,pixFmt);
+        const auto colorspace=sdr?"bt709":"bt2020nc";
+        const auto filter=QString("scale=in_range=pc:out_range=tv:out_color_matrix=%1:flags=accurate_rnd+full_chroma_int,format=%2,"
+                                  "setparams=range=limited:color_primaries=%1:color_trc=%3:colorspace=%4")
+            .arg(matrix,pixFmt,trc,colorspace);
         const auto container=video.container==VideoContainer::mkv?QString("matroska"):videoExtension(video.container);
         QStringList args={"-hide_banner","-loglevel","error","-nostdin","-xerror","-y","-filter_threads",threads,
             "-f","rawvideo","-pixel_format",rgb,"-video_size",size,"-framerate",rate,"-i","pipe:0","-an"};
         args << encoderArguments(video,threads.toInt(),{}) << "-vf" << filter
              << "-pix_fmt" << (video.depth==12?"+"+pixFmt:pixFmt) << "-threads:v" << threads
-             << "-color_primaries" << matrix << "-color_trc" << trc << "-colorspace" << (sdr?"bt709":"bt2020nc")
+             << "-color_primaries" << matrix << "-color_trc" << trc << "-colorspace" << colorspace
              << "-color_range" << "tv" << "-fps_mode" << "passthrough";
+        // Some NVENC builds omit the HDR primaries and transfer from the HEVC SPS.
+        if(!sdr&&video.codec==VideoCodec::hevc&&video.encoder==VideoEncoder::nvenc)
+            args << "-bsf:v" << QString("hevc_metadata=colour_primaries=9:transfer_characteristics=%1:matrix_coefficients=9:video_full_range_flag=0")
+                .arg(transfer==AnimationTransfer::pq?16:18);
         if(video.container==VideoContainer::mp4||video.container==VideoContainer::mov) {
             args << "-movflags" << "+faststart";
             if(video.codec==VideoCodec::hevc)args << "-tag:v" << "hvc1";

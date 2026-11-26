@@ -381,7 +381,7 @@ struct AnimationEncoder::Impl {
             info.bits_per_sample=info.alpha_bits=isFloat?32:format.bits;
             info.exponent_bits_per_sample=info.alpha_exponent_bits=isFloat?8:0;
             info.num_extra_channels=1;
-            info.uses_original_profile=isFloat||!lossy;
+            info.uses_original_profile=!lossy;
             info.intensity_target=format.transfer==AnimationTransfer::scrgb?80.f:
                 format.transfer==AnimationTransfer::hlg?1000.f:format.transfer==AnimationTransfer::pq?kMaxNits:kSdrWhiteNits;
             info.have_animation=JXL_TRUE;
@@ -441,9 +441,13 @@ struct AnimationEncoder::Impl {
             const float distance=quality.jxl_distance();
             jxlCheck(JxlEncoderSetFrameLossless(frame,distance==0));
             jxlCheck(JxlEncoderSetFrameDistance(frame,distance));
-            jxlCheck(JxlEncoderFrameSettingsSetOption(frame,JXL_ENC_FRAME_SETTING_EFFORT,distance==0?3:5));
-            if(floating(format.transfer))
-                jxlCheck(JxlEncoderFrameSettingsSetOption(frame,JXL_ENC_FRAME_SETTING_MODULAR,1));
+            const bool losslessFloat=distance==0&&floating(format.transfer);
+            jxlCheck(JxlEncoderFrameSettingsSetOption(frame,JXL_ENC_FRAME_SETTING_EFFORT,losslessFloat?4:distance==0?3:5));
+            if(losslessFloat) {
+                // As with still JXL, avoid signed residual overflow across zero.
+                jxlCheck(JxlEncoderFrameSettingsSetOption(frame,JXL_ENC_FRAME_SETTING_MODULAR_PREDICTOR,0));
+                jxlCheck(JxlEncoderFrameSettingsSetFloatOption(frame,JXL_ENC_FRAME_SETTING_MODULAR_MA_TREE_LEARNING_PERCENT,0.f));
+            }
             JxlFrameHeader header;
             JxlEncoderInitFrameHeader(&header);
             header.duration=format.delay_us;

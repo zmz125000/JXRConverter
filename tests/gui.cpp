@@ -1213,6 +1213,21 @@ private slots:
         view->selectionModel()->select(model->index(0,0),QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
         QVERIFY(!convertSelected->isEnabled());
         window.findChild<QLineEdit*>("instantFilter")->clear();
+
+        auto* settings=window.findChild<QTabWidget*>("settingsTabs");
+        settings->setCurrentIndex(1);
+        for(int row=0;row<model->rowCount();++row) {
+            const auto index=model->index(row,0);
+            if(index.data(Catalog::VideoRole).toBool())continue;
+            view->selectionModel()->select(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
+            break;
+        }
+        QVERIFY(!convertSelected->isEnabled());
+        QVERIFY(!convertAll->isEnabled());
+        window.findChild<QPushButton*>("deselectImages")->click();
+        QVERIFY(convertAll->isEnabled());
+        settings->setCurrentIndex(0);
+
         auto* targets=window.findChild<QListWidget*>("conversionTargets");
         for(int row=0;row<targets->count();++row) {
             auto* item=targets->item(row);
@@ -1491,7 +1506,8 @@ private slots:
         QProcess process;
         process.start(ffmpeg,{"-hide_banner","-encoders"});
         QVERIFY(process.waitForFinished());
-        if(!process.readAllStandardOutput().contains("libx264"))QSKIP("FFmpeg lacks the x264 encoder");
+        const auto encoders=process.readAllStandardOutput();
+        if(!encoders.contains("libx264"))QSKIP("FFmpeg lacks the x264 encoder");
 
         const auto directory=root("animation-video");
         const auto wide=makeImage(directory,"a.jpg",80,40,100);
@@ -1547,6 +1563,27 @@ private slots:
             QCOMPARE(stream.value("height").toInt(),40);
             QCOMPARE(stream.value("nb_frames").toString().toInt(),2);
             QCOMPARE(stream.value("duration").toString().toDouble(),2./hz);
+        }
+        if(encoders.contains("libx265")) {
+            tabs->setCurrentIndex(1);
+            window.findChild<QComboBox*>("videoOutputCodec")->setCurrentIndex(int(VideoCodec::hevc));
+            window.findChild<QComboBox*>("videoOutputContainer")->setCurrentIndex(int(VideoContainer::mkv));
+            window.findChild<QComboBox*>("videoOutputTransfer")->setCurrentIndex(int(VideoTransfer::pq));
+            tabs->setCurrentIndex(2);
+            convert->click();
+            QTRY_COMPARE_WITH_TIMEOUT(finished.size(),3,30000);
+            QVERIFY2(finished.last().at(0).toInt()==1,window.findChild<QPlainTextEdit*>("outputLog")->toPlainText().toUtf8().constData());
+            const auto output=written.last().at(2).toString();
+            process.start(ffprobe,{"-v","error","-show_entries","stream=color_range,color_primaries,color_transfer,color_space,pix_fmt",
+                                  "-of","json",output});
+            QVERIFY(process.waitForFinished());
+            QCOMPARE(process.exitCode(),0);
+            const auto stream=QJsonDocument::fromJson(process.readAllStandardOutput()).object().value("streams").toArray().first().toObject();
+            QCOMPARE(stream.value("color_range").toString(),QString("tv"));
+            QCOMPARE(stream.value("color_primaries").toString(),QString("bt2020"));
+            QCOMPARE(stream.value("color_transfer").toString(),QString("smpte2084"));
+            QCOMPARE(stream.value("color_space").toString(),QString("bt2020nc"));
+            QCOMPARE(stream.value("pix_fmt").toString(),QString("yuv420p10le"));
         }
         asVideo->setChecked(false);
         QVERIFY(format->isEnabled());

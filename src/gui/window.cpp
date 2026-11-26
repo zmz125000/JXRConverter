@@ -1787,14 +1787,16 @@ void MainWindow::updateCounts() {
     const auto& videos=catalog_->videoPaths();
     const auto& smaller=selection.size()<videos.size()?selection:videos;
     const auto& larger=selection.size()<videos.size()?videos:selection;
-    const int selectedImages=selected-std::count_if(smaller.cbegin(),smaller.cend(),[&](const QString& path){return larger.contains(path);});
+    const int selectedVideos=std::count_if(smaller.cbegin(),smaller.cend(),[&](const QString& path){return larger.contains(path);});
+    const int selectedImages=selected-selectedVideos;
+    const bool imageOnlyVideoSelection=video&&selected>0&&selectedVideos==0;
     const int visibleImages=proxy_->imageCount();
     const auto canConvert=[&](int count){
         return !routingToken_&&count>0&&hasTargets&&!(updater_&&updater_->installing())
             &&(!queue_->busy()||statusFilter_->checkedId()==2||count<quickJobLimit);
     };
-    selected_->setEnabled(animation?canConvert(selected):video?canConvert(selected-selectedImages):statusFilter_->checkedId()!=VideoTab&&canConvert(selectedImages));
-    visible_->setEnabled(canConvert(animation?proxy_->rowCount():video?proxy_->rowCount()-visibleImages:visibleImages));
+    selected_->setEnabled(animation?canConvert(selected):video?canConvert(selectedVideos):statusFilter_->checkedId()!=VideoTab&&canConvert(selectedImages));
+    visible_->setEnabled(!imageOnlyVideoSelection&&canConvert(animation?proxy_->rowCount():video?proxy_->rowCount()-visibleImages:visibleImages));
     cancel_->setEnabled(queue_->busy()||bool(routingToken_));remove_->setEnabled(selected>0&&(statusFilter_->checkedId()==1||!busy));cancelJob_->setVisible(statusFilter_->checkedId()==2);cancelJob_->setEnabled(statusFilter_->checkedId()==2&&(queue_->hasPendingBatch(viewedJob_)||queue_->hasRunningMedia(viewedJob_)));
     clear_->setToolTip("Clear the current tab");
     clear_->setEnabled(statusFilter_->checkedId()==2?false:statusFilter_->checkedId()==1?!selectedImages_.isEmpty():statusFilter_->checkedId()==5?!rememberedImages_.isEmpty():!busy&&(proxy_->rowCount()>0||catalog_->scanning()));
