@@ -637,7 +637,7 @@ QList<QWidget*> MainWindow::persistentControls() const {
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
-        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_,animationStack_,animationResize_}
+        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_,animationStack_,animationResize_,animationGifIndexedColor_}
         +stillTone_.settings()+videoTone_.settings();
 }
 QList<QWidget*> MainWindow::filterControls() const {
@@ -669,7 +669,7 @@ void MainWindow::restoreSettings() {
     findChild<QSlider*>("rawShoulderSlider")->setValue(qRound(shoulder_->value()*100));
     stillTone_.sync();videoTone_.sync();
     updateVideoControls();
-    animationDelayUs_=std::clamp(settings.value("animation/frameDelayUs",83333u).toUInt(),1000u,600000000u);
+    animationDelayUs_=std::clamp(settings.value("animation/frameDelayUs",AnimationOutput{}.delayUs).toUInt(),1000u,600000000u);
     updateAnimationControls();
     for(auto* input:{highlight_,shadows_,midtones_,highlights_}) {
         auto* slider=input->parentWidget()->findChild<QSlider*>();slider->setValue(qRound(input->value()*100));
@@ -867,8 +867,9 @@ QWidget* MainWindow::buildAnimationControls() {
     auto* form=new QFormLayout(output);
     form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     animationFormat_=combo({"GIF","WebP","PNG (APNG)","JPEG XL","AVIF"},"animationFormat");
+    animationFormat_->setCurrentIndex(int(AnimationOutput{}.format));
     animationTransfer_=combo({"SDR","HDR · PQ","HDR · HLG","HDR · Linear JXL","HDR · scRGB JXL"},"animationTransfer");
-    animationRate_=real(.001,1000,12,.1,"animationFrameRate");
+    animationRate_=real(.001,1000,1000000./AnimationOutput{}.delayUs,.1,"animationFrameRate");
     animationRate_->setToolTip("Frame rate in Hz, or the time one frame stays on screen in milliseconds.");
     animationMilliseconds_=check("Milliseconds","animationMilliseconds");
     animationSlowMotion_=check("Slow motion","animationSlowMotion");
@@ -887,6 +888,9 @@ QWidget* MainWindow::buildAnimationControls() {
     animationAsVideo_->setToolTip("Use the Video tab’s output settings for a silent video. Each still is encoded as one frame.");
     form->addRow(animationAsVideo_);
     form->addRow("Format",animationFormat_);
+    animationGifIndexedColor_=check("Optimize GIF indexed color","animationGifIndexedColor",AnimationOutput{}.gifIndexedColor);
+    animationGifIndexedColor_->setToolTip("Build an optimized color palette for each frame. Off uses a fixed palette for all frames.");
+    form->addRow(animationGifIndexedColor_);
     form->addRow("Dynamic range",animationTransfer_);
     form->addRow("Frame timing",animationRate_);
     form->addRow(animationMilliseconds_);
@@ -895,9 +899,13 @@ QWidget* MainWindow::buildAnimationControls() {
     form->addRow("Resize",animationResize_);
     form->addRow("Alignment",animationAlignment_);
     form->addRow("Max edge",animationEdge_);
-    auto* ordering=new QLabel("Combines files in list order. Each still contributes one frame.");
+    auto* ordering=new QLabel("Reorder the images in the Reorder tab.");
     ordering->setWordWrap(true);
     form->addRow(ordering);
+    auto* reset=new QPushButton("Reset GIF settings");
+    reset->setObjectName("resetAnimationSettings");
+    form->addRow(reset);
+    connect(reset,&QPushButton::clicked,this,&MainWindow::resetAnimationSettings);
     layout->addWidget(output);
 
     const auto settingsSection=[layout](const QString& hint,const char* name) {
@@ -978,6 +986,22 @@ bool MainWindow::animationConversionActive() const {
     return animationPage_&&findChild<QTabWidget*>("settingsTabs")->currentWidget()==animationPage_;
 }
 
+void MainWindow::resetAnimationSettings() {
+    const AnimationOutput defaults;
+    animationDelayUs_=defaults.delayUs;
+    animationAsVideo_->setChecked(false);
+    animationFormat_->setCurrentIndex(int(defaults.format));
+    animationTransfer_->setCurrentIndex(int(defaults.transfer));
+    animationGifIndexedColor_->setChecked(defaults.gifIndexedColor);
+    animationMilliseconds_->setChecked(false);
+    animationSlowMotion_->setChecked(defaults.slowMotion);
+    animationStack_->setCurrentIndex(int(defaults.placement.stack));
+    animationResize_->setCurrentIndex(int(defaults.placement.resize));
+    animationAlignment_->setCurrentIndex(int(defaults.placement.vertical*3+defaults.placement.horizontal));
+    animationEdge_->setValue(0);
+    updateAnimationControls();
+}
+
 void MainWindow::updateAnimationControls() {
     const auto format=AnimationFormat(animationFormat_->currentIndex());
     const bool sdrOnly=format==AnimationFormat::gif||format==AnimationFormat::webp;
@@ -991,6 +1015,7 @@ void MainWindow::updateAnimationControls() {
         animationTransfer_->setCurrentIndex(0);
     const bool asVideo=animationAsVideo_->isChecked();
     animationFormat_->setEnabled(!asVideo);
+    animationGifIndexedColor_->setVisible(!asVideo&&format==AnimationFormat::gif);
     animationTransfer_->setEnabled(!asVideo&&!sdrOnly);
 
     const unsigned minimumDelay=!asVideo&&format==AnimationFormat::gif?10000u:1000u;
@@ -1050,6 +1075,7 @@ AnimationOutput MainWindow::animationTarget() const {
     if(animationAsVideo_->isChecked())result.video=videoTarget();
     result.delayUs=std::max(!result.video&&result.format==AnimationFormat::gif?10000u:1000u,animationDelayUs_);
     result.slowMotion=animationSlowMotion_->isChecked();
+    result.gifIndexedColor=animationGifIndexedColor_->isChecked();
     result.placement.stack=AnimationStack(animationStack_->currentIndex());
     result.placement.resize=AnimationResize(animationResize_->currentIndex());
     result.placement.horizontal=unsigned(animationAlignment_->currentIndex()%3);

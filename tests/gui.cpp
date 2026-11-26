@@ -1543,6 +1543,45 @@ private slots:
             if(opusAvailable)QCOMPARE(webmStreams.at(1).toObject().value("codec_name").toString(),QString("opus"));
         }
     }
+    void animationDefaultsAndReset() {
+        appSettings().clear();
+        MainWindow window;
+        window.show();
+        auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+        tabs->setCurrentIndex(2);
+        auto* format=window.findChild<QComboBox*>("animationFormat");
+        auto* rate=window.findChild<QDoubleSpinBox*>("animationFrameRate");
+        auto* ms=window.findChild<QCheckBox*>("animationMilliseconds");
+        auto* palette=window.findChild<QCheckBox*>("animationGifIndexedColor");
+        auto* asVideo=window.findChild<QCheckBox*>("animationAsVideo");
+        auto* edge=window.findChild<QSpinBox*>("animationMaxEdge");
+        auto* alignment=window.findChild<QComboBox*>("animationAlignment");
+        auto* videoEdge=window.findChild<QSpinBox*>("videoMaxEdge");
+        QCOMPARE(format->currentIndex(),int(jxrc::AnimationFormat::webp));
+        QCOMPARE(rate->value(),1.);
+        QVERIFY(!palette->isVisible());
+        ms->setChecked(true);
+        QCOMPARE(rate->value(),1000.);
+        rate->setValue(250);
+        format->setCurrentIndex(int(jxrc::AnimationFormat::gif));
+        QVERIFY(palette->isVisible());
+        QVERIFY(palette->isChecked());
+        palette->setChecked(false);
+        asVideo->setChecked(true);
+        QVERIFY(!palette->isVisible());
+        edge->setValue(400);
+        alignment->setCurrentIndex(8);
+        videoEdge->setValue(720);
+        window.findChild<QPushButton*>("resetAnimationSettings")->click();
+        QCOMPARE(format->currentIndex(),int(jxrc::AnimationFormat::webp));
+        QCOMPARE(rate->value(),1.);
+        QVERIFY(!asVideo->isChecked());
+        QVERIFY(!ms->isChecked());
+        QVERIFY(palette->isChecked());
+        QCOMPARE(edge->value(),0);
+        QCOMPARE(alignment->currentIndex(),4);
+        QCOMPARE(videoEdge->value(),720);
+    }
     void animationOutputAndTiming() {
         const auto directory=root("animation");
         const auto wide=makeImage(directory,"a.jpg",80,40,100);
@@ -1682,6 +1721,7 @@ private slots:
         overlay.fill(Qt::transparent);
         overlay.setPixelColor(1,0,Qt::blue);
         AnimationOutput target;
+        target.format=AnimationFormat::gif;
         target.inputs={save("red.png",first),green,save("blue.png",overlay)};
         QVERIFY(!target.inputs.contains(QString{}));
         target.delayUs=1000000;
@@ -1712,6 +1752,19 @@ private slots:
             if(stack==AnimationStack::off)QCOMPARE(uchar(pixels[2*frameBytes+3]),uchar(0));
             else checkColor(pixels,2*frameBytes,stack==AnimationStack::first?Qt::red:Qt::green);
         }
+        target.gifIndexedColor=false;
+        target.placement.stack=AnimationStack::off;
+        const auto fixedPalette=directory.filePath("fixed-palette.gif");
+        QVERIFY(!render(fixedPalette));
+        const auto fixed=decode(fixedPalette);
+        constexpr int frameBytes=4*2*4;
+        QCOMPARE(fixed.size(),3*frameBytes);
+        checkColor(fixed,0,Qt::red);
+        checkColor(fixed,frameBytes,Qt::green);
+        checkColor(fixed,2*frameBytes+4,Qt::blue);
+        QCOMPARE(uchar(fixed[2*frameBytes+3]),uchar(0));
+
+        target.placement.stack=AnimationStack::previous;
         target.format=AnimationFormat::png;
         target.placement.resize=AnimationResize::fit_down;
         Options flatten;
@@ -1870,6 +1923,7 @@ private slots:
         QCOMPARE(process.exitCode(),0);
 
         AnimationOutput target;
+        target.format=jxrc::AnimationFormat::gif;
         target.inputs={input};
         target.delayUs=1000000;
         for(const bool slow:{false,true}) {

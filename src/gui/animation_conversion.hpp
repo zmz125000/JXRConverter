@@ -9,9 +9,10 @@ namespace jxrc::gui {
 struct AnimationOutput {
     QStringList inputs;
     std::optional<VideoOutput> video;
-    AnimationFormat format = AnimationFormat::gif;
+    AnimationFormat format = AnimationFormat::webp;
     AnimationTransfer transfer = AnimationTransfer::sdr;
-    unsigned delayUs = 83333;
+    unsigned delayUs = 1000000;
+    bool gifIndexedColor = true;
     bool slowMotion = false;
     AnimationPlacement placement;
 };

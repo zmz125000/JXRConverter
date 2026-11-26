@@ -9,6 +9,8 @@
 #include <QProcess>
 #include <QSysInfo>
 #include <algorithm>
+#include <array>
+#include <fstream>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -444,6 +446,30 @@ QSize animationSize(QSize size,unsigned edge) {
     }
     return size;
 }
+void writeFixedGifPalette(const std::filesystem::path& path) {
+    std::array<uint8_t,256*4> rgba{};
+    size_t offset=0;
+    const auto color=[&](unsigned red,unsigned green,unsigned blue) {
+        rgba[offset++]=uint8_t(red);
+        rgba[offset++]=uint8_t(green);
+        rgba[offset++]=uint8_t(blue);
+        rgba[offset++]=255;
+    };
+    for(unsigned red=0;red<=255;red+=51)
+        for(unsigned green=0;green<=255;green+=51)
+            for(unsigned blue=0;blue<=255;blue+=51)
+                color(red,green,blue);
+    for(unsigned i=1;i<40;++i) {
+        const unsigned gray=i*255/40;
+        color(gray,gray,gray);
+    }
+    // The final entry is transparent in both palette modes.
+    std::ofstream file(path,std::ios::binary);
+    file.write(reinterpret_cast<const char*>(rgba.data()),rgba.size());
+    file.close();
+    if(!file)throw std::runtime_error("Cannot write the GIF color palette.");
+}
+
 struct AnimationSource {
     QString path;
     QSize size;
@@ -600,12 +626,21 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         ffmpegEncoder=std::make_unique<VideoProcess>(ffmpeg,args);
     } else if(gif) {
         if(canvas.width()>65535||canvas.height()>65535)throw std::runtime_error("GIF animation exceeds the codec dimensions.");
-        const QStringList args={"-hide_banner","-loglevel","error","-nostdin","-xerror","-y",
-            "-filter_complex_threads",threads,"-f","rawvideo","-pixel_format","rgba","-video_size",size,"-framerate",rate,"-i","pipe:0",
-            "-filter_complex","split[frames][palette];[palette]palettegen=stats_mode=single:reserve_transparent=1[p];[frames][p]paletteuse=new=1:alpha_threshold=128",
-            "-gifflags","0",
-            "-loop","0","-final_delay",QString::number(qRound(target.delayUs/10000.)),
-            "-f","gif",QString::fromStdString(stage.file.u8string())};
+        QStringList args={"-hide_banner","-loglevel","error","-nostdin","-xerror","-y",
+            "-filter_complex_threads",threads,"-f","rawvideo","-pixel_format","rgba","-video_size",size,"-framerate",rate,"-i","pipe:0"};
+        if(target.gifIndexedColor) {
+            args << "-filter_complex"
+                 << "split[frames][palette];[palette]palettegen=stats_mode=single:reserve_transparent=1[p];[frames][p]paletteuse=new=1:alpha_threshold=128";
+        } else {
+            const auto palette=stage.directory/"palette.rgba";
+            writeFixedGifPalette(palette);
+            args << "-f" << "rawvideo" << "-pixel_format" << "rgba" << "-video_size" << "16x16"
+                 << "-i" << QString::fromStdString(palette.u8string())
+                 << "-filter_complex" << "[0:v][1:v]paletteuse=alpha_threshold=128";
+        }
+        args << "-gifflags" << "0"
+             << "-loop" << "0" << "-final_delay" << QString::number(qRound(target.delayUs/10000.))
+             << "-f" << "gif" << QString::fromStdString(stage.file.u8string());
         ffmpegEncoder=std::make_unique<VideoProcess>(ffmpeg,args);
     } else native=std::make_unique<AnimationEncoder>(stage.file,encoding,options);
 

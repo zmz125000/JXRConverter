@@ -70,6 +70,7 @@ private:
     QWidget* buildAnimationControls();
     bool animationConversionActive() const;
     AnimationOutput animationTarget() const;
+    void resetAnimationSettings();
     void updateAnimationControls();
     void updateAnimationSummary();
     void convertAnimationFiles(QStringList paths,bool reuseJob,bool quick);
@@ -160,11 +161,11 @@ private:
     QWidget *videoPage_ = nullptr, *animationPage_ = nullptr;
     QComboBox *animationFormat_, *animationTransfer_, *animationAlignment_, *animationStack_, *animationResize_;
     QDoubleSpinBox* animationRate_;
-    QCheckBox *animationMilliseconds_, *animationSlowMotion_, *animationAsVideo_;
+    QCheckBox *animationMilliseconds_, *animationSlowMotion_, *animationAsVideo_, *animationGifIndexedColor_;
     QWidget *animationImageSettings_, *animationVideoSettings_;
     QSpinBox* animationEdge_;
     QList<std::pair<QWidget*,QLabel*>> animationImageSummary_, animationVideoSummary_;
-    unsigned animationDelayUs_=83333;
+    unsigned animationDelayUs_=AnimationOutput{}.delayUs;
     QComboBox *videoMode_, *videoCodec_, *videoContainer_, *videoTransfer_, *videoDepth_, *videoChroma_, *videoEncoder_;
     QComboBox *videoPreset_, *videoTune_, *videoRate_, *videoAudio_;
     QSpinBox *videoFactor_, *videoBitrate_, *videoAudioBitrate_, *videoMaxEdge_;
