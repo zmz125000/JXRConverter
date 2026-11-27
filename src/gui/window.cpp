@@ -396,7 +396,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         return area->widget()->minimumSizeHint().width()+area->verticalScrollBar()->sizeHint().width()+8;
     };
     const int fullControlsWidth=std::max(330,paneWidthFor(scroll));
-    // Keep the existing startup width and wrap label/field rows as the pane narrows.
+    // Measure the unwrapped controls before allowing rows to wrap in narrow panes.
     for(auto* form:scroll->widget()->findChildren<QFormLayout*>())form->setRowWrapPolicy(QFormLayout::WrapLongRows);
     sidebar->addTab(scroll,"Conversion");
     auto* videoScroll=new QScrollArea;
@@ -445,7 +445,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(sidebar->tabBar(),&QTabBar::tabBarClicked,this,setInteractionForPage);
     connect(sidebar,&QTabWidget::currentChanged,this,[this,setInteractionForPage](int index){setInteractionForPage(index);updateOutputQueueProfile();updateCounts();if(animationConversionActive())updateAnimationSummary();});
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
-    splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setChildrenCollapsible(false);splitter->setStretchFactor(0,1);splitter->setSizes({1050,std::max(370,fullControlsWidth)});
+    splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setChildrenCollapsible(false);splitter->setStretchFactor(0,1);splitter->setSizes({1050,400});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
     auto* appearance=addToolBar("Appearance");appearance->setObjectName("appearanceToolbar");appearance->setMovable(false);appearance->setFloatable(false);appearance->setSizePolicy(QSizePolicy::Fixed,QSizePolicy::Preferred);
     auto* appearanceSpacer=new QWidget;appearanceSpacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);appearance->addWidget(appearanceSpacer);

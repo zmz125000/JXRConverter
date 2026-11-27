@@ -750,6 +750,8 @@ private slots:
     }
     void logClearAndPanelWidths() {
         appSettings().clear();MainWindow window;window.show();
+        auto* splitter=qobject_cast<QSplitter*>(window.centralWidget());QVERIFY(splitter);
+        QTRY_COMPARE(splitter->sizes().last(),400);
         auto* tabs=window.findChild<QTabWidget*>("settingsTabs");auto* conversion=window.findChild<QScrollArea*>("conversionScroll");auto* output=window.findChild<QScrollArea*>("outputQueueScroll");
         auto* formats=window.findChild<QGroupBox*>("outputFormats");auto* destination=window.findChild<QGroupBox*>("outputDestination");
         QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());
@@ -770,7 +772,6 @@ private slots:
         tabs->setCurrentIndex(0);
         QTRY_COMPARE(output->width(),conversion->width());QTRY_COMPARE(destination->width(),formats->width());QCOMPARE(progress->width(),destination->width());
 
-        auto* splitter=qobject_cast<QSplitter*>(window.centralWidget());QVERIFY(splitter);
         auto* handle=splitter->handle(1);
         const auto dragHandle=[&](int x) {
             const QPoint center=handle->rect().center();
