@@ -3,6 +3,7 @@
 #include <QAbstractItemModelTester>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QColorSpace>
 #include <QButtonGroup>
 #include <QAbstractButton>
 #include <QDoubleSpinBox>
@@ -1709,6 +1710,31 @@ private slots:
         QFile encoded(output);
         QVERIFY(encoded.open(QIODevice::ReadOnly));
         QCOMPARE(encoded.readAll().count("ANMF"),2);
+    }
+    void animationByteFramesHonorIcc() {
+        using namespace jxrc;
+        const auto directory=root("animation-icc");
+        QVERIFY(QDir().mkpath(directory));
+        const AnimationEncoding gif{AnimationFormat::gif,AnimationTransfer::sdr,16,16,8,1,1000000};
+        const AnimationPlacement placement;
+        const Options options{};
+        const QColor source(180,95,45,157);
+        for(const auto space:{QColorSpace::DisplayP3,QColorSpace::SRgbLinear}) {
+            QImage image(16,16,QImage::Format_RGBA8888);
+            image.fill(source);
+            image.setColorSpace(QColorSpace(space));
+            const auto expected=image.convertedToColorSpace(QColorSpace::SRgb).pixelColor(0,0);
+            QVERIFY(source!=expected);
+            const auto path=directory+QString("/profile-%1.png").arg(int(space));
+            QVERIFY(image.save(path,"PNG"));
+            const auto frame=AnimationImageRenderer::render(std::filesystem::u8path(path.toUtf8().constData()),options,gif,placement,{});
+            QVERIFY(frame.rgba.empty());
+            QCOMPARE(frame.rgba8.size(),size_t(16*16*4));
+            QVERIFY(qAbs(int(frame.rgba8[0])-expected.red())<=1);
+            QVERIFY(qAbs(int(frame.rgba8[1])-expected.green())<=1);
+            QVERIFY(qAbs(int(frame.rgba8[2])-expected.blue())<=1);
+            QCOMPARE(int(frame.rgba8[3]),source.alpha());
+        }
     }
     void animationFramePlacement() {
         using namespace jxrc;

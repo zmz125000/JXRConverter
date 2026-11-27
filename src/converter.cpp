@@ -199,16 +199,20 @@ void orient_rgba(std::vector<Sample>& values,unsigned w,unsigned h,int orient) {
     values.swap(oriented);
 }
 
-bool direct_animation_srgb(const RegularImage& raster,bool opaque_required) {
+bool prepare_animation_srgb(RegularImage& raster,bool opaque_required) {
     if(raster.bits!=8||raster.channels!=4||raster.transfer!=13||raster.primaries!=1||
        !raster.floating_pixels.empty())return false;
-    if(!raster.icc.empty()) {
-        skcms_ICCProfile source{};
-        if(!skcms_Parse(raster.icc.data(),raster.icc.size(),&source)||
-           !skcms_ApproximatelyEqualProfiles(&source,skcms_sRGB_profile()))return false;
-    }
     if(opaque_required)for(size_t i=3;i<raster.pixels.size();i+=4)if(raster.pixels[i]!=255)return false;
-    return true;
+    if(raster.icc.empty())return true;
+
+    // GIF and animated WebP expect sRGB. Honor an embedded profile even
+    // when geometry and pixel edits allow the frame to stay in 8-bit RGBA.
+    skcms_ICCProfile source{};
+    if(!skcms_Parse(raster.icc.data(),raster.icc.size(),&source))return false;
+    const auto format=skcms_PixelFormat_RGBA_8888;
+    const auto alpha=skcms_AlphaFormat_Unpremul;
+    return skcms_Transform(raster.pixels.data(),format,alpha,&source,
+                           raster.pixels.data(),format,alpha,skcms_sRGB_profile(),raster.pixels.size()/4);
 }
 
 auto processing_key(const Options& o,int format) {
@@ -295,7 +299,7 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
         const auto w=orient>=5?regular->height:regular->width;
         const auto h=orient>=5?regular->width:regular->height;
         if(orient>=1&&orient<=8&&w<=direct_frame->width&&h<=direct_frame->height&&
-           (!o.max_edge||std::max(w,h)<=o.max_edge)&&direct_animation_srgb(*regular,direct_frame->video||remove_alpha(o))) {
+           (!o.max_edge||std::max(w,h)<=o.max_edge)&&prepare_animation_srgb(*regular,direct_frame->video||remove_alpha(o))) {
             orient_rgba(regular->pixels,regular->width,regular->height,orient);
             frame->width=w;frame->height=h;
             frame->rgba8=std::move(regular->pixels);
