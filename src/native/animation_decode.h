@@ -17,6 +17,8 @@ int decode_jxl_animation(const uint8_t*, size_t, bool bt2020, const AnimationFra
                          const std::function<bool()>&);
 int decode_avif_animation(const uint8_t*, size_t, const AnimationFrameReader&,
                           const std::function<bool()>&);
+bool decode_heif_animation(const uint8_t*, size_t, const AnimationFrameReader&, bool first_only,
+                           const std::function<bool()>&);
 jxrc::ImageInfo inspect_gif(const uint8_t*, size_t);
 RegularImage decode_gif_patch(const uint8_t*, size_t);
 RegularImage webp_metadata(const uint8_t*, size_t);

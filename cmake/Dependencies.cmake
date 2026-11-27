@@ -257,6 +257,16 @@ add_subdirectory("${libde265_SOURCE_DIR}" "${libde265_BINARY_DIR}" EXCLUDE_FROM_
 target_include_directories(de265 PUBLIC "$<BUILD_INTERFACE:${libde265_SOURCE_DIR}>" "$<BUILD_INTERFACE:${libde265_BINARY_DIR}>")
 target_compile_definitions(de265 INTERFACE LIBDE265_STATIC_BUILD)
 jxrc_source(libheif https://github.com/strukturag/libheif.git v1.23.7)
+# This callback explicitly releases its picture after copying it. Peeking
+# keeps the next queued picture intact when libde265 drains buffered frames.
+set(jxrc_heif_de265_plugin "${libheif_SOURCE_DIR}/libheif/plugins/decoder_libde265.cc")
+file(READ "${jxrc_heif_de265_plugin}" jxrc_heif_de265_original)
+string(REPLACE "const de265_image* image = de265_get_next_picture(decoder->ctx);"
+    "const de265_image* image = de265_peek_next_picture(decoder->ctx);"
+    jxrc_heif_de265_fixed "${jxrc_heif_de265_original}")
+if(NOT jxrc_heif_de265_fixed STREQUAL jxrc_heif_de265_original)
+    file(WRITE "${jxrc_heif_de265_plugin}" "${jxrc_heif_de265_fixed}")
+endif()
 # Upstream's find module accepts a CMake target as its library. This avoids
 # accidentally finding a system libde265 while building the pinned decoder.
 set(LIBDE265_INCLUDE_DIR "${libde265_SOURCE_DIR}" CACHE PATH "" FORCE)

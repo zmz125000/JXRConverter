@@ -2,10 +2,12 @@
 // HEIC container/HEVC decoding is native on every platform. Apple/ProXDR
 // gain-map interpretation follows LocalViewer's HeifContainer/AppleGainMapDecode.
 #include "heif_decode.h"
+#include "animation_decode.h"
 #include "hdr_parallel.h"
 #include "linear_color_profile.h"
 #include "ultrahdr/jpegdecoderhelper.h"
 #include <libheif/heif.h>
+#include <libheif/heif_sequences.h>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -18,15 +20,22 @@ void checked(heif_error error){if(error.code!=heif_error_Ok)throw std::runtime_e
 using Context=std::unique_ptr<heif_context,decltype(&heif_context_free)>;
 using Handle=std::unique_ptr<heif_image_handle,decltype(&heif_image_handle_release)>;
 using Image=std::unique_ptr<heif_image,decltype(&heif_image_release)>;
+Context open_input(const uint8_t* data,size_t size) {
+    Context context(heif_context_alloc(),heif_context_free);
+    check(context!=nullptr,"Cannot allocate HEIC decoder");
+    auto* limits=heif_context_get_security_limits(context.get());
+    limits->max_image_size_pixels=UINT32_MAX;
+    limits->max_color_profile_size=16*1024*1024;
+    heif_context_set_max_decoding_threads(context.get(),std::min(4u,hdr_pixel_jobs(UINT32_MAX)));
+    checked(heif_context_read_from_memory_without_copy(context.get(),data,size,nullptr));
+    return context;
+}
+
 struct Input {
-    Context context{heif_context_alloc(),heif_context_free};
+    Context context;
     Handle base{nullptr,heif_image_handle_release},gain{nullptr,heif_image_handle_release};
     std::vector<uint8_t> exif;
-    explicit Input(const uint8_t* data,size_t size){
-        check(context!=nullptr,"Cannot allocate HEIC decoder");
-        auto* limits=heif_context_get_security_limits(context.get());limits->max_image_size_pixels=UINT32_MAX;limits->max_color_profile_size=16*1024*1024;
-        heif_context_set_max_decoding_threads(context.get(),std::min(4u,hdr_pixel_jobs(UINT32_MAX)));
-        checked(heif_context_read_from_memory_without_copy(context.get(),data,size,nullptr));
+    explicit Input(Context ctx):context(std::move(ctx)){
         heif_image_handle* handle=nullptr;checked(heif_context_get_primary_image_handle(context.get(),&handle));base.reset(handle);
         check(heif_image_handle_get_width(handle)>0&&heif_image_handle_get_height(handle)>0&&fits_working_image(heif_image_handle_get_width(handle),heif_image_handle_get_height(handle)),"HEIC dimensions exceed limit");
         heif_item_id id=0;
@@ -63,6 +72,23 @@ Proxdr proxdr(const uint8_t* data,size_t size){
     if(!std::isfinite(out.display)||out.display<1.01f||out.display>64)out.display=1000.f/203;
     out.display=std::max(out.display,out.boost);out.jpeg=first;out.size=size_t(last+2-first);return out;
 }
+using Nclx=std::unique_ptr<heif_color_profile_nclx,decltype(&heif_nclx_color_profile_free)>;
+Nclx read_color(RegularImage& raster,heif_image* decoded,heif_image_handle* handle=nullptr) {
+    heif_color_profile_nclx* raw=nullptr;
+    // Some conversion shortcuts (notably identity/GBR to interleaved RGB),
+    // and scaling, omit profiles on the decoded image. With passthrough enabled
+    // the source handle still describes these unchanged transfer-encoded codes.
+    if((heif_image_get_nclx_color_profile(decoded,&raw).code!=heif_error_Ok||!raw)&&handle)
+        heif_image_handle_get_nclx_color_profile(handle,&raw);
+    Nclx nclx(raw,heif_nclx_color_profile_free);
+    if(nclx){raster.primaries=nclx->color_primaries;raster.transfer=nclx->transfer_characteristics;}
+    const bool decodedIcc=heif_image_get_raw_color_profile_size(decoded)!=0;
+    const auto iccSize=decodedIcc?heif_image_get_raw_color_profile_size(decoded):handle?heif_image_handle_get_raw_color_profile_size(handle):0;
+    check(iccSize<=16u*1024*1024,"HEIC ICC exceeds limit");
+    if(iccSize){raster.icc.resize(iccSize);checked(decodedIcc?heif_image_get_raw_color_profile(decoded,raster.icc.data()):heif_image_handle_get_raw_color_profile(handle,raster.icc.data()));if(!nclx){raster.primaries=2;raster.transfer=2;}}
+    return nclx;
+}
+
 RegularImage decode(heif_image_handle* handle,bool map,unsigned edge){
     heif_decoding_options* rawOptions=heif_decoding_options_alloc();check(rawOptions,"Cannot allocate HEIC options");
     std::unique_ptr<heif_decoding_options,decltype(&heif_decoding_options_free)> options(rawOptions,heif_decoding_options_free);options->convert_hdr_to_8bit=0;
@@ -95,26 +121,118 @@ RegularImage decode(heif_image_handle* handle,bool map,unsigned edge){
         for(unsigned c=0;c<4;++c){double value=std::min(codes[c],max)/double(max);if(premultiplied&&c<3)value=codes[3]?std::min(1.,double(codes[c])/codes[3]):0.;
             const size_t at=(size_t(y)*raster.width+x)*4+c;if(sixteen){const uint16_t code=uint16_t(std::lround(value*65535));std::memcpy(raster.pixels.data()+at*2,&code,2);}else raster.pixels[at]=uint8_t(std::lround(value*255));}
     }
-    heif_color_profile_nclx* raw=nullptr;
-    // Some conversion shortcuts (notably identity/GBR to interleaved RGB),
-    // and scaling, omit profiles on the decoded image. With passthrough enabled
-    // the source handle still describes these unchanged transfer-encoded codes.
-    if(heif_image_get_nclx_color_profile(decoded,&raw).code!=heif_error_Ok||!raw)
-        heif_image_handle_get_nclx_color_profile(handle,&raw);
-    const bool nclx=raw!=nullptr;
-    if(nclx){raster.primaries=raw->color_primaries;raster.transfer=raw->transfer_characteristics;heif_nclx_color_profile_free(raw);}
-    const bool decodedIcc=heif_image_get_raw_color_profile_size(decoded)!=0;
-    const auto iccSize=decodedIcc?heif_image_get_raw_color_profile_size(decoded):heif_image_handle_get_raw_color_profile_size(handle);
-    check(iccSize<=16u*1024*1024,"HEIC ICC exceeds limit");
-    if(iccSize){raster.icc.resize(iccSize);checked(decodedIcc?heif_image_get_raw_color_profile(decoded,raster.icc.data()):heif_image_handle_get_raw_color_profile(handle,raster.icc.data()));if(!nclx){raster.primaries=2;raster.transfer=2;}}
+    read_color(raster,decoded,handle);
     return raster;
 }
+using Track=std::unique_ptr<heif_track,decltype(&heif_track_release)>;
+
+Track visual_track(const heif_context* context) {
+    Track video(nullptr,heif_track_release);
+    if(!heif_context_has_sequence(context))return video;
+    const int count=heif_context_number_of_sequence_tracks(context);
+    if(count<=0)return video;
+    std::vector<uint32_t> ids(size_t(count),0);
+    heif_context_get_track_ids(context,ids.data());
+    for(const auto id:ids) {
+        Track track(heif_context_get_track(context,id),heif_track_release);
+        if(!track)continue;
+        const auto handler=heif_track_get_track_handler_type(track.get());
+        if(handler==heif_track_type_image_sequence)return track;
+        if(handler==heif_track_type_video&&!video)video=std::move(track);
+    }
+    return video;
+}
+
+class Sequence {
+public:
+    explicit Sequence(heif_track* track):track_(track) {
+        check(bool(options_),"Cannot allocate HEIF sequence options");
+        options_->output_image_nclx_profile_passthrough=1;
+        options_->convert_hdr_to_8bit=0;
+        // Import each stored frame once, including sequences that loop forever.
+        options_->ignore_sequence_editlist=1;
+    }
+    Image next() {
+        heif_image* decoded=nullptr;
+        const auto result=heif_track_decode_next_image(track_,&decoded,heif_colorspace_undefined,heif_chroma_undefined,options_.get());
+        Image image(decoded,heif_image_release);
+        if(result.code==heif_error_End_of_sequence)return Image(nullptr,heif_image_release);
+        checked(result);
+        check(bool(image),"Missing HEIF sequence frame");
+        return image;
+    }
+private:
+    heif_track* track_;
+    std::unique_ptr<heif_decoding_options,decltype(&heif_decoding_options_free)> options_{
+        heif_decoding_options_alloc(),heif_decoding_options_free};
+};
+
+RegularImage sequence_frame(heif_image* frame,bool pixels) {
+    RegularImage raster;
+    const int width=heif_image_get_primary_width(frame),height=heif_image_get_primary_height(frame);
+    check(width>0&&height>0&&fits_working_image(width,height),"Invalid HEIF sequence frame dimensions");
+    raster.width=unsigned(width);raster.height=unsigned(height);raster.format="HEIC";
+    const auto nclx=read_color(raster,frame);
+    const int depth=heif_image_get_bits_per_pixel_range(frame,heif_channel_Y);
+    check(depth==8||depth==10||depth==12,"Unsupported HEIF sequence sample depth");
+    raster.bits=unsigned(depth);
+    if(!pixels)return raster;
+
+    // Use the decoded YUV planes directly. Asking libheif to return RGB for a
+    // sequence can replace the original NCLX, even with passthrough requested.
+    avifPixelFormat format;
+    switch(heif_image_get_chroma_format(frame)) {
+    case heif_chroma_monochrome:format=AVIF_PIXEL_FORMAT_YUV400;break;
+    case heif_chroma_420:format=AVIF_PIXEL_FORMAT_YUV420;break;
+    case heif_chroma_422:format=AVIF_PIXEL_FORMAT_YUV422;break;
+    case heif_chroma_444:format=AVIF_PIXEL_FORMAT_YUV444;break;
+    default:throw std::runtime_error("Unsupported HEIF sequence pixel layout");
+    }
+    avifImage image{};
+    image.width=raster.width;image.height=raster.height;image.depth=raster.bits;
+    image.yuvFormat=format;
+    image.yuvRange=nclx&&nclx->full_range_flag?AVIF_RANGE_FULL:AVIF_RANGE_LIMITED;
+    image.colorPrimaries=static_cast<avifColorPrimaries>(raster.primaries);
+    image.transferCharacteristics=static_cast<avifTransferCharacteristics>(raster.transfer);
+    image.matrixCoefficients=static_cast<avifMatrixCoefficients>(
+        nclx?uint16_t(nclx->matrix_coefficients):uint16_t(AVIF_MATRIX_COEFFICIENTS_UNSPECIFIED));
+    const auto plane=[&](heif_channel channel,uint32_t& row_bytes) {
+        size_t stride=0;
+        const auto* data=heif_image_get_plane_readonly2(frame,channel,&stride);
+        check(data&&stride>0&&stride<=UINT32_MAX,"Missing HEIF sequence color plane");
+        check(heif_image_get_bits_per_pixel_range(frame,channel)==depth,"Mixed HEIF sequence plane depths");
+        row_bytes=uint32_t(stride);
+        return const_cast<uint8_t*>(data); // libavif borrows the input planes read-only.
+    };
+    image.yuvPlanes[0]=plane(heif_channel_Y,image.yuvRowBytes[0]);
+    if(format!=AVIF_PIXEL_FORMAT_YUV400) {
+        image.yuvPlanes[1]=plane(heif_channel_Cb,image.yuvRowBytes[1]);
+        image.yuvPlanes[2]=plane(heif_channel_Cr,image.yuvRowBytes[2]);
+    }
+    if(heif_image_has_channel(frame,heif_channel_Alpha)) {
+        image.alphaPlane=plane(heif_channel_Alpha,image.alphaRowBytes);
+        image.alphaPremultiplied=heif_image_is_premultiplied_alpha(frame);
+    }
+    avifRGBImage rgba{};
+    avifRGBImageSetDefaults(&rgba,&image);
+    rgba.format=AVIF_RGB_FORMAT_RGBA;
+    rgba.depth=depth>8?16:8;
+    rgba.chromaUpsampling=AVIF_CHROMA_UPSAMPLING_BEST_QUALITY;
+    rgba.maxThreads=int(jxrc_limit_threads(4));
+    check(raster.width<=UINT32_MAX/(rgba.depth/2),"HEIF sequence row is too wide");
+    rgba.rowBytes=raster.width*(rgba.depth/2);
+    raster.pixels.resize(size_t(rgba.rowBytes)*raster.height);
+    rgba.pixels=raster.pixels.data();
+    check(avifImageYUVToRGB(&image,&rgba)==AVIF_RESULT_OK,"Cannot convert HEIF sequence pixels to RGB");
+    return raster;
+}
+
 }
 
 bool is_heif_input(const uint8_t* data,size_t size){
     if(!data||size<16||std::memcmp(data+4,"ftyp",4))return false;
     const size_t box=size_t(data[0])*16777216+size_t(data[1])*65536+size_t(data[2])*256+data[3];if(box<16||box>size)return false;
-    for(size_t at=8;at+4<=box;at+=4){if(at==12)continue;for(const auto* brand:{"heic","heix","hevc","hevx","heim","heis","hevm","hevs"})if(!std::memcmp(data+at,brand,4))return true;}
+    for(size_t at=8;at+4<=box;at+=4){if(at==12)continue;for(const auto* brand:{"heic","heix","hevc","hevx","heim","heis","hevm","hevs","msf1"})if(!std::memcmp(data+at,brand,4))return true;}
     return false;
 }
 float apple_gainmap_headroom(const std::vector<uint8_t>& bytes){
@@ -136,7 +254,16 @@ float apple_gainmap_headroom(const std::vector<uint8_t>& bytes){
     const double headroom=std::pow(2.,std::max(0.,stops));check(std::isfinite(headroom)&&headroom<=64,"Invalid Apple HDR headroom");return float(headroom);
 }
 jxrc::ImageInfo inspect_heif(const uint8_t* data,size_t size){
-    Input input(data,size);const auto* base=input.base.get();jxrc::ImageInfo info;info.format="HEIC";info.width=heif_image_handle_get_width(base);info.height=heif_image_handle_get_height(base);info.bits=heif_image_handle_get_luma_bits_per_pixel(base);
+    auto context=open_input(data,size);
+    if(auto track=visual_track(context.get())) {
+        Sequence sequence(track.get());
+        const auto first=sequence.next();
+        check(bool(first),"HEIF sequence contains no frames");
+        auto info=inspect_regular(sequence_frame(first.get(),false));
+        info.animated=true;
+        return info;
+    }
+    Input input(std::move(context));const auto* base=input.base.get();jxrc::ImageInfo info;info.format="HEIC";info.width=heif_image_handle_get_width(base);info.height=heif_image_handle_get_height(base);info.bits=heif_image_handle_get_luma_bits_per_pixel(base);
     info.gainmap=bool(input.gain)||proxdr(data,size).jpeg;heif_color_profile_nclx* color=nullptr;
     if(heif_image_handle_get_nclx_color_profile(base,&color).code==heif_error_Ok&&color){info.transfer=color->transfer_characteristics==16?"PQ":color->transfer_characteristics==18?"HLG":color->transfer_characteristics==8?"Linear":"SDR";info.primaries=color->color_primaries==9?"BT.2020":color->color_primaries==12?"Display P3":"BT.709";heif_nclx_color_profile_free(color);}else{info.transfer="SDR";info.primaries="ICC";}
     info.wide_gamut=info.primaries=="BT.2020"||info.primaries=="Display P3";
@@ -148,8 +275,27 @@ jxrc::ImageInfo inspect_heif(const uint8_t* data,size_t size){
     }
     info.hdr=info.gainmap||info.transfer=="PQ"||info.transfer=="HLG"||info.transfer=="Linear";if(info.gainmap)info.transfer="Gain map";return info;
 }
+bool decode_heif_animation(const uint8_t* data,size_t size,const AnimationFrameReader& frame,
+                           bool first_only,const std::function<bool()>& cancelled) {
+    const auto context=open_input(data,size);
+    const auto track=visual_track(context.get());
+    if(!track)return false;
+    Sequence sequence(track.get());
+    bool decoded=false;
+    for(;;) {
+        if(cancelled&&cancelled())throw std::runtime_error("HEIF sequence decode cancelled");
+        const auto image=sequence.next();
+        if(!image)break;
+        frame({sequence_frame(image.get(),true),{}});
+        decoded=true;
+        if(first_only)break;
+    }
+    check(decoded,"HEIF sequence contains no frames");
+    return true;
+}
+
 HeifSource decode_heif(const uint8_t* data,size_t size,unsigned edge){
-    Input input(data,size);HeifSource source;source.base=decode(input.base.get(),false,edge);source.base.exif=input.exif;normalize_exif(source.base.exif);
+    Input input(open_input(data,size));HeifSource source;source.base=decode(input.base.get(),false,edge);source.base.exif=input.exif;normalize_exif(source.base.exif);
     const auto oppo=proxdr(data,size);
     if(oppo.jpeg){
         ultrahdr::JpegDecoderHelper decoder;check(decoder.parseImage(oppo.jpeg,oppo.size).error_code==UHDR_CODEC_OK,"Invalid ProXDR gain-map JPEG");

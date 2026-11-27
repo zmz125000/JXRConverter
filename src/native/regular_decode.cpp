@@ -372,7 +372,7 @@ jxrc::ImageInfo inspect_regular(const uint8_t* data,size_t size) {
 }
 jxrc::ImageInfo inspect_regular(const RegularImage& image) {
     jxrc::ImageInfo out;out.width=image.width;out.height=image.height;out.bits=image.bits;out.format=image.format;out.hdr=image.hdr();
-    out.transfer=image.transfer==8?"Linear":image.hdr()?(image.transfer==16?"PQ":"HLG"):image.icc.empty()?"sRGB":"ICC";
+    out.transfer=image.transfer==8?"Linear":image.hdr()?(image.transfer==16?"PQ":"HLG"):image.icc.empty()?(image.transfer==1?"BT.709":"sRGB"):"ICC";
     out.primaries=image.icc.empty()?(image.primaries==9?"BT.2020":image.primaries==12?"Display P3":"BT.709"):"ICC";
     out.wide_gamut=image.primaries==9||image.primaries==12||icc_needs_wide_gamut(image.icc.data(),image.icc.size());
     if(image.transfer==8&&image.icc.empty()&&(image.format=="EXR"||image.format=="Radiance"||image.format=="PFM"||image.format=="TIFF")) {
@@ -389,7 +389,7 @@ void regular_to_linear(const RegularImage& image,std::vector<uint16_t>& pixels,u
         std::vector<float> linear;regular_to_linear(image,linear,gamut);pixels.resize(linear.size());
         std::transform(linear.begin(),linear.end(),pixels.begin(),[](float v){return float_to_half(v);});return;
     }
-    if(image.hdr() || (image.icc.empty() && image.primaries!=1)) {
+    if(image.hdr() || (image.icc.empty() && (image.primaries!=1||image.transfer!=13))) {
         cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
                            image.primaries,image.transfer,pixels,gamut);return;
     }
@@ -412,7 +412,7 @@ void regular_to_linear(const RegularImage& image,std::vector<float>& pixels,uhdr
         for(float v:pixels)check(std::isfinite(v),"Non-finite linear HDR color transform");
         gamut=UHDR_CG_BT_2100;return;
     }
-    if(image.hdr() || (image.icc.empty() && image.primaries!=1)) {
+    if(image.hdr() || (image.icc.empty() && (image.primaries!=1||image.transfer!=13))) {
         cicp_rgb_to_linear(image.pixels.data(),size_t(image.width)*image.height,image.bits,
                            image.primaries,image.transfer,pixels,gamut);return;
     }

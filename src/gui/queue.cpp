@@ -82,7 +82,7 @@ QString outputDateFolder() {
     return name;
 }
 bool mayBeAnimatedImage(const QString& path) {
-    static const QSet<QString> formats={"gif","webp","awebp","png","apng","jxl","avif"};
+    static const QSet<QString> formats={"gif","webp","awebp","png","apng","jxl","avif","heic","heif","heics","heifs","hif"};
     return formats.contains(QFileInfo(path).suffix().toLower());
 }
 bool needsHdrInspection(const QString& path) {

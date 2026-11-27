@@ -1781,6 +1781,75 @@ private slots:
         QVERIFY(bytes.contains(QByteArray::fromHex("6163544c0000000600000000")));
         QVERIFY(bytes.contains(QByteArray::fromHex("000100040000"))); // 1/4 s per frame.
     }
+    void animatedHeifInput() {
+        using namespace jxrc;
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto native=[](const QString& value){return std::filesystem::u8path(value.toUtf8().constData());};
+        const auto source=directory.filePath("sequence.heifs");
+        QVERIFY(supportedFile(source));
+        // Three synthetic Main 10 samples. The decoder releases multiple
+        // pictures at end of stream, so draining must read each picture once.
+        const auto encoded=QByteArray::fromBase64(
+            "AAAAHGZ0eXBoZXZ4AAACAG1zZjFpc28ybXA0MQAAAAhmcmVlAAAASm1kYXQAAAAQKAGvJukwB/93m/6S8hNs4AAA"
+            "ABACAdgJfkzpMAfE/9VX/l+8AAAAFgIB0BH/1EMGRPSXMy3/6gFavbB5z4AAAAObbW9vdgAAAGxtdmhkAAAAAAAA"
+            "AAAAAAAAAAAD6AAAAlgAAQAAAQAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAA"
+            "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgAAAsZ0cmFrAAAAXHRraGQAAAADAAAAAAAAAAAAAAABAAAAAAAA"
+            "AlgAAAAAAAAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAABAAAAAAAAAAAAAAAAAABAAAAAABAAAAAQAAAAAAAk"
+            "ZWR0cwAAABxlbHN0AAAAAAAAAAEAAAJYAAAQAAABAAAAAAI+bWRpYQAAACBtZGhkAAAAAAAAAAAAAAAAAAAoAAAA"
+            "GABVxAAAAAAALWhkbHIAAAAAAAAAAHBpY3QAAAAAAAAAAAAAAABWaWRlb0hhbmRsZXIAAAAB6W1pbmYAAAAUdm1o"
+            "ZAAAAAEAAAAAAAAAAAAAACRkaW5mAAAAHGRyZWYAAAAAAAAAAQAAAAx1cmwgAAAAAQAAAalzdGJsAAABDXN0c2QA"
+            "AAAAAAAAAQAAAP1odmMxAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAABAAEABIAAAASAAAAAAAAAABFExhdmM2MS4z"
+            "LjEwMCBsaWJ4MjY1AAAAAAAAAAAAAAAAGP//AAAAdmh2Y0MBAiAAAACQAAAAAAAe8AD8/fr6AAAPA6AAAQAYQAEM"
+            "Af//AiAAAAMAkAAAAwAAAwAelZAJoQABACpCAQECIAAAAwCQAAADAAADAB6giETZZWSryuahIgEggAAAAwCAAAAD"
+            "AoSiAAEABkQBwXPQiQAAAApmaWVsAQAAAAATY29scm5jbHgACQAQAAkAAAAAFGJ0cnQAAAAAAAADcAAAA3AAAAAY"
+            "c3R0cwAAAAAAAAABAAAAAwAACAAAAAAUc3RzcwAAAAAAAAABAAAAAQAAABhjdHRzAAAAAAAAAAEAAAADAAAQAAAA"
+            "ABxzdHNjAAAAAAAAAAEAAAABAAAAAwAAAAEAAAAgc3RzegAAAAAAAAAAAAAAAwAAABQAAAAUAAAAGgAAABRzdGNv"
+            "AAAAAAAAAAEAAAAsAAAAYXVkdGEAAABZbWV0YQAAAAAAAAAhaGRscgAAAAAAAAAAbWRpcmFwcGwAAAAAAAAAAAAA"
+            "AAAsaWxzdAAAACSpdG9vAAAAHGRhdGEAAAABAAAAAExhdmY2MS4xLjEwMA==");
+        QFile file(source);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(encoded),qint64(encoded.size()));
+        file.close();
+
+        const auto info=inspect(native(source));
+        QVERIFY(info.animated&&info.hdr);
+        QCOMPARE(info.bits,10u);
+        QCOMPARE(info.transfer,std::string("PQ"));
+        QCOMPARE(info.primaries,std::string("BT.2020"));
+        Record metadata;
+        const auto thumb=readThumbnail(source,8,{},&metadata);
+        QCOMPARE(thumb.size(),QSize(8,8));
+        QVERIFY(metadata.hdr);
+        QVERIFY(thumb.pixelColor(0,0).red()>220);
+
+        Options options;
+        options.mode=Mode::process;
+        options.target=Target::png_hdr;
+        const auto output=directory.filePath("split.png");
+        ConversionQueue queue;
+        QSignalSpy done(&queue,&ConversionQueue::batchFinished);
+        queue.start({{source,output,options}},1,2);
+        QTRY_COMPARE(done.count(),1);
+        QCOMPARE(done.last()[0].toInt(),1);
+        for(int i=0;i<3;++i) {
+            const auto path=directory.filePath(QString("split_frame_%1.png").arg(i+1,6,10,QChar('0')));
+            QCOMPARE(inspect(native(path)).transfer,std::string("PQ"));
+            const auto firstPixel=readThumbnail(path,8).pixelColor(0,0);
+            const int rgb[]={firstPixel.red(),firstPixel.green(),firstPixel.blue()};
+            QVERIFY(rgb[i]>rgb[(i+1)%3]&&rgb[i]>rgb[(i+2)%3]);
+        }
+
+        AnimationOutput animation;
+        animation.format=AnimationFormat::png;
+        animation.transfer=AnimationTransfer::pq;
+        animation.inputs={source};
+        const auto animated=directory.filePath("combined.png");
+        QVERIFY(!convertAnimation(native(animated),options,animation,[]{return false;},[](int){}));
+        QFile combined(animated);
+        QVERIFY(combined.open(QIODevice::ReadOnly));
+        QVERIFY(combined.readAll().contains(QByteArray::fromHex("6163544c0000000300000000")));
+    }
     void animationMixedSdrAndHdrFrames() {
         using namespace jxrc;
         const auto directory=root("animation-mixed-range");

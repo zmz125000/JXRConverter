@@ -257,6 +257,10 @@ void ConversionSession::read_frames(const Options& o,const AnimationFrameReader&
         require(decode_raster_animation(bytes.data(),bytes.size(),frame,false,cancelled),"Unsupported raster animation");
         return;
     }
+    if(cache.format==7) {
+        require(decode_heif_animation(bytes.data(),bytes.size(),frame,false,cancelled),"No HEIF sequence track");
+        return;
+    }
     const int rc=cache.format==1?decode_avif_animation(bytes.data(),bytes.size(),frame,cancelled):
         decode_jxl_animation(bytes.data(),bytes.size(),
             is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):(o.extended_bt2020&&!o.srgb_clamp),frame,cancelled);
@@ -430,7 +434,8 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
     if(!frame && o.mode==Mode::process && sdr_target && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
         if(format==6&&!source_hdr) {
             load_regular();
-            direct_sdr=!regular->hdr()&&regular->floating_pixels.empty();
+            direct_sdr=!regular->hdr()&&regular->floating_pixels.empty()&&
+                (!decoded||regular->transfer==13||!regular->icc.empty());
         } else direct_sdr=!decoded&&cache.integer_sdr;
     }
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
@@ -675,19 +680,25 @@ Preview preview_bytes(const std::vector<uint8_t>& bytes,unsigned edge,ImageInfo*
         *source_info={};
         // Regular rasters supply this from the actual decode below. Other
         // codecs have header inspectors that reuse the same in-memory bytes.
-        if(format!=6)try{*source_info=inspect_bytes(bytes);}catch(const std::exception&){/* Metadata failure must not suppress a usable preview. */}
+        if(format!=6&&format!=7)try{*source_info=inspect_bytes(bytes);}catch(const std::exception&){/* Metadata failure must not suppress a usable preview. */}
     }
     if(cancelled&&cancelled())throw std::runtime_error("Preview cancelled");
     std::vector<uint16_t> linear;std::vector<uint8_t> raw_pixels;
     unsigned w=0,h=0,raster_orientation=1;uhdr_color_gamut_t gamut=UHDR_CG_BT_709;bool hdr=false;int gain=0,transfer=0,rc=0;
+    DecodedAnimationFrame heif_frame;
+    const bool heif_sequence=format==7&&decode_heif_animation(bytes.data(),bytes.size(),
+        [&](DecodedAnimationFrame&& frame){heif_frame=std::move(frame);},true,cancelled);
     if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,edge);
-    else if(format==7)rc=decode_heif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,edge);
+    else if(format==7&&!heif_sequence) {
+        if(source_info)try{*source_info=inspect_bytes(bytes);}catch(const std::exception&){}
+        rc=decode_heif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,edge);
+    }
     else if(format==1)rc=decode_avif_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,edge,nullptr);
     else if(format==3)rc=decode_jxl_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,false,edge,false,nullptr,nullptr);
     else if(format==4)rc=decode_jxr_memory(bytes.data(),bytes.size(),linear,w,h,&gamut,std::min(edge,768u));
-    else if(format==6) {
-        DecodedAnimationFrame first;
-        const bool animated=decode_raster_animation(bytes.data(),bytes.size(),
+    else if(format==6||heif_sequence) {
+        auto first=std::move(heif_frame);
+        const bool animated=heif_sequence||decode_raster_animation(bytes.data(),bytes.size(),
             [&](DecodedAnimationFrame&& frame){first=std::move(frame);},true,cancelled);
         auto raster=animated?std::move(first.image):decode_regular(bytes.data(),bytes.size());
         if(source_info) {

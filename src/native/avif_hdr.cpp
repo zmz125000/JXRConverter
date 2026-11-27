@@ -517,7 +517,7 @@ template<class Sample> static void cicp_rgb_to_linear_impl(const uint8_t* codes,
     hdr_parallel_pixels(count,hdr_pixel_jobs(count),[&](size_t begin,size_t end,unsigned) {
         for(size_t i=begin;i<end;++i) {
             uint16_t p[4]={0,0,0,65535};
-            if(bits==16)std::memcpy(p,codes+i*channels*sizeof(uint16_t),channels*sizeof(uint16_t));
+            if(bits>8)std::memcpy(p,codes+i*channels*sizeof(uint16_t),channels*sizeof(uint16_t));
             else for(unsigned c=0;c<channels;++c)p[c]=uint16_t(codes[i*channels+c])*257;
             float r=lut[p[0]],g=lut[p[1]],b=lut[p[2]];
             if(transfer==18)hlg_display_rgb(r,g,b,gamut);
