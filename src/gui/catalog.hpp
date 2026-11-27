@@ -107,7 +107,7 @@ struct Filter {
     int minWidth = 0, minHeight = 0, minMaxEdge = 0;
     double minMegapixels = 0;
     bool literalText = false, today = false;
-    bool filenameOnly = false; // Instant UI filter: literal filename substring, independent of metadata filters.
+    bool filenameOnly = false; // Instant filename filter, with ! to exclude a substring.
     QDate from, to;
 };
 class CatalogFilter : public QSortFilterProxyModel {

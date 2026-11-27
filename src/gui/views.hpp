@@ -26,6 +26,7 @@ protected:
     void wheelEvent(QWheelEvent*) override;
     void hideEvent(QHideEvent*) override;
     void resizeEvent(QResizeEvent*) override;
+    void updateGeometries() override;
     void paintEvent(QPaintEvent*) override;
     void dragEnterEvent(QDragEnterEvent*) override;
     void dragMoveEvent(QDragMoveEvent*) override;
@@ -39,6 +40,9 @@ private:
     bool smooth_ = false;
     QPropertyAnimation* scrollAnimation_ = nullptr;
     double wheelRemainder_ = 0;
+    QPersistentModelIndex resizeAnchor_;
+    int resizeAnchorTop_ = 0;
+    bool inBaseResize_ = false;
 };
 class FileTableView : public QTableView {
     Q_OBJECT

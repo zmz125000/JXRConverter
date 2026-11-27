@@ -293,6 +293,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(search_,&QLineEdit::returnPressed,this,&MainWindow::applySearch);connect(searchButton,&QPushButton::clicked,this,&MainWindow::applySearch);
     connect(search_,&QLineEdit::textChanged,this,[this](const QString& text){if(text.isEmpty())applySearch();});
     auto* filters=new QHBoxLayout;instant_=new QLineEdit;instant_->setObjectName("instantFilter");instant_->setPlaceholderText("Instant filename filter…");instant_->setClearButtonEnabled(true);filters->addWidget(instant_,1);
+    instant_->setToolTip("Prefix a filename substring with ! to exclude matching files.");
     metadataFilters_=check("Filters","metadataFilters");filters->addWidget(metadataFilters_);
     today_=check("Today","todayFilter");today_->setToolTip("Image date is today: EXIF date, falling back to file modification date, then creation date.");filters->addWidget(today_);
     format_=new QLineEdit;format_->setObjectName("formatFilter");format_->setPlaceholderText("e.g. jpg, avif, raw");format_->setClearButtonEnabled(true);
@@ -553,7 +554,6 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     connect(list_,&FileListView::viewportChanged,this,[this]{if(!changingAspect_&&viewMode_->checkedId()==0&&!(aspectSamplePending_&&!aspectViewportSample_))requestAspectSample(true);});
     connect(thumbnailFit_,&QPushButton::toggled,this,[this](bool fill){thumbnailFit_->setText(fill?"Fill":"Fit");delegate_->fill=fill;table_->setFillThumbnails(fill);list_->viewport()->update();});
     connect(viewMode_,&QButtonGroup::idClicked,this,&MainWindow::updatePresentation);connect(size_,&QSlider::valueChanged,this,&MainWindow::updatePresentation);
-    connect(list_->verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{if(!changingAspect_&&viewMode_->checkedId()==0)requestAspectSample(true);});
     connect(list_,&FileListView::bulkSelectionChanged,this,[this](bool selecting){bulkSelecting_=selecting;});
     connect(table_,&FileTableView::bulkSelectionChanged,this,[this](bool selecting){bulkSelecting_=selecting;});
     connect(selection_,&QItemSelectionModel::selectionChanged,this,&MainWindow::changeSelection);

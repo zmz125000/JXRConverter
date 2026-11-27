@@ -742,11 +742,42 @@ private slots:
             QTest::keyClicks(instant,"_");QCOMPARE(window.filterModel()->rowCount(),1);
             QTest::keyClick(instant,Qt::Key_Backspace);QCOMPARE(window.filterModel()->rowCount(),2);
             instant->setText("PHOTO08");QCOMPARE(window.filterModel()->rowCount(),2);
+            instant->setText(" !PHOTO08 ");QCOMPARE(window.filterModel()->rowCount(),1);
+            QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),files[2]);
+            instant->setText("!08");QCOMPARE(window.filterModel()->rowCount(),1);
+            instant->setText("!");QCOMPARE(window.filterModel()->rowCount(),3);
+            instant->setText("PHOTO08");
         }
         auto* search=window.findChild<QLineEdit*>("search");search->setText("name:\"photo08b.jpg\"");QTest::keyClick(search,Qt::Key_Return);
         QCOMPARE(window.filterModel()->rowCount(),1);QCOMPARE(window.filterModel()->index(0,0).data(Catalog::PathRole).toString(),files[1]);
         filters->setChecked(false);QCOMPARE(window.filterModel()->rowCount(),1);
         instant->clear();QCOMPARE(window.filterModel()->rowCount(),1);
+    }
+    void fileListResizeKeepsVisibleImage() {
+        QStandardItemModel model(600,1);
+        FileListView view;
+        view.setModel(&model);
+        view.setItemDelegate(new ThumbnailDelegate(&view));
+        auto* scroll=view.verticalScrollBar();
+        for(bool grid:{true,false}) {
+            view.setPresentation(grid,200);
+            view.resize(1000,600);view.show();
+            const auto index=model.index(390,0);
+            QTRY_VERIFY(view.visualRect(index).isValid());
+            view.scrollTo(index,QAbstractItemView::PositionAtTop);
+            scroll->setValue(scroll->value()+17);
+            for(const QSize size:{QSize(680,620),QSize(865,520),QSize(865,650)}) {
+                const auto visible=view.firstVisibleRow(1);
+                QVERIFY(!visible.isEmpty());
+                const auto anchor=visible.first();
+                QVERIFY(anchor.row()>300);
+                const int offset=view.visualRect(anchor).top();
+                view.resize(size);
+                QTRY_VERIFY(view.visualRect(model.index(model.rowCount()-1,0)).isValid());
+                QTRY_COMPARE(view.visualRect(anchor).top(),offset);
+                QVERIFY(view.visualRect(anchor).intersects(view.viewport()->rect()));
+            }
+        }
     }
     void logClearAndPanelWidths() {
         appSettings().clear();MainWindow window;window.show();

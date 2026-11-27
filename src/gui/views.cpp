@@ -10,6 +10,7 @@
 #include <QHeaderView>
 #include <QWheelEvent>
 #include <QScrollBar>
+#include <QScopedValueRollback>
 #include <QPropertyAnimation>
 #include <QAbstractProxyModel>
 #include <QUrl>
@@ -245,7 +246,10 @@ FileListView::FileListView(QWidget* parent):QListView(parent),reorder_(new FileR
     // Stable viewport width keeps adaptive columns from oscillating as the
     // scrollbar appears or disappears near a column/row boundary.
     setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);
-    connect(verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{ThumbnailFrame frame(this);emit viewportChanged();});
+    connect(verticalScrollBar(),&QScrollBar::valueChanged,this,[this]{
+        ThumbnailFrame frame(this);
+        if(!resizeAnchor_.isValid())emit viewportChanged();
+    });
 }
 void FileListView::setReorderEnabled(bool enabled) {reorder_->setEnabled(enabled);setSelectionRectVisible(!enabled);}
 void FileListView::paintEvent(QPaintEvent* event) {
@@ -258,13 +262,43 @@ void FileListView::paintEvent(QPaintEvent* event) {
     }
 }
 void FileListView::setPresentation(bool grid,int size,double aspect) {
+    resizeAnchor_=QModelIndex{};
     grid_=grid;minimumCell_=size;aspect_=std::clamp(aspect,0.25,4.0);
     setUniformItemSizes(grid);
     setViewMode(grid?IconMode:ListMode);setMovement(Static);setWrapping(grid);setFlow(grid?LeftToRight:TopToBottom);
     setVerticalScrollMode(ScrollPerPixel);setSpacing(grid?0:5);updateCellSize();
 }
 void FileListView::resizeEvent(QResizeEvent* event) {
-    QListView::resizeEvent(event);updateCellSize();emit viewportChanged();
+    if(!resizeAnchor_.isValid()&&verticalScrollBar()->value()>0) {
+        const auto visible=firstVisibleRow(1);
+        if(!visible.isEmpty()) {
+            resizeAnchor_=visible.first();
+            resizeAnchorTop_=visualRect(resizeAnchor_).top();
+            if(scrollAnimation_)scrollAnimation_->stop();
+        }
+    }
+    {
+        const QScopedValueRollback resizing(inBaseResize_,true);
+        QListView::resizeEvent(event);
+    }
+    updateCellSize();
+    if(!resizeAnchor_.isValid())emit viewportChanged();
+}
+void FileListView::updateGeometries() {
+    QListView::updateGeometries();
+    if(inBaseResize_||!resizeAnchor_.isValid())return;
+    // The first batch can temporarily shrink the scroll range. Wait for the
+    // complete layout before positioning the previously visible item.
+    const auto last=model()->index(model()->rowCount(rootIndex())-1,modelColumn(),rootIndex());
+    if(!visualRect(last).isValid())return;
+    const auto rect=visualRect(resizeAnchor_);
+    if(rect.isValid()) {
+        const int top=std::max(resizeAnchorTop_,1-rect.height());
+        auto* bar=verticalScrollBar();
+        bar->setValue(bar->value()+rect.top()-top);
+    }
+    resizeAnchor_=QModelIndex{};
+    emit viewportChanged();
 }
 void FileListView::updateCellSize() {
     // LocalViewer 535800129: GridCells.Adaptive chooses columns from the

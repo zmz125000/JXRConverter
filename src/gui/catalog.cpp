@@ -577,7 +577,12 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
     if(f.restrictPaths&&!f.paths.contains(r.path))return false;
     if(f.status==3&&!r.status.startsWith("Done")&&r.status!="Skipped")return false;
     if(f.status==4&&r.status!="Failed")return false;
-    if(f.filenameOnly&&!QFileInfo(r.path).fileName().contains(f.text.trimmed(),Qt::CaseInsensitive))return false;
+    if(f.filenameOnly) {
+        auto keyword=QStringView(f.text).trimmed();
+        const bool exclude=keyword.startsWith(u'!');
+        if(exclude)keyword=keyword.sliced(1).trimmed();
+        if(!keyword.isEmpty()&&QFileInfo(r.path).fileName().contains(keyword,Qt::CaseInsensitive)==exclude)return false;
+    }
     const bool needHaystack=!f.search.trimmed().isEmpty()||(!f.filenameOnly&&!f.text.trimmed().isEmpty());
     const QString haystack=needHaystack?r.path+" "+r.format+" "+dimensions(r)+" "+r.camera+" "+r.lens+" "+r.transfer+" "+r.primaries+" "+r.status+" "+QString::number(r.bits)+" bit "+r.exif.keys().join(' ')+" "+r.exif.values().join(' '):QString{};
     static const QRegularExpression terms(R"((?:(name|format|dimensions|size|date|camera|lens|iso|aperture|shutter|focal|transfer|primaries|bits|status|created|modified|exifdate|width|height|maxedge|megapixels|aspect|hdr|gainmap|raw|path|error|metadatawarning):)?("(?:\\.|[^"\\])*"|[^\s]+))");
