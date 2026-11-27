@@ -94,20 +94,44 @@ inline double content_peak(const std::vector<float>& pixels,const Matrix& space,
         for(unsigned c=0;c<3;++c)if(std::isfinite(pixels[i+c]))peak=std::max(peak,double(pixels[i+c]));
         return peak*(203./80.);
     };
-    double low=std::numeric_limits<double>::infinity(),high=-low;uint64_t count=0;
-    for(size_t i=0;i<pixels.size();i+=4)if(std::isfinite(pixels[i+3])&&pixels[i+3]>0.f) {
-        const double y=metric(i);low=std::min(low,y);high=std::max(high,y);++count;
+    struct Limits {
+        double low=std::numeric_limits<double>::infinity(),high=-low;
+        uint64_t count=0;
+    };
+    const size_t size=pixels.size()/4;
+    const unsigned jobs=hdr_pixel_jobs(size);
+    std::vector<Limits> limits(jobs);
+    hdr_parallel_pixels(size,jobs,[&](size_t begin,size_t end,unsigned job) {
+        Limits local;
+        for(size_t i=begin*4;i<end*4;i+=4)if(std::isfinite(pixels[i+3])&&pixels[i+3]>0.f) {
+            const double y=metric(i);
+            local.low=std::min(local.low,y);local.high=std::max(local.high,y);++local.count;
+        }
+        limits[job]=local;
+    });
+    Limits total;
+    for(const auto& local:limits) {
+        total.low=std::min(total.low,local.low);total.high=std::max(total.high,local.high);total.count+=local.count;
     }
+    const double low=total.low,high=total.high;
+    const uint64_t count=total.count;
     if(!count)return 0.;
     if(high<=low)return std::max(high,0.);
-    std::vector<uint64_t> histogram(65536);
-    for(size_t i=0;i<pixels.size();i+=4)if(std::isfinite(pixels[i+3])&&pixels[i+3]>0.f) {
-        const double y=std::max(metric(i),0.);
-        const auto bin=size_t(std::clamp(std::round((y-low)/(high-low)*65536.),0.,65535.));++histogram[bin];
-    }
+    constexpr size_t bins=65536;
+    std::vector<uint64_t> histograms(bins*jobs);
+    hdr_parallel_pixels(size,jobs,[&](size_t begin,size_t end,unsigned job) {
+        auto* histogram=histograms.data()+bins*job;
+        for(size_t i=begin*4;i<end*4;i+=4)if(std::isfinite(pixels[i+3])&&pixels[i+3]>0.f) {
+            const double y=std::max(metric(i),0.);
+            const auto bin=size_t(std::clamp(std::round((y-low)/(high-low)*65536.),0.,65535.));
+            ++histogram[bin];
+        }
+    });
     double percent=100.;
     for(int bin=65535;bin>=0;--bin) {
-        percent-=100.*double(histogram[size_t(bin)])/double(count);
+        uint64_t frequency=0;
+        for(unsigned job=0;job<jobs;++job)frequency+=histograms[bins*job+size_t(bin)];
+        percent-=100.*double(frequency)/double(count);
         if(percent<=99.94)return std::max(0.,low+(high-low)*double(bin)/65536.);
     }
     return std::max(high,0.);
@@ -125,7 +149,8 @@ inline std::vector<float> tone_map_skiv_base(const std::vector<float>& hdr,int g
     const double peak=std::min(content_peak(hdr,space),cap/80.);
     const double white=pq(1.5),peak_pq=std::max(white,pq(peak));
     const double knee=std::clamp(double(shoulder),0.,.99);
-    const double input_knee=pq(knee*203./80.),output_white=pq(203./80.);
+    const double linear_knee=knee*203./80.;
+    const double input_knee=pq(linear_knee),output_white=pq(203./80.);
     const double custom_peak=std::max(peak_pq,output_white);
     const double curve_knee=intensity(input_knee,custom_peak,white),curve_peak=intensity(custom_peak,custom_peak,white);
     std::vector<float> output=hdr;
@@ -134,9 +159,14 @@ inline std::vector<float> tone_map_skiv_base(const std::vector<float>& hdr,int g
     for(size_t pixel=begin;pixel<end;++pixel) {
         const size_t i=pixel*4;
         if(!std::isfinite(hdr[i+3])||hdr[i+3]<=0.f){output[i]=output[i+1]=output[i+2]=0.f;continue;}
-        auto lms=transform(xyz_lms,input_xyz(hdr,i,space));for(auto& value:lms)value=pq(value);
+        auto lms=transform(xyz_lms,input_xyz(hdr,i,space));
+        // ICtCp intensity is the average of PQ L and M. Below the knee
+        // in both channels, the custom curve leaves this pixel unchanged.
+        if(custom&&lms[0]<=linear_knee&&lms[1]<=linear_knee)continue;
+        lms[0]=pq(lms[0]);lms[1]=pq(lms[1]);
+        if(custom&&.5*lms[0]+.5*lms[1]<=input_knee)continue;
+        lms[2]=pq(lms[2]);
         auto ictcp=transform(lms_ictcp,lms);const double input=std::max(ictcp[0],0.);
-        if(custom&&input<=input_knee)continue;
         double reference,mapped;
         if(custom) {
             const double clipped=std::min(input,custom_peak);

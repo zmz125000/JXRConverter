@@ -1822,6 +1822,11 @@ static void skiv_tone_mapping(const fs::path& dir) {
         .9869743055f,.5618272624f,.3216860239f,1,1,.9583687725f,.2359747904f,1};
     const auto stock=tone_map_skiv_base(input,0,false,.67f,2000.f);
     for(size_t i=0;i<stock.size();++i)check(std::abs(stock[i]-expected[i])<.00001f,"SKIV stock differs from upstream reference");
+    std::vector<float> many(524288*4,1.f);
+    for(size_t i=0;i<many.size();i+=4)many[i]=float(i%347)*.1f;
+    double serial_peak;
+    {JxrcThreadBudget budget(1);serial_peak=skiv::content_peak(many,skiv::rgb2020_xyz);}
+    {JxrcThreadBudget budget(2);check(skiv::content_peak(many,skiv::rgb2020_xyz)==serial_peak,"Parallel SKIV peak changed the percentile");}
     check(stock==tone_map_skiv_base(input,0,false,.1f,204.f),"Stock SKIV used disabled shoulder/cap controls");
     auto hidden=input;hidden.insert(hidden.end(),{1000000,1000000,1000000,0});
     const auto invisible=tone_map_skiv_base(hidden,0,false,.67f,2000.f);

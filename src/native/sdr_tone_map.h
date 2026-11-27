@@ -15,24 +15,33 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                                             std::array<float,3> luma = {.2126f,.7152f,.0722f},
                                             std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
     std::vector<float> sdr=hdr;
+    const size_t pixels=sdr.size()/4;
+    const unsigned jobs=hdr_pixel_jobs(pixels);
     const AutoSdrTone auto_tone=auto_curve?analyze_auto_sdr_tone(hdr,luma):AutoSdrTone{};
     if(auto_curve)zones[1]=0.f;
     const bool has_zones=zones!=std::array<float,3>{};
     if(auto_tone.active()||has_zones) {
-        float peak=0.f;
-        for(size_t i=0;i<sdr.size();i+=4) {
-            if(!std::isfinite(sdr[i+3])||sdr[i+3]<=0.f)continue;
-            for(unsigned c=0;c<3;++c)sdr[i+c]=std::max(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f);
-            if(auto_tone.active())apply_auto_sdr_tone(sdr[i],sdr[i+1],sdr[i+2],auto_tone,luma);
-            if(has_zones)apply_tonal_zones(sdr[i],sdr[i+1],sdr[i+2],zones[0],zones[1],zones[2],luma);
-            peak=std::max({peak,sdr[i],sdr[i+1],sdr[i+2]});
-        }
+        std::vector<float> peaks(jobs);
+        hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned job) {
+            float peak=0.f;
+            for(size_t i=begin*4;i<end*4;i+=4) {
+                if(!std::isfinite(sdr[i+3])||sdr[i+3]<=0.f)continue;
+                for(unsigned c=0;c<3;++c)sdr[i+c]=std::max(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f);
+                if(auto_tone.active())apply_auto_sdr_tone(sdr[i],sdr[i+1],sdr[i+2],auto_tone,luma);
+                if(has_zones)apply_tonal_zones(sdr[i],sdr[i+1],sdr[i+2],zones[0],zones[1],zones[2],luma);
+                peak=std::max({peak,sdr[i],sdr[i+1],sdr[i+2]});
+            }
+            peaks[job]=peak;
+        });
+        const float peak=*std::max_element(peaks.begin(),peaks.end());
         range_nits=auto_range?peak*203.f:std::min(range_nits,peak*203.f);
     }
     const float range=std::max(1.f,range_nits/203.f);
     if(range<=1.f) {
-        for(size_t i=0;i<sdr.size();i+=4)for(unsigned c=0;c<3;++c)
-            sdr[i+c]=std::clamp(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f,1.f);
+        hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned) {
+            for(size_t i=begin*4;i<end*4;i+=4)for(unsigned c=0;c<3;++c)
+                sdr[i+c]=std::clamp(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f,1.f);
+        });
         return sdr;
     }
     const float span=range-shoulder;
@@ -67,18 +76,20 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
         }
         return mapped;
     };
-    for(size_t i=0;i<sdr.size();i+=4) {
-        std::array<float,3> rgb;
-        for(unsigned c=0;c<3;++c)rgb[c]=std::max(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f);
-        if(mapping==jxrc::SdrColorMapping::per_channel) {
-            for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(curve(rgb[c]),0.f,1.f);
-        } else {
-            const float metric=mapping==jxrc::SdrColorMapping::luminance?
-                rgb[0]*luma[0]+rgb[1]*luma[1]+rgb[2]*luma[2]:std::max({rgb[0],rgb[1],rgb[2]});
-            const float scale=metric>0.f?curve(metric)/metric:0.f;
-            for(unsigned c=0;c<3;++c)rgb[c]*=scale;
-            for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(rgb[c],0.f,1.f);
+    hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned) {
+        for(size_t i=begin*4;i<end*4;i+=4) {
+            std::array<float,3> rgb;
+            for(unsigned c=0;c<3;++c)rgb[c]=std::max(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f);
+            if(mapping==jxrc::SdrColorMapping::per_channel) {
+                for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(curve(rgb[c]),0.f,1.f);
+            } else {
+                const float metric=mapping==jxrc::SdrColorMapping::luminance?
+                    rgb[0]*luma[0]+rgb[1]*luma[1]+rgb[2]*luma[2]:std::max({rgb[0],rgb[1],rgb[2]});
+                const float scale=metric>0.f?curve(metric)/metric:0.f;
+                for(unsigned c=0;c<3;++c)rgb[c]*=scale;
+                for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(rgb[c],0.f,1.f);
+            }
         }
-    }
+    });
     return sdr;
 }

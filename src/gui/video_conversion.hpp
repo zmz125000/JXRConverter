@@ -33,6 +33,7 @@ struct VideoOutput {
     int audioBitrate = 192;
     QString preset, tune, parameters;
     bool processPixels = false;
+    bool gpuToneMapping = false;
 };
 
 const VideoEncoderSettings& videoEncoderSettings(VideoCodec, VideoEncoder);

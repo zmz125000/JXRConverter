@@ -357,8 +357,10 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     if(hdrOutput&&h264)throw std::runtime_error("H.264 output uses SDR. Choose HEVC or AV1 for HDR.");
     if(hdrOutput&&target.depth==8)throw std::runtime_error("HDR output requires Auto, 10-bit, or 12-bit output depth.");
     const int outputTransfer=!hdrOutput?1:transfer==VideoTransfer::pq?16:transfer==VideoTransfer::hlg?18:stream.transfer;
-    const bool processed=stream.dolbyVision||target.processPixels||
-        (stream.hdr()&&stream.transfer!=outputTransfer);
+    const bool gpuToneMap=target.gpuToneMapping&&!target.processPixels&&stream.hdr()&&!hdrOutput;
+    const bool processed=!gpuToneMap&&(stream.dolbyVision||target.processPixels||
+        (stream.hdr()&&stream.transfer!=outputTransfer));
+    const bool converted=processed||gpuToneMap;
     const QString rgbFormat=QSysInfo::ByteOrder==QSysInfo::LittleEndian?"rgb48le":"rgb48be";
     const auto size=outputSize(stream.size,options.max_edge);
     const auto format=stream.pixelFormat.chopped(2);
@@ -377,17 +379,25 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
         stream.size.height()<=480?6:stream.size.height()<=576?5:1;
     const QString defaultMatrix=defaultPrimaries==9?"bt2020nc":defaultPrimaries==5?"bt470bg":defaultPrimaries==6?"smpte170m":"bt709";
     const QString defaultPrims=defaultPrimaries==12?"smpte432":defaultMatrix=="bt2020nc"?"bt2020":defaultMatrix;
-    const QString matrix=processed?(hdrOutput?"bt2020nc":"bt709"):
+    const QString matrix=converted?(hdrOutput?"bt2020nc":"bt709"):
         tagged(stream.matrixName)&&!rgbSource?stream.matrixName:defaultMatrix;
-    const QString primaries=processed?(hdrOutput?"bt2020":"bt709"):
+    const QString primaries=converted?(hdrOutput?"bt2020":"bt709"):
         tagged(stream.primariesName)?stream.primariesName:defaultPrims;
-    const QString trc=processed?(outputTransfer==16?"smpte2084":outputTransfer==18?"arib-std-b67":"bt709"):
+    const QString trc=converted?(outputTransfer==16?"smpte2084":outputTransfer==18?"arib-std-b67":"bt709"):
         tagged(stream.transferName)?stream.transferName:"bt709";
-    const QString range=!processed&&!rgbSource&&stream.rangeName=="pc"?"pc":"tv";
+    const QString range=!converted&&!rgbSource&&stream.rangeName=="pc"?"pc":"tv";
     const QString scale=QString("scale=%1:%2:out_color_matrix=%3:out_range=%4:flags=accurate_rnd+full_chroma_int")
         .arg(size.width()).arg(size.height()).arg(matrixFilter(matrix,defaultPrimaries),range);
     const QString sar=QString("setsar=sar=%1:max=10000").arg(stream.displayAspect*size.height()/size.width(),0,'f',9);
-    const QString filter=scale+(processed?":in_range=pc":QString{})+",format="+pixFmt+","+sar;
+    QString filter=scale+(processed?":in_range=pc":QString{})+",format="+pixFmt+","+sar;
+    if(gpuToneMap) {
+        // Let libplacebo convert directly from the source YUV and preserve VFR timestamps.
+        filter=QString("libplacebo=w=%1:h=%2:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:"
+                       "tonemapping=bt.2390:peak_detect=1:apply_dolbyvision=1:apply_filmgrain=0,format=%3,%4")
+            .arg(size.width()).arg(size.height()).arg(pixFmt,sar);
+        if(!stream.dolbyVision&&!rgbSource&&!tagged(stream.matrixName))
+            filter="setparams=colorspace="+defaultMatrix+","+filter;
+    }
     QStringList encode={"-hide_banner","-loglevel","error","-nostdin","-xerror","-filter_threads",encodeThreads,
                         "-progress","pipe:1","-y"};
     if(processed)encode << "-thread_queue_size" << "2" << "-f" << "rawvideo" << "-pixel_format" << rgbFormat << "-video_size" << raster
@@ -434,7 +444,7 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
         progress.poll();
     }
     checkCancelled(cancelled);
-    encoder.checkExit("Video encode failed");
+    encoder.checkExit(gpuToneMap?"GPU video conversion failed (requires FFmpeg with libplacebo and Vulkan)":"Video encode failed");
     if(std::filesystem::file_size(stage.file)==0)throw std::runtime_error("FFmpeg produced an empty output.");
     if(!options.overwrite&&std::filesystem::exists(output))return true;
     stage.publish(output,options.overwrite);

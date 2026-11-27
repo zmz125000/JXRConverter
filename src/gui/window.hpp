@@ -173,6 +173,7 @@ private:
     QFormLayout *videoEncoderForm_, *videoAudioForm_;
     QString videoSettingsEncoder_;
     QDoubleSpinBox* videoExposure_;
+    QCheckBox* videoGpuToneMapping_;
     ToneControls stillTone_, videoTone_;
     QLineEdit *search_, *instant_, *format_, *output_;
     QSlider *size_;

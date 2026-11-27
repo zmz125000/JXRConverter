@@ -637,7 +637,7 @@ QList<QWidget*> MainWindow::persistentControls() const {
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
-        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_,animationStack_,animationResize_,animationGifIndexedColor_}
+        videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,videoGpuToneMapping_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_,animationStack_,animationResize_,animationGifIndexedColor_}
         +stillTone_.settings()+videoTone_.settings();
 }
 QList<QWidget*> MainWindow::filterControls() const {
@@ -837,6 +837,9 @@ QWidget* MainWindow::buildVideoControls() {
     videoAudioForm_->addRow("Audio bitrate",videoAudioBitrate_);
     layout->addWidget(audio);
 
+    videoGpuToneMapping_=check("GPU HDR-to-SDR tone mapping (BT.2390)","videoGpuToneMapping");
+    videoGpuToneMapping_->setToolTip("Use FFmpeg’s libplacebo tone mapper in Automatic mode. Requires a Vulkan-capable device and an FFmpeg build with libplacebo.");
+    layout->addWidget(videoGpuToneMapping_);
     layout->addWidget(videoTone_.build(true));
     auto* processing=new QGroupBox("Pixel processing");
     auto* processingForm=new QFormLayout(processing);
@@ -852,6 +855,7 @@ QWidget* MainWindow::buildVideoControls() {
     for(auto* box:{videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoEncoder_,videoRate_,videoAudio_})
         connect(box,&QComboBox::currentIndexChanged,this,[this]{updateVideoControls();updateCounts();});
     connect(reset,&QPushButton::clicked,this,[this]{loadVideoEncoderSettings(true);updateVideoControls();});
+    connect(videoGpuToneMapping_,&QCheckBox::toggled,this,&MainWindow::updateVideoControls);
     connect(videoMaxEdge_,&QSpinBox::valueChanged,this,&MainWindow::updateCounts);
     connect(videoExposure_,&QDoubleSpinBox::valueChanged,this,&MainWindow::updateCounts);
     return panel;
@@ -1190,7 +1194,8 @@ void MainWindow::updateVideoControls() {
     videoAudioBitrate_->setMaximum(opus?512:960);
     videoAudioForm_->setRowVisible(videoAudioBitrate_,audio==VideoAudio::aac||opus||
         (audio==VideoAudio::automatic&&container!=VideoContainer::mkv));
-    videoTone_.group->setEnabled(!hdr);
+    videoGpuToneMapping_->setEnabled(!hdr&&videoMode_->currentIndex()==0);
+    videoTone_.group->setEnabled(!hdr&&!(videoGpuToneMapping_->isEnabled()&&videoGpuToneMapping_->isChecked()));
     videoExposure_->setEnabled(videoMode_->currentIndex()==1);
 }
 
@@ -1215,6 +1220,7 @@ VideoOutput MainWindow::videoTarget() const {
     output.tune=videoTune_->currentData().toString();
     output.parameters=videoParameters_->text();
     output.processPixels=videoMode_->currentIndex()==1;
+    output.gpuToneMapping=videoGpuToneMapping_->isEnabled()&&videoGpuToneMapping_->isChecked();
     return output;
 }
 QWidget* MainWindow::buildControls() {

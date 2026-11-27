@@ -1375,6 +1375,17 @@ private slots:
         auto* rate=window.findChild<QComboBox*>("videoRateControl");
         auto* speed=window.findChild<QComboBox*>("videoEncoderPreset");
         auto* factor=window.findChild<QSpinBox*>("videoQualityFactor");
+        auto* gpuTone=window.findChild<QCheckBox*>("videoGpuToneMapping");
+        auto* cpuTone=window.findChild<QCheckBox*>("videoSdrToneMap");
+        auto* mode=window.findChild<QComboBox*>("videoConversionMode");
+        QVERIFY(gpuTone&&cpuTone&&mode);
+        QVERIFY(gpuTone->isEnabled()&&!gpuTone->isChecked());
+        gpuTone->setChecked(true);
+        QVERIFY(!cpuTone->isEnabled());
+        mode->setCurrentIndex(1);
+        QVERIFY(!gpuTone->isEnabled()&&cpuTone->isEnabled());
+        mode->setCurrentIndex(0);
+        gpuTone->setChecked(false);
         QVERIFY(!window.findChild<QListWidget*>("videoConversionTargets"));
         QCOMPARE(videoExtension(VideoContainer(container->currentIndex())),QString("mp4"));
         QCOMPARE(speed->currentText(),QString("medium"));
