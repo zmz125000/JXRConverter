@@ -14,7 +14,7 @@ inline float bt709_oetf(float value) {
     if (!(value > 0.f)) return 0.f;
     if (value >= 1.f) return 1.f;
     if (value < .0180539685f) return 4.5f * value;
-    constexpr unsigned kSteps = 4096;
+    static constexpr unsigned kSteps = 4096;
     static const std::vector<float> lut = [] {
         std::vector<float> table(kSteps + 1);
         for (unsigned i = 0; i <= kSteps; ++i) {

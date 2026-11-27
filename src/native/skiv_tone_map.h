@@ -88,9 +88,9 @@ inline double pq(double sc) {
     constexpr uint32_t kMinExp=97;  // 2^-30
     constexpr uint32_t kMaxExp=127; // 2^0 = 1.0
     constexpr uint32_t kMantBits=9;
-    constexpr uint32_t kShift=23-kMantBits;
-    constexpr uint32_t kBase=kMinExp<<kMantBits;
-    constexpr uint32_t kSize=((kMaxExp-kMinExp)<<kMantBits)+1;
+    static constexpr uint32_t kShift=23-kMantBits;
+    static constexpr uint32_t kBase=kMinExp<<kMantBits;
+    static constexpr uint32_t kSize=((kMaxExp-kMinExp)<<kMantBits)+1;
     static const std::vector<double> lut=[] {
         std::vector<double> table(kSize+1);
         for(uint32_t i=0;i<=kSize;++i) {
@@ -117,7 +117,7 @@ inline double inverse_pq_exact(double code) {
 inline double inverse_pq(double code) {
     if(!(code>0.))return 0.;
     if(code>=1.)return inverse_pq_exact(code);
-    constexpr unsigned kSteps=8192;
+    static constexpr unsigned kSteps=8192;
     static const std::vector<double> lut=[] {
         std::vector<double> table(kSteps+1);
         for(unsigned i=0;i<=kSteps;++i)table[i]=inverse_pq_exact(double(i)/double(kSteps));
@@ -131,7 +131,7 @@ inline double inverse_pq(double code) {
 inline double pow118(double input) {
     if(!(input>0.))return 0.;
     if(input>=1.)return 1.;
-    constexpr unsigned kSteps=2048;
+    static constexpr unsigned kSteps=2048;
     static const std::vector<float> lut=[] {
         std::vector<float> table(kSteps+1);
         for(unsigned i=0;i<=kSteps;++i) {

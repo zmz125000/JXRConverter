@@ -18,9 +18,9 @@ inline double pq(double y) {
     constexpr uint32_t kMinExp = 97;  // 2^-30 (~9.3e-10, < 1e-5 nits)
     constexpr uint32_t kMaxExp = 127; // 2^0 = 1.0
     constexpr uint32_t kMantBits = 9;
-    constexpr uint32_t kShift = 23 - kMantBits;
-    constexpr uint32_t kBase = kMinExp << kMantBits;
-    constexpr uint32_t kSize = ((kMaxExp - kMinExp) << kMantBits) + 1;
+    static constexpr uint32_t kShift = 23 - kMantBits;
+    static constexpr uint32_t kBase = kMinExp << kMantBits;
+    static constexpr uint32_t kSize = ((kMaxExp - kMinExp) << kMantBits) + 1;
     static const std::vector<double> lut = [] {
         std::vector<double> table(kSize + 1);
         for (uint32_t i = 0; i <= kSize; ++i) {
