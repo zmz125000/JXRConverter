@@ -36,7 +36,7 @@ int decode_jxr_f32(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&
 int decode_raw_f32(const uint8_t*,size_t,const jxrc::RawControls&,bool,unsigned,std::vector<float>&,std::vector<float>&,unsigned&,unsigned&,int&);
 
 // Full-range, straight-alpha integer RGB to the same HDR working values as AVIF.
-void cicp_rgb_to_linear(const uint8_t*,size_t,unsigned,unsigned,unsigned,std::vector<float>&,uhdr_color_gamut_t&);
+void cicp_rgb_to_linear(const uint8_t*,size_t,unsigned,unsigned,unsigned,std::vector<float>&,uhdr_color_gamut_t&,unsigned channels=4);
 void cicp_rgb_to_linear(const uint8_t*,size_t,unsigned,unsigned,unsigned,std::vector<uint16_t>&,uhdr_color_gamut_t&);
 
 bool decode_jxr_scrgb(const uint8_t*,size_t,std::vector<float>&,unsigned&,unsigned&,bool&);

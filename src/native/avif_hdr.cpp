@@ -476,17 +476,17 @@ int decode_heif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16
 
 const std::vector<float>& pq_linear_lut() {return avif_linear_lut(AVIF_TRANSFER_CHARACTERISTICS_SMPTE2084);}
 
-// PNG samples have already been expanded by libpng, without gamma conversion.
+// Integer samples have already been expanded to RGB(A), without gamma conversion.
 template<class Sample> static void cicp_rgb_to_linear_impl(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,
-                        std::vector<Sample>& rgba,uhdr_color_gamut_t& gamut) {
+                        std::vector<Sample>& rgba,uhdr_color_gamut_t& gamut,unsigned channels) {
     gamut=primaries==9?UHDR_CG_BT_2100:primaries==12?UHDR_CG_DISPLAY_P3:UHDR_CG_BT_709;
     const auto& lut=avif_linear_lut(static_cast<avifTransferCharacteristics>(transfer));
     rgba.resize(count*4);
     hdr_parallel_pixels(count,hdr_pixel_jobs(count),[&](size_t begin,size_t end,unsigned) {
         for(size_t i=begin;i<end;++i) {
-            uint16_t p[4];
-            if(bits==16)std::memcpy(p,codes+i*8,8);
-            else for(unsigned c=0;c<4;++c)p[c]=uint16_t(codes[i*4+c])*257;
+            uint16_t p[4]={0,0,0,65535};
+            if(bits==16)std::memcpy(p,codes+i*channels*sizeof(uint16_t),channels*sizeof(uint16_t));
+            else for(unsigned c=0;c<channels;++c)p[c]=uint16_t(codes[i*channels+c])*257;
             float r=lut[p[0]],g=lut[p[1]],b=lut[p[2]];
             if(transfer==18)hlg_display_rgb(r,g,b,gamut);
             rgba[i*4]=store_working<Sample>(r);rgba[i*4+1]=store_working<Sample>(g);
@@ -496,13 +496,13 @@ template<class Sample> static void cicp_rgb_to_linear_impl(const uint8_t* codes,
 }
 
 void cicp_rgb_to_linear(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,
-                        std::vector<float>& rgba,uhdr_color_gamut_t& gamut) {
-    cicp_rgb_to_linear_impl(codes,count,bits,primaries,transfer,rgba,gamut);
+                        std::vector<float>& rgba,uhdr_color_gamut_t& gamut,unsigned channels) {
+    cicp_rgb_to_linear_impl(codes,count,bits,primaries,transfer,rgba,gamut,channels);
 }
 
 void cicp_rgb_to_linear(const uint8_t* codes,size_t count,unsigned bits,unsigned primaries,unsigned transfer,
                         std::vector<uint16_t>& rgba,uhdr_color_gamut_t& gamut) {
-    cicp_rgb_to_linear_impl(codes,count,bits,primaries,transfer,rgba,gamut);
+    cicp_rgb_to_linear_impl(codes,count,bits,primaries,transfer,rgba,gamut,4);
 }
 
 int decode_gain_map_base_f32(const uint8_t* data,size_t size,int kind,std::vector<float>& rgba,unsigned& w,unsigned& h,

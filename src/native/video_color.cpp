@@ -16,10 +16,10 @@ skiv::Matrix rgb_to_xyz(unsigned primaries) {
     }
 }
 
-std::vector<float> render_video_pixels(const uint8_t* codes,size_t count,VideoColor source,bool sdr_output,
+std::vector<float> render_video_pixels(const uint8_t* codes,size_t count,unsigned channels,VideoColor source,bool sdr_output,
                          const Options& options,std::vector<float>& working) {
     uhdr_color_gamut_t gamut;
-    cicp_rgb_to_linear(codes,count,16,source.primaries,source.transfer,working,gamut);
+    cicp_rgb_to_linear(codes,count,16,source.primaries,source.transfer,working,gamut,channels);
     const float exposure=std::exp2(options.exposure);
     const unsigned jobs=hdr_pixel_jobs(count);
     if(exposure!=1.f)hdr_parallel_pixels(count,jobs,[&](size_t begin,size_t end,unsigned) {
@@ -51,7 +51,7 @@ AnimationFrame render_animation_video_frame(const uint8_t* codes,unsigned width,
     frame.width=width;
     frame.height=height;
     frame.primaries=source.primaries;
-    auto mapped=render_video_pixels(codes,size_t(width)*height,source,sdr,options,frame.rgba);
+    auto mapped=render_video_pixels(codes,size_t(width)*height,4,source,sdr,options,frame.rgba);
     if(!mapped.empty())frame.rgba=std::move(mapped);
     if(source.primaries!=1&&source.primaries!=9&&source.primaries!=12) {
         const auto toXyz=rgb_to_xyz(source.primaries);
@@ -73,7 +73,7 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
                           const Options& options,std::vector<float>& working) {
     JxrcThreadBudget budget(options.threads);
     const bool sdr_output=output.transfer==1;
-    const auto mapped=render_video_pixels(codes,count,source,sdr_output,options,working);
+    const auto mapped=render_video_pixels(codes,count,3,source,sdr_output,options,working);
     const auto& linear=mapped.empty()?working:mapped;
     const unsigned jobs=hdr_pixel_jobs(count);
     const auto to_xyz=rgb_to_xyz(source.primaries);
@@ -90,8 +90,8 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
                 const float code=output.transfer==16?linear_to_pq_code(value):sdr_output?bt709_oetf(value):value;
                 return uint16_t(std::lround(std::clamp(code,0.f,1.f)*65535.f));
             };
-            const uint16_t pixel_codes[]={encode(r),encode(g),encode(b),65535};
-            std::memcpy(codes+pixel*8,pixel_codes,sizeof(pixel_codes));
+            const uint16_t pixel_codes[]={encode(r),encode(g),encode(b)};
+            std::memcpy(codes+pixel*sizeof(pixel_codes),pixel_codes,sizeof(pixel_codes));
         }
     });
 }
