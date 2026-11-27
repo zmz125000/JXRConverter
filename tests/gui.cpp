@@ -2510,6 +2510,53 @@ private slots:
         QVERIFY(savedJob(restored,2)->isChecked());QVERIFY(!savedJob(restored,3));
         QCOMPARE(restored.findChild<QMenu*>("jobMenu")->actions().size(),3);QCOMPARE(restored.filterModel()->rowCount(),1);
     }
+    void jobContextAddsFilesToAll() {
+        appSettings().clear();
+        const auto directory=root("job-context");
+        const auto a=makeImage(directory,"a.jpg",64,48,100);
+        const auto b=makeImage(directory,"b.jpg",64,48,100);
+        const auto c=makeImage(directory,"c.jpg",64,48,100);
+        const QJsonObject job{{"number","1"},{"files",QJsonArray{a,b}}};
+        QFile history(configDirectory()+"/jobs.json");
+        QVERIFY(history.open(QIODevice::WriteOnly));
+        QVERIFY(history.write(QJsonDocument(QJsonObject{{"jobs",QJsonArray{job}}}).toJson())>0);
+        history.close();
+        appSettings().setValue("controls/loadPreviousJobs",true);
+
+        MainWindow window;window.show();window.addPaths({c});
+        auto* view=window.findChild<FileListView*>();
+        auto* model=window.filterModel();
+        auto* selection=view->selectionModel();
+        QTRY_COMPARE(model->rowCount(),1);
+        selection->select(model->index(0,0),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+        QVERIFY(chooseJob(window,1));
+        QTRY_COMPARE(model->rowCount(),2);
+        selection->select(QItemSelection(model->index(0,0),model->index(1,0)),QItemSelectionModel::Select|QItemSelectionModel::Rows);
+
+        auto invokeAction=[&] {
+            bool found=false;
+            QTimer::singleShot(0,&window,[&]{
+                auto* menu=qobject_cast<QMenu*>(QApplication::activePopupWidget());
+                if(!menu)return;
+                auto* action=menu->findChild<QAction*>("addToImageList");
+                found=action&&action->isEnabled();
+                if(found){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}
+                else menu->close();
+            });
+            view->customContextMenuRequested(view->visualRect(model->index(0,0)).center());
+            return found;
+        };
+        QVERIFY(invokeAction());
+        QVERIFY(window.findChild<QPushButton*>("statusAll")->isChecked());
+        QCOMPARE(model->rowCount(),3);
+        QCOMPARE(window.catalog()->rowCount(),3);
+        QSet<QString> paths;
+        for(const auto& index:selection->selectedRows())paths.insert(index.data(Catalog::PathRole).toString());
+        QCOMPARE(paths,(QSet<QString>{a,b,c}));
+        QVERIFY(!invokeAction());
+        QVERIFY(chooseJob(window,1));
+        QCOMPARE(model->rowCount(),2);
+    }
     void jobCreationMetadata() {
         appSettings().clear();appSettings().setValue("jobs/nextNumber",30);
         const auto a=makeImage(root("pragmata"),"a.jpg",64,48,100),b=makeImage(root("pragmata"),"b.jpg",64,48,100);

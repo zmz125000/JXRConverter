@@ -503,6 +503,12 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             for(int i=0;i<targets_->count();++i){const auto* item=targets_->item(i);auto* action=convertTo->addAction(item->text());action->setObjectName("convertTarget"+item->data(Qt::UserRole).toString());action->setData(item->data(Qt::UserRole));action->setEnabled(item->flags()&Qt::ItemIsEnabled);}
             const auto& record=catalog_->record(proxy_->mapToSource(index).row());const QDate captured=record.imageDate().date();const QString cameraName=record.camera,formatName=record.format;const int depth=record.bits;camera->setEnabled(!cameraName.isEmpty());bits->setEnabled(depth>0);date->setEnabled(captured.isValid());start->setEnabled(captured.isValid());end->setEnabled(captured.isValid());
             const auto queueSelection=selectedPaths();
+            QAction* addToImageList=nullptr;
+            if(statusFilter_->checkedId()==2) {
+                addToImageList=menu.addAction("Add to image list");
+                addToImageList->setObjectName("addToImageList");
+                addToImageList->setEnabled(!queueSelection.isEmpty());
+            }
             auto* sendJob=menu.addAction("Send selected to new job");sendJob->setObjectName("sendSelectedToJob");sendJob->setEnabled(!imagePaths(queueSelection).isEmpty()&&!updater_->installing());
             auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
             auto* remove=menu.addAction(statusFilter_->checkedId()==1?"Remove from selection":"Remove selected");remove->setEnabled(statusFilter_->checkedId()==1||!queue_->busy());
@@ -514,6 +520,11 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             }
             else if(action==convertImage){convertPaths({currentImage},selectedTargets(),false,true);}
             else if(action&&action->parent()==convertTo){convertPaths({currentImage},{Target(action->data().toInt())},true,true);}
+            else if(addToImageList&&action==addToImageList) {
+                for(const auto& path:queueSelection)selectedImages_.insert(path);
+                statusFilter_->button(0)->setChecked(true);
+                updateFilter();
+            }
             else if(action==sendJob){createDraftJob(queueSelection);}
             else if(action==cancelSelected){queue_->cancelPendingFor(queueSelection);}
             else if(action==camera||action==format||action==bits){
