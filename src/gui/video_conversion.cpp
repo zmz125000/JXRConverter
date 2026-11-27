@@ -661,19 +661,27 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
             if(ffmpegEncoder->process.state()==QProcess::NotRunning)ffmpegEncoder->fail(errorMessage);
         });
     };
+    const auto sendVideo=[&](const std::vector<uint16_t>& rgba) {
+        send(reinterpret_cast<const char*>(rgba.data()),qsizetype(rgba.size()*sizeof(uint16_t)));
+    };
+    const auto sendGif=[&](const std::vector<uint8_t>& rgba) {
+        if(!transparentGif)for(size_t i=3;i<rgba.size();i+=4) {
+            if(rgba[i]<128){transparentGif=true;break;}
+        }
+        send(reinterpret_cast<const char*>(rgba.data()),qsizetype(rgba.size()));
+    };
     const auto addFrame=[&](AnimationFrame&& frame) {
         checkCancelled(cancelled);
-        auto pixels=compose_animation_frame(std::move(frame),encoding,placement,options,stack);
-        if(native)native->add(pixels);
-        else if(asVideo) {
-            const auto rgba=animation_rgba16(pixels);
-            send(reinterpret_cast<const char*>(rgba.data()),qsizetype(rgba.size()*sizeof(uint16_t)));
+        if(!frame.rgba8.empty()) {
+            const auto rgba=place_animation_rgba8(std::move(frame),encoding,placement,options);
+            if(native)native->add(rgba);
+            else if(asVideo)sendVideo(animation_bt709_rgba16(rgba));
+            else sendGif(rgba);
         } else {
-            const auto rgba=animation_rgba8(pixels);
-            if(!transparentGif)for(size_t i=3;i<rgba.size();i+=4) {
-                if(rgba[i]<128){transparentGif=true;break;}
-            }
-            send(reinterpret_cast<const char*>(rgba.data()),qsizetype(rgba.size()));
+            const auto pixels=compose_animation_frame(std::move(frame),encoding,placement,options,stack);
+            if(native)native->add(pixels);
+            else if(asVideo)sendVideo(animation_rgba16(pixels));
+            else sendGif(animation_rgba8(pixels));
         }
     };
 
@@ -687,7 +695,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         };
         try {
             if(!source.isVideo()) {
-                addFrame(AnimationImageRenderer::render(pathFromQt(source.path),renderOptions,!sdr,cancelled));
+                addFrame(AnimationImageRenderer::render(pathFromQt(source.path),renderOptions,encoding,placement,cancelled));
             } else {
                 auto stream=source.video;
                 const VideoColor color{sourcePrimaries(stream),sourceTransfer(stream)};

@@ -178,6 +178,39 @@ bool remove_alpha(const Options& o) {return o.transparency_background==Transpare
 bool white_background(const Options& o) {return o.transparency_background==TransparencyBackground::white||o.transparency_background==TransparencyBackground::white_remove_alpha;}
 bool scrgb_output(const Options& o) {return o.target==Target::jxl_scrgb;}
 bool convert_gamut(const Options& o) {return o.convert_gamut && !o.srgb_clamp && !scrgb_output(o);}
+template<class Sample>
+void orient_rgba(std::vector<Sample>& values,unsigned w,unsigned h,int orient) {
+    if(values.empty()||orient==1)return;
+    const unsigned dw=orient>=5?h:w;
+    std::vector<Sample> oriented(values.size());
+    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
+        unsigned dx=x,dy=y;
+        switch(orient) {
+        case 2:dx=w-1-x;break;
+        case 3:dx=w-1-x;dy=h-1-y;break;
+        case 4:dy=h-1-y;break;
+        case 5:dx=y;dy=x;break;
+        case 6:dx=h-1-y;dy=x;break;
+        case 7:dx=h-1-y;dy=w-1-x;break;
+        case 8:dx=y;dy=w-1-x;break;
+        }
+        std::copy_n(values.data()+(size_t(y)*w+x)*4,4,oriented.data()+(size_t(dy)*dw+dx)*4);
+    }
+    values.swap(oriented);
+}
+
+bool direct_animation_srgb(const RegularImage& raster,bool opaque_required) {
+    if(raster.bits!=8||raster.channels!=4||raster.transfer!=13||raster.primaries!=1||
+       !raster.floating_pixels.empty())return false;
+    if(!raster.icc.empty()) {
+        skcms_ICCProfile source{};
+        if(!skcms_Parse(raster.icc.data(),raster.icc.size(),&source)||
+           !skcms_ApproximatelyEqualProfiles(&source,skcms_sRGB_profile()))return false;
+    }
+    if(opaque_required)for(size_t i=3;i<raster.pixels.size();i+=4)if(raster.pixels[i]!=255)return false;
+    return true;
+}
+
 auto processing_key(const Options& o,int format) {
     const auto& r=o.raw;
     const int raw_kind=format==5?(gain_target(o.target)?2:hdr_target(o.target)?1:0):0;
@@ -196,18 +229,23 @@ Result ConversionSession::convert(const std::filesystem::path& output,const Opti
     return run(output,o,nullptr,{});
 }
 AnimationFrame AnimationImageRenderer::render(const std::filesystem::path& input,const Options& options,
-                                      bool hdr,const std::function<bool()>& cancelled) {
+                                      const AnimationEncoding& encoding,const AnimationPlacement& placement,
+                                      const std::function<bool()>& cancelled) {
     auto o=options;
     o.mode=Mode::process;
-    o.target=hdr?Target::png_hdr:Target::png;
+    const bool sdr=encoding.transfer==AnimationTransfer::sdr;
+    o.target=sdr?Target::png:Target::png_hdr;
     o.keep_exif=false;
     o.jpeg_transcoding=false;
     AnimationFrame frame;
-    ConversionSession(input).run({},o,&frame,cancelled);
+    const bool direct=sdr&&encoding.primaries==1&&
+        (encoding.video||encoding.format==AnimationFormat::gif||encoding.format==AnimationFormat::webp)&&
+        placement.stack==AnimationStack::off&&placement.resize==AnimationResize::off;
+    ConversionSession(input).run({},o,&frame,cancelled,direct?&encoding:nullptr);
     return frame;
 }
 Result ConversionSession::run(const std::filesystem::path& output,const Options& o,AnimationFrame* frame,
-                              const std::function<bool()>& cancelled) {
+                              const std::function<bool()>& cancelled,const AnimationEncoding* direct_frame) {
     auto& cache=*impl_;const auto& input=cache.input;
 
     JxrcThreadBudget thread_budget(o.threads);
@@ -249,6 +287,21 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
     }
     Result result;
     std::unique_ptr<RegularImage> regular;
+    // Match each source to the shared canvas independently. HDR elsewhere in
+    // an SDR animation does not require linearizing a compatible SDR raster.
+    if(direct_frame&&!o.exposure&&!tonal_edits&&!cache.source_hdr&&!cache.gainmap&&(format==0||format==6)) {
+        regular=std::make_unique<RegularImage>(format==0?decode_jpeg(bytes.data(),bytes.size()):decode_regular(bytes.data(),bytes.size()));
+        const int orient=format==0?source_orientation(bytes.data(),bytes.size(),format,nullptr):int(regular->orientation);
+        const auto w=orient>=5?regular->height:regular->width;
+        const auto h=orient>=5?regular->width:regular->height;
+        if(orient>=1&&orient<=8&&w<=direct_frame->width&&h<=direct_frame->height&&
+           (!o.max_edge||std::max(w,h)<=o.max_edge)&&direct_animation_srgb(*regular,direct_frame->video||remove_alpha(o))) {
+            orient_rgba(regular->pixels,regular->width,regular->height,orient);
+            frame->width=w;frame->height=h;
+            frame->rgba8=std::move(regular->pixels);
+            return result;
+        }
+    }
     bool direct_sdr=false;
     if(!frame && o.mode==Mode::process && sdr_target && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
         if(format==6&&!cache.source_hdr) {
@@ -319,7 +372,12 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             cache.ready=false;cache.scrgb=false;linear.clear();sdr_base.clear();cache.mapped_sdr.clear();cache.mapped_shoulder=cache.mapped_range=-1.f;exif.clear();w=h=0;gamut=UHDR_CG_BT_709;
             bool hdr=false;int gain=0,transfer=0,rc=0;unsigned raster_orientation=1;
             if(base_only)rc=decode_gain_map_base_f32(bytes.data(),bytes.size(),format,linear,w,h,&gamut,o.keep_exif?&exif:nullptr);
-            else if(format==0)jpeg_linear(bytes,linear,w,h,gamut,hdr,0,&sdr_base);
+            else if(format==0) {
+                if(regular) {
+                    w=regular->width;h=regular->height;
+                    regular_to_linear(*regular,linear,gamut);
+                } else jpeg_linear(bytes,linear,w,h,gamut,hdr,0,&sdr_base);
+            }
             else if(format==1)rc=decode_avif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gain,&transfer,&gamut,o.keep_exif?&exif:nullptr,&sdr_base);
             else if(format==7)rc=decode_heif_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,o.keep_exif?&exif:nullptr,&sdr_base);
             else if(format==3)rc=decode_jxl_to_linear_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,(is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):(o.extended_bt2020&&!o.srgb_clamp)),o.keep_exif?&exif:nullptr);
@@ -354,23 +412,9 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             const int orient=format==7?1:format==6?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,format==0&&o.keep_exif?&exif:nullptr);
             require(orient>=1&&orient<=8,"Unsupported image orientation/crop");
             if(orient!=1) {
-                const unsigned dw=orient>=5?h:w,dh=orient>=5?w:h;
-                auto orientPixels=[&](std::vector<float>& values) {if(values.empty())return;
-                std::vector<float> oriented(values.size());
-                for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
-                    unsigned dx=x,dy=y;
-                    switch(orient) {
-                        case 2:dx=w-1-x;break;
-                        case 3:dx=w-1-x;dy=h-1-y;break;
-                        case 4:dy=h-1-y;break;
-                        case 5:dx=y;dy=x;break;
-                        case 6:dx=h-1-y;dy=x;break;
-                        case 7:dx=h-1-y;dy=w-1-x;break;
-                        case 8:dx=y;dy=w-1-x;break;
-                    }
-                    std::copy_n(values.data()+(size_t(y)*w+x)*4,4,oriented.data()+(size_t(dy)*dw+dx)*4);
-                }
-                values.swap(oriented);};orientPixels(linear);orientPixels(sdr_base);w=dw;h=dh;
+                orient_rgba(linear,w,h,orient);
+                orient_rgba(sdr_base,w,h,orient);
+                if(orient>=5)std::swap(w,h);
             }
             normalize_exif(exif);
             // RAW exposure belongs before its camera look, tone controls and

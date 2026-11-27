@@ -79,6 +79,7 @@ struct Result {
 // Options are captured per call. Output is staged beside the destination before publication.
 JXRC_API Result convert(const std::filesystem::path& input, const std::filesystem::path& output, const Options& options = {});
 struct AnimationFrame;
+struct AnimationEncoding;
 // A batch-scoped, thread-confined source. Compatible outputs share immutable
 // float32 pixels; changed processing controls invalidate the prepared render.
 class JXRC_API ConversionSession {
@@ -90,7 +91,8 @@ public:
     Result convert(const std::filesystem::path& output, const Options& options = {});
 private:
     friend struct AnimationImageRenderer;
-    Result run(const std::filesystem::path&, const Options&, AnimationFrame*, const std::function<bool()>&);
+    Result run(const std::filesystem::path&, const Options&, AnimationFrame*, const std::function<bool()>&,
+               const AnimationEncoding* direct_frame = nullptr);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

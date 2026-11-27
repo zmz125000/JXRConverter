@@ -1652,6 +1652,59 @@ private slots:
         QVERIFY(webp.open(QIODevice::ReadOnly));
         QCOMPARE(webp.readAll().count("ANMF"),2);
     }
+    void animationMixedSdrAndHdrFrames() {
+        using namespace jxrc;
+        const auto directory=root("animation-mixed-range");
+        const auto pathFromQt=[](const QString& path){return std::filesystem::u8path(path.toUtf8().constData());};
+        const auto jpeg=makeImage(directory,"sdr.jpg",16,16,100);
+        QVERIFY(!jpeg.isEmpty());
+        const auto pfm=pathFromQt(directory+"/hdr.pfm");
+        QFile source(directory+"/hdr.pfm");
+        QVERIFY(source.open(QIODevice::WriteOnly));
+        source.write("PF\n16 16\n-1\n");
+        const auto row=(QByteArray::fromHex("00000040").repeated(8*3)+
+                        QByteArray::fromHex("00008040").repeated(8*3)).repeated(16);
+        QCOMPARE(source.write(row),qint64(row.size()));
+        source.close();
+        const auto jxl=directory+"/hdr.jxl";
+        Options options;
+        options.mode=Mode::process;
+        options.target=Target::jxl_pq;
+        convert(pfm,pathFromQt(jxl),options);
+        QVERIFY(inspect(pathFromQt(jxl)).hdr);
+
+        const AnimationEncoding webp{AnimationFormat::webp,AnimationTransfer::sdr,16,16,8,1,1000000};
+        const AnimationPlacement placement;
+        options.sdr_tone_mapper=SdrToneMapper::reinhard;
+        options.sdr_tone_map=true;
+        const auto sdr=AnimationImageRenderer::render(pathFromQt(jpeg),options,webp,placement,{});
+        QVERIFY(sdr.rgba.empty());
+        QCOMPARE(sdr.rgba8.size(),size_t(16*16*4));
+        auto hdr=AnimationImageRenderer::render(pathFromQt(jxl),options,webp,placement,{});
+        QVERIFY(hdr.rgba8.empty());
+        std::vector<float> stack;
+        const auto mapped=compose_animation_frame(std::move(hdr),webp,placement,options,stack);
+        options.sdr_tone_map=false;
+        hdr=AnimationImageRenderer::render(pathFromQt(jxl),options,webp,placement,{});
+        const auto clipped=compose_animation_frame(std::move(hdr),webp,placement,options,stack);
+        QVERIFY(mapped[0]<clipped[0]);
+
+        auto video=webp;
+        video.video=true;
+        QVERIFY(AnimationImageRenderer::render(pathFromQt(jpeg),options,video,placement,{}).rgba.empty());
+        video.transfer=AnimationTransfer::pq;
+        video.primaries=9;
+        QVERIFY(AnimationImageRenderer::render(pathFromQt(jpeg),options,video,placement,{}).rgba8.empty());
+
+        options.sdr_tone_map=true;
+        AnimationOutput target;
+        target.inputs={jpeg,jxl};
+        const auto output=directory+"/mixed.webp";
+        QVERIFY(!convertAnimation(pathFromQt(output),options,target,[]{return false;},[](int){}));
+        QFile encoded(output);
+        QVERIFY(encoded.open(QIODevice::ReadOnly));
+        QCOMPARE(encoded.readAll().count("ANMF"),2);
+    }
     void animationFramePlacement() {
         using namespace jxrc;
         const AnimationEncoding layout{AnimationFormat::jxl,AnimationTransfer::linear,4,2,16,1,1000000};
@@ -1659,7 +1712,7 @@ private slots:
         AnimationPlacement placement;
         std::vector<float> background;
         const auto compose=[&](unsigned width,unsigned height,std::vector<float> rgba) {
-            return compose_animation_frame({width,height,1,std::move(rgba)},layout,placement,options,background);
+            return compose_animation_frame({width,height,1,std::move(rgba),{}},layout,placement,options,background);
         };
         placement.resize=AnimationResize::fit_up;
         const auto enlarged=compose(2,1,{1,0,0,1, 0,0,1,0});

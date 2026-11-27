@@ -291,6 +291,16 @@ double animation_offset(unsigned canvas,double frame,unsigned align) {
     const double gap=double(canvas)-frame;
     return std::copysign(std::floor(std::abs(gap)*align/2.),gap);
 }
+
+bool animation_flattens_alpha(const AnimationEncoding& format,const Options& o) {
+    return format.video||o.transparency_background==TransparencyBackground::black_remove_alpha||
+           o.transparency_background==TransparencyBackground::white_remove_alpha;
+}
+
+bool animation_white_background(const AnimationEncoding& format,const Options& o) {
+    return o.transparency_background==TransparencyBackground::white_remove_alpha||
+           (format.video&&o.transparency_background==TransparencyBackground::white);
+}
 }
 
 std::vector<float> compose_animation_frame(AnimationFrame&& frame, const AnimationEncoding& format,
@@ -327,10 +337,8 @@ std::vector<float> compose_animation_frame(AnimationFrame&& frame, const Animati
     const bool updateStack=stacking&&(stack.empty()||placement.stack==AnimationStack::previous);
     if(stacking&&stack.empty())stack.resize(count*4);
 
-    const bool flatten=format.video||o.transparency_background==TransparencyBackground::black_remove_alpha||
-                       o.transparency_background==TransparencyBackground::white_remove_alpha;
-    const bool white=o.transparency_background==TransparencyBackground::white_remove_alpha||
-                     (format.video&&o.transparency_background==TransparencyBackground::white);
+    const bool flatten=animation_flattens_alpha(format,o);
+    const bool white=animation_white_background(format,o);
     const auto gamut=format.primaries==9?UHDR_CG_BT_2100:UHDR_CG_BT_709;
     const auto fromXyz=skiv::inverse(matrix(format.primaries));
     const auto& toXyz=matrix(frame.primaries);
@@ -398,6 +406,39 @@ std::vector<float> compose_animation_frame(AnimationFrame&& frame, const Animati
 std::vector<uint8_t> animation_rgba8(const std::vector<float>& pixels) {
     std::vector<uint8_t> result(pixels.size());
     std::transform(pixels.begin(),pixels.end(),result.begin(),[](float v){return uint8_t(std::lround(unit(v)*255.f));});
+    return result;
+}
+
+std::vector<uint8_t> place_animation_rgba8(AnimationFrame&& frame, const AnimationEncoding& format,
+                                         const AnimationPlacement& placement,const Options& o) {
+    require(fits_working_image(format.width,format.height)&&frame.width<=format.width&&frame.height<=format.height,
+            "Invalid animation frame or canvas size.");
+    if(frame.width==format.width&&frame.height==format.height)return std::move(frame.rgba8);
+    const bool flatten=animation_flattens_alpha(format,o);
+    const bool white=animation_white_background(format,o);
+    std::vector<uint8_t> canvas(size_t(format.width)*format.height*4,flatten&&white?255:0);
+    if(flatten&&!white)for(size_t i=3;i<canvas.size();i+=4)canvas[i]=255;
+    const auto left=unsigned(animation_offset(format.width,frame.width,placement.horizontal));
+    const auto top=unsigned(animation_offset(format.height,frame.height,placement.vertical));
+    const auto stride=size_t(frame.width)*4;
+    for(unsigned row=0;row<frame.height;++row)
+        std::copy_n(frame.rgba8.data()+row*stride,stride,canvas.data()+(size_t(top+row)*format.width+left)*4);
+    return canvas;
+}
+
+std::vector<uint16_t> animation_bt709_rgba16(const std::vector<uint8_t>& pixels) {
+    // The video pipe is RGB16 with a BT.709 transfer. Convert sRGB codes
+    // through a lookup table while keeping the frame in integer buffers.
+    static const auto bt709=[] {
+        std::array<uint16_t,256> table{};
+        for(unsigned i=0;i<table.size();++i)table[i]=uint16_t(std::lround(bt709_oetf(srgb_eotf(i/255.f))*65535.f));
+        return table;
+    }();
+    std::vector<uint16_t> result(pixels.size());
+    for(size_t i=0;i<pixels.size();i+=4) {
+        for(unsigned c=0;c<3;++c)result[i+c]=bt709[pixels[i+c]];
+        result[i+3]=uint16_t(pixels[i+3])*257;
+    }
     return result;
 }
 
@@ -554,18 +595,8 @@ struct AnimationEncoder::Impl {
     void add(const std::vector<float>& pixels) {
         if(png)png->add(animation_rgba16(pixels));
         else if(webp) {
-            WebPConfig settings{};
-            require(WebPConfigInit(&settings)!=0,"Cannot initialize WebP compression.");
-            settings.lossless=quality.webp()==100;
-            settings.quality=settings.lossless?75.f:float(quality.webp());
-            WebPPixels frame;
-            frame.picture.use_argb=settings.lossless;
-            frame.picture.width=int(format.width);
-            frame.picture.height=int(format.height);
-            const auto rgba=animation_rgba8(pixels);
-            require(WebPPictureImportRGBA(&frame.picture,rgba.data(),int(format.width)*4)!=0,"Cannot import WebP frame.");
-            if(!WebPAnimEncoderAdd(webp.get(),&frame.picture,webpTime(),&settings))
-                throw std::runtime_error(WebPAnimEncoderGetError(webp.get()));
+            add(animation_rgba8(pixels));
+            return;
         } else if(avif) {
             avifRGBImage rgb;
             avifRGBImageSetDefaults(&rgb,image.get());
@@ -612,6 +643,22 @@ struct AnimationEncoder::Impl {
         ++frames;
     }
 
+    void add(const std::vector<uint8_t>& rgba) {
+        require(bool(webp),"Byte frames require WebP animation output.");
+        WebPConfig settings{};
+        require(WebPConfigInit(&settings)!=0,"Cannot initialize WebP compression.");
+        settings.lossless=quality.webp()==100;
+        settings.quality=settings.lossless?75.f:float(quality.webp());
+        WebPPixels frame;
+        frame.picture.use_argb=settings.lossless;
+        frame.picture.width=int(format.width);
+        frame.picture.height=int(format.height);
+        require(WebPPictureImportRGBA(&frame.picture,rgba.data(),int(format.width)*4)!=0,"Cannot import WebP frame.");
+        if(!WebPAnimEncoderAdd(webp.get(),&frame.picture,webpTime(),&settings))
+            throw std::runtime_error(WebPAnimEncoderGetError(webp.get()));
+        ++frames;
+    }
+
     void finish(const std::function<bool()>& cancelled) {
         require(frames>0,"No animation frames were decoded.");
         require(!cancelled(),"Animation conversion cancelled.");
@@ -638,6 +685,7 @@ AnimationEncoder::AnimationEncoder(const std::filesystem::path& path, const Anim
     : impl_(std::make_unique<Impl>(path,encoding,options)) {}
 AnimationEncoder::~AnimationEncoder()=default;
 void AnimationEncoder::add(const std::vector<float>& frame) {impl_->add(frame);}
+void AnimationEncoder::add(const std::vector<uint8_t>& frame) {impl_->add(frame);}
 void AnimationEncoder::finish(const std::function<bool()>& cancelled) {impl_->finish(cancelled);}
 
 }
