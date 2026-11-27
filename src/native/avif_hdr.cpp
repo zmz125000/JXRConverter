@@ -2,6 +2,9 @@
 #include "working_pixels.h"
 #include "render_analysis.h"
 #include "heif_decode.h"
+#include "animation_decode.h"
+#include "image_orientation.h"
+#include <stdexcept>
 #include "gain_map.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
 /*
@@ -388,14 +391,16 @@ template<class Sample>
 int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rgba,
                               unsigned& w, unsigned& h, int* out_has_gainmap,
                               int* out_transfer /* 16=PQ, 18=HLG, else other */,
-                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr,std::vector<float>* sdr=nullptr,bool base_only=false) {
+                              uhdr_color_gamut_t* out_cg, unsigned max_edge, std::vector<uint8_t>* out_exif = nullptr,std::vector<float>* sdr=nullptr,bool base_only=false,
+                              const AnimationFrameReader* frames=nullptr,const std::function<bool()>& cancelled={}) {
     if (out_exif) out_exif->clear();
     if (out_has_gainmap) *out_has_gainmap = 0;
     if (out_transfer) *out_transfer = 0;
     if (out_cg) *out_cg = UHDR_CG_BT_709;
     if (!data || len == 0) return -1;
 
-    avifDecoder* dec = avifDecoderCreate();
+    std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> decoder(avifDecoderCreate(),avifDecoderDestroy);
+    auto* dec=decoder.get();
     if (!dec) return -2;
     dec->imageSizeLimit = AVIF_DEFAULT_IMAGE_SIZE_LIMIT;
     dec->imageDimensionLimit = 0;
@@ -408,7 +413,6 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     avifResult r = avifDecoderSetIOMemory(dec, data, len);
     if (r != AVIF_RESULT_OK) {
         ALOGE("avifDecoderSetIOMemory: %s", avifResultToString(r));
-        avifDecoderDestroy(dec);
         return -3;
     }
     r = avifDecoderParse(dec);
@@ -419,7 +423,6 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
     }
     if (r != AVIF_RESULT_OK) {
         ALOGE("avifDecoderParse: %s", avifResultToString(r));
-        avifDecoderDestroy(dec);
         return -4;
     }
     if (out_exif && dec->image && dec->image->exif.data && dec->image->exif.size <= 1024 * 1024) {
@@ -430,24 +433,53 @@ int decode_avif_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_r
         }
     }
 
-    r = avifDecoderNextImage(dec);
-    if (r != AVIF_RESULT_OK) {
-        ALOGE("avifDecoderNextImage: %s", avifResultToString(r));
-        avifDecoderDestroy(dec);
-        return -5;
-    }
-
-    if(base_only&&dec->image->gainMap) {avifGainMapDestroy(dec->image->gainMap);dec->image->gainMap=nullptr;}
-    const int result=linearize_avif_image(dec->image,out_rgba,w,h,out_has_gainmap,out_transfer,out_cg,max_edge,sdr);
-    if(result==0 && max_edge && std::max(w,h)>max_edge) {
-        if constexpr(std::is_same_v<Sample,float>)scale_rgba_f32_max_edge(out_rgba,w,h,max_edge);
-        else scale_rgba_f16_max_edge(out_rgba,w,h,max_edge);
-    }
-    avifDecoderDestroy(dec);return result;
+    do {
+        if(cancelled&&cancelled())throw std::runtime_error("Animation decode cancelled");
+        r=avifDecoderNextImage(dec);
+        if(frames&&r==AVIF_RESULT_NO_IMAGES_REMAINING&&dec->imageIndex>=0)return 0;
+        if(r!=AVIF_RESULT_OK) {
+            ALOGE("avifDecoderNextImage: %s",avifResultToString(r));
+            return -5;
+        }
+        if(base_only&&dec->image->gainMap) {
+            avifGainMapDestroy(dec->image->gainMap);
+            dec->image->gainMap=nullptr;
+        }
+        const int result=linearize_avif_image(dec->image,out_rgba,w,h,out_has_gainmap,out_transfer,out_cg,max_edge,sdr);
+        if(result!=0)return result;
+        if(max_edge&&std::max(w,h)>max_edge) {
+            if constexpr(std::is_same_v<Sample,float>)scale_rgba_f32_max_edge(out_rgba,w,h,max_edge);
+            else scale_rgba_f16_max_edge(out_rgba,w,h,max_edge);
+        }
+        if(!frames)return 0;
+        if constexpr(std::is_same_v<Sample,float>) {
+            RegularImage image;
+            image.format="AVIF";image.width=w;image.height=h;image.bits=dec->image->depth;
+            image.floating_pixels=std::move(out_rgba);
+            if(out_exif)image.exif=*out_exif;
+            (*frames)({std::move(image),out_cg?*out_cg:UHDR_CG_BT_709});
+        }
+    } while(true);
 }
 
 }  // namespace
 
+
+int decode_avif_animation(const uint8_t* data,size_t size,const AnimationFrameReader& frames,
+                          const std::function<bool()>& cancelled) {
+    std::vector<float> rgba;
+    std::vector<uint8_t> exif;
+    unsigned w=0,h=0;
+    uhdr_color_gamut_t gamut;
+    const int orientation=source_orientation(data,size,1,nullptr);
+    if(orientation<1||orientation>8)return -6;
+    const AnimationFrameReader oriented=[&](DecodedAnimationFrame&& frame) {
+        auto& image=frame.image;
+        orient_image(image.floating_pixels,image.width,image.height,orientation);
+        frames(std::move(frame));
+    };
+    return decode_avif_impl(data,size,rgba,w,h,nullptr,nullptr,&gamut,0,&exif,nullptr,false,&oriented,cancelled);
+}
 
 int decode_avif_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16_t>& rgba,unsigned& w,unsigned& h,
     int* gain,int* transfer,uhdr_color_gamut_t* gamut,unsigned edge,std::vector<uint8_t>* exif) {

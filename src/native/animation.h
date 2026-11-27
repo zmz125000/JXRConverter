@@ -27,6 +27,12 @@ struct AnimationEncoding;
 struct AnimationImageRenderer {
     static JXRC_API AnimationFrame render(const std::filesystem::path&, const Options&, const AnimationEncoding&,
                                          const AnimationPlacement&, const std::function<bool()>& cancelled);
+    static JXRC_API void render_frames(const std::filesystem::path&, const Options&, const AnimationEncoding&,
+                                       const AnimationPlacement&, const std::function<void(AnimationFrame&&)>&,
+                                       const std::function<bool()>& cancelled);
+private:
+    static AnimationFrame render_frame(ConversionSession&, const Options&, const AnimationEncoding&,
+                                       const AnimationPlacement&, const std::function<bool()>&, ::DecodedAnimationFrame*);
 };
 
 struct AnimationEncoding {

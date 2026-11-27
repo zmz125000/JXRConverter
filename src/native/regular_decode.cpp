@@ -1,5 +1,6 @@
 #include "image_size.h"
 #include "regular_decode.h"
+#include "animation_decode.h"
 #include "linear_color_profile.h"
 #include "hdr_encode.h"
 #include <png.h>
@@ -79,14 +80,17 @@ void png_read(png_structp png, png_bytep out, png_size_t count) {
 // combinations) are recoverable. Keep libpng's fatal errors and strict CRC
 // validation, but do not turn a usable PNG into a failed thumbnail.
 void png_warning(png_structp, png_const_charp text) { std::fprintf(stderr,"PNG warning: %s\n",text); }
-RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false) {
+RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false,bool* animated=nullptr) {
     RegularImage image;image.format="PNG";
     bool saw_cicp=false,saw_idat=false;
     for(size_t at=8;at+12<=size;) {
         const auto* p=data+at;
         const uint32_t n=uint32_t(p[0])<<24 | uint32_t(p[1])<<16 | uint32_t(p[2])<<8 | p[3];
         check(n<=size-at-12,"Truncated PNG chunk");
-        check(std::memcmp(p+4,"acTL",4)!=0,"Animated PNG is not supported for still conversion");
+        if(!std::memcmp(p+4,"acTL",4)) {
+            check(metadata_only&&!saw_idat&&n==8,"Invalid PNG animation control");
+            if(animated)*animated=true;
+        }
         if(metadata_only&&!std::memcmp(p+4,"eXIf",4))copy_metadata(image.exif,p+8,n);
         if(!std::memcmp(p+4,"IDAT",4))saw_idat=true;
         if(!std::memcmp(p+4,"cICP",4)) {
@@ -157,15 +161,17 @@ RegularImage decode_png(const uint8_t* data,size_t size,bool metadata_only=false
     if(png_get_eXIf_1(png,info,&exif_size,&exif) || png_get_eXIf_1(png,end,&exif_size,&exif))copy_metadata(image.exif,exif,exif_size);
     image.orientation=regular_orientation(image.exif);return image;
 }
-RegularImage decode_webp(const uint8_t* data,size_t size) {
+RegularImage decode_webp(const uint8_t* data,size_t size,bool* animated=nullptr) {
     RegularImage image;image.format="WebP";
     WebPData input{data,size};
     std::unique_ptr<WebPDemuxer,decltype(&WebPDemuxDelete)> demux(WebPDemux(&input),WebPDemuxDelete);
     check(bool(demux),"Invalid WebP");image.width=WebPDemuxGetI(demux.get(),WEBP_FF_CANVAS_WIDTH);image.height=WebPDemuxGetI(demux.get(),WEBP_FF_CANVAS_HEIGHT);dimensions(image.width,image.height);
-    // A still converter must not silently discard animation frames.
-    check(!(WebPDemuxGetI(demux.get(),WEBP_FF_FORMAT_FLAGS)&ANIMATION_FLAG),"Animated WebP is not supported for still conversion");
-    image.pixels.resize(size_t(image.width)*image.height*4);
-    check(WebPDecodeRGBAInto(data,size,image.pixels.data(),image.pixels.size(),int(image.width*4))!=nullptr,"WebP decode failed");
+    if(animated)*animated=WebPDemuxGetI(demux.get(),WEBP_FF_FORMAT_FLAGS)&ANIMATION_FLAG;
+    else {
+        check(!(WebPDemuxGetI(demux.get(),WEBP_FF_FORMAT_FLAGS)&ANIMATION_FLAG),"Animated WebP requires frame decoding");
+        image.pixels.resize(size_t(image.width)*image.height*4);
+        check(WebPDecodeRGBAInto(data,size,image.pixels.data(),image.pixels.size(),int(image.width*4))!=nullptr,"WebP decode failed");
+    }
     for(const auto* chunk:{"ICCP","EXIF"}) {
         WebPChunkIterator it{};
         if(WebPDemuxGetChunk(demux.get(),chunk,1,&it)) {
@@ -291,21 +297,6 @@ RegularImage decode_tiff(const uint8_t* data,size_t size,bool metadata_only=fals
 }
 RegularImage decode_bitmap(const uint8_t* data,size_t size) {
     RegularImage image;image.format=data[0]=='B'?"BMP":"GIF";
-    if(image.format=="GIF") {
-        check(size>=13,"Truncated GIF");size_t at=13;unsigned frames=0;
-        if(data[10]&128)at+=size_t(3)<<(1+(data[10]&7));
-        auto subblocks=[&]{for(;;){check(at<size,"Truncated GIF block");const unsigned n=data[at++];if(!n)break;check(n<=size-at,"Truncated GIF block");at+=n;}};
-        while(at<size) {
-            const unsigned type=data[at++];if(type==0x3b)break;
-            if(type==0x21){check(at<size,"Truncated GIF extension");++at;subblocks();}
-            else if(type==0x2c) {
-                check(++frames==1,"Animated GIF is not supported for still conversion");
-                check(size-at>=9,"Truncated GIF image");const unsigned packed=data[at+8];at+=9;
-                if(packed&128)at+=size_t(3)<<(1+(packed&7));
-                check(at<size,"Truncated GIF palette");++at;subblocks();
-            } else throw std::runtime_error("Invalid GIF block");
-        }
-    }
     int w=0,h=0,channels=0;
     check(size<=size_t(std::numeric_limits<int>::max()) && stbi_info_from_memory(data,int(size),&w,&h,&channels),"Invalid bitmap header");
     dimensions(unsigned(w),unsigned(h));
@@ -355,7 +346,15 @@ RegularImage decode_regular(const uint8_t* data,size_t size) {
     if(signature(data,size,"\x89PNG\r\n\x1a\n",8))return decode_png(data,size);
     if(size>=12 && signature(data,size,"RIFF",4) && !std::memcmp(data+8,"WEBP",4))return decode_webp(data,size);
     if(tiff_signature(data,size))return decode_tiff(data,size);
-    if(signature(data,size,"BM",2) || signature(data,size,"GIF87a",6) || signature(data,size,"GIF89a",6))return decode_bitmap(data,size);
+    if(signature(data,size,"GIF87a",6)||signature(data,size,"GIF89a",6)) {
+        RegularImage image;
+        decode_raster_animation(data,size,[&](DecodedAnimationFrame&& frame) {
+            check(image.pixels.empty(),"Animated GIF requires frame decoding");
+            image=std::move(frame.image);
+        },false,{});
+        return image;
+    }
+    if(signature(data,size,"BM",2))return decode_bitmap(data,size);
     throw std::runtime_error("Unsupported regular image format");
 }
 jxrc::ImageInfo inspect_regular(const uint8_t* data,size_t size) {
@@ -363,7 +362,13 @@ jxrc::ImageInfo inspect_regular(const uint8_t* data,size_t size) {
     // decompress a full raster just to decide whether an HDR target accepts it.
     if(is_linear_image(data,size))return inspect_regular(decode_linear_image(data,size,true));
     if(tiff_signature(data,size))return inspect_regular(decode_tiff(data,size,true));
-    return inspect_regular(signature(data,size,"\x89PNG\r\n\x1a\n",8)?decode_png(data,size,true):decode_regular(data,size));
+    bool animated=false;
+    RegularImage image;
+    if(signature(data,size,"\x89PNG\r\n\x1a\n",8))image=decode_png(data,size,true,&animated);
+    else if(size>=12 && signature(data,size,"RIFF",4) && !std::memcmp(data+8,"WEBP",4))image=decode_webp(data,size,&animated);
+    else if(signature(data,size,"GIF87a",6)||signature(data,size,"GIF89a",6))return inspect_gif(data,size);
+    else return inspect_regular(decode_regular(data,size));
+    auto info=inspect_regular(image);info.animated=animated;return info;
 }
 jxrc::ImageInfo inspect_regular(const RegularImage& image) {
     jxrc::ImageInfo out;out.width=image.width;out.height=image.height;out.bits=image.bits;out.format=image.format;out.hdr=image.hdr();
@@ -418,4 +423,11 @@ void regular_to_linear(const RegularImage& image,std::vector<float>& pixels,uhdr
     const auto format=image.bits==8?skcms_PixelFormat_RGBA_8888:*reinterpret_cast<const uint8_t*>(&endian)?skcms_PixelFormat_RGBA_16161616LE:skcms_PixelFormat_RGBA_16161616BE;
     check(skcms_Transform(image.pixels.data(),format,skcms_AlphaFormat_Unpremul,&source,pixels.data(),skcms_PixelFormat_RGBA_ffff,skcms_AlphaFormat_Unpremul,&destination,size_t(image.width)*image.height),"Raster color transform failed");
     gamut=UHDR_CG_BT_2100;
+}
+
+RegularImage decode_png_frame(const uint8_t* data,size_t size) {return decode_png(data,size);}
+RegularImage decode_gif_patch(const uint8_t* data,size_t size) {return decode_bitmap(data,size);}
+RegularImage webp_metadata(const uint8_t* data,size_t size) {
+    bool animated=false;
+    return decode_webp(data,size,&animated);
 }

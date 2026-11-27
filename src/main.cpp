@@ -134,9 +134,14 @@ int run(const std::vector<std::string>& argv) {
     if(raw_custom&&!raw_mode)o.raw.hdr_mode=jxrc::RawHdrMode::custom;
     if(!target)throw std::invalid_argument("--target is required");
     if(custom) {if(preset&&o.quality.preset!=jxrc::Preset::custom)throw std::invalid_argument("Custom quality flags conflict with the selected preset");o.quality.preset=jxrc::Preset::custom;}
-    auto result=jxrc::convert(std::filesystem::u8path(argv[1]),std::filesystem::u8path(argv[2]),o);
+    jxrc::ConversionSession session(std::filesystem::u8path(argv[1]));
+    std::vector<std::filesystem::path> written;
+    const auto result=session.convert_frames(std::filesystem::u8path(argv[2]),o,false,{},
+        [&](const std::filesystem::path& path){written.push_back(path);});
     if(result.skipped){std::cout<<"Skipped existing output: "<<argv[2]<<'\n';return 0;}
-    std::cout<<result.width<<'x'<<result.height<<" "<<result.encoding<<" -> "<<argv[2]<<'\n';return 0;
+    for(const auto& path:written)
+        std::cout<<result.width<<'x'<<result.height<<" "<<result.encoding<<" -> "<<path.u8string()<<'\n';
+    return 0;
 }
 }
 #ifdef _WIN32

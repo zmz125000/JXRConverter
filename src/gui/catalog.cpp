@@ -63,7 +63,7 @@ Record fileRecord(const QString& path,const QFileInfo& info,bool video=false) {
 }
 }
 bool supportedFile(const QString& path) {
-    static const QSet<QString> extensions = {"exr","hdr","rgbe","xyze","pic","pfm","png","webp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
+    static const QSet<QString> extensions = {"exr","hdr","rgbe","xyze","pic","pfm","png","apng","webp","awebp","tif","tiff","bmp","gif","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","jxl","jxr","wdp","hdp","dng","cr2","cr3","crw","nef","nrw","arw","sr2","srf","raf","rw2","orf","ori","pef","ptx","rwl","srw","3fr","fff","iiq","kdc","dcr","mos","mrw","x3f","raw","erf","mef","mdc"};
     return extensions.contains(QFileInfo(path).suffix().toLower());
 }
 namespace {
@@ -127,7 +127,7 @@ Record metadataFromBytes(const QString& path,const SourceBuffer& source,const st
         r.transfer = QString::fromStdString(info.transfer); r.primaries = QString::fromStdString(info.primaries);
     } catch (const std::exception& e) {
         if (r.metadataWarning.isEmpty()) r.metadataWarning = QString::fromUtf8(e.what());
-        r.raw = !QSet<QString>{"EXR","HDR","RADIANCE","RGBE","XYZE","PIC","PFM","HEIC","HEIF","HEICS","HEIFS","HIF","PNG","WEBP","TIF","TIFF","BMP","GIF","JPG","JPEG","JPE","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
+        r.raw = !QSet<QString>{"EXR","HDR","RADIANCE","RGBE","XYZE","PIC","PFM","HEIC","HEIF","HEICS","HEIFS","HIF","PNG","APNG","WEBP","AWEBP","TIF","TIFF","BMP","GIF","JPG","JPEG","JPE","AVIF","JXL","JXR","WDP","HDP"}.contains(r.format);
     }
     r.inspected = true; return r;
 }

@@ -269,7 +269,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     catalog_->setBackgroundMetadata(false);
     auto* toolbar=addToolBar("Library");toolbar->setMovable(false);
     auto* files=toolbar->addAction("Add files…");connect(files,&QAction::triggered,this,[this]{addPaths(QFileDialog::getOpenFileNames(this,"Add images and videos",{},
-        "Images and videos (*.exr *.hdr *.rgbe *.xyze *.pic *.pfm *.png *.webp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.heics *.heifs *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw "+
+        "Images and videos (*.exr *.hdr *.rgbe *.xyze *.pic *.pfm *.png *.apng *.webp *.awebp *.tif *.tiff *.bmp *.gif *.jpg *.jpeg *.avif *.heic *.heif *.heics *.heifs *.hif *.jxl *.jxr *.wdp *.hdp *.dng *.cr2 *.cr3 *.nef *.arw *.raf *.rw2 *.orf *.pef *.raw "+
         videoFilePatterns()+");;All files (*)"));});
     auto* folder=toolbar->addAction("Open folder…");connect(folder,&QAction::triggered,this,[this]{const auto path=QFileDialog::getExistingDirectory(this,"Open media folder");if(!path.isEmpty())addPaths({path});});
     loadHistory();
@@ -431,7 +431,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     startButtons->addWidget(selected_,1);outputLayout->addLayout(startButtons);
     auto* outputScroll=new QScrollArea;outputScroll->setObjectName("outputQueueScroll");outputScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOn);outputScroll->setWidgetResizable(true);outputScroll->setFrameShape(QFrame::NoFrame);outputScroll->setWidget(queuePanel_);outputScroll->setFixedHeight(330);outputLayout->addWidget(outputScroll);
     auto* progressFrame=new QWidget;auto* progressLayout=new QVBoxLayout(progressFrame);progressLayout->setContentsMargins(14,6,0,10);auto* progressRow=new QHBoxLayout;progressRow->setSpacing(0);progressRow->addWidget(progress_,1,Qt::AlignBottom);
-    progressStop_=new HeightMatchedButton("×",progress_);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop active video and animation conversions and pending outputs. Active image conversions finish.");progressStop_->setFixedWidth(28);progressStop_->hide();
+    progressStop_=new HeightMatchedButton("×",progress_);progressStop_->setObjectName("stopProgress");progressStop_->setAccessibleName("Stop queue");progressStop_->setToolTip("Stop pending outputs and active video or animation conversions.");progressStop_->setFixedWidth(28);progressStop_->hide();
     // Match the queue group's side padding and scrollbar gutter. Keep the
     // stop-button slot reserved so the bar keeps these edges while running.
     auto* stopSlot=new QWidget;stopSlot->setFixedWidth(14+outputScroll->verticalScrollBar()->sizeHint().width());auto* stopLayout=new QHBoxLayout(stopSlot);stopLayout->setContentsMargins(0,0,0,0);stopLayout->addWidget(progressStop_,0,Qt::AlignRight);progressRow->addWidget(stopSlot,0,Qt::AlignBottom);progressLayout->addLayout(progressRow);
@@ -888,7 +888,7 @@ QWidget* MainWindow::buildAnimationControls() {
     animationFormat_->setCurrentIndex(int(AnimationOutput{}.format));
     animationTransfer_=combo({"SDR","HDR · PQ","HDR · HLG","HDR · Linear JXL","HDR · scRGB JXL"},"animationTransfer");
     animationRate_=real(.001,1000,1000000./AnimationOutput{}.delayUs,.1,"animationFrameRate");
-    animationRate_->setToolTip("Frame rate in Hz, or the time one frame stays on screen in milliseconds.");
+    animationRate_->setToolTip("Frame rate in Hz, or the time one frame stays on screen in milliseconds. Applies to each frame from animated images.");
     animationMilliseconds_=check("Milliseconds","animationMilliseconds");
     animationSlowMotion_=check("Slow motion","animationSlowMotion");
     animationSlowMotion_->setToolTip("Keep every decoded video frame and play it at the chosen rate. At 1 Hz, one second of 24 Hz video becomes 24 seconds.");
@@ -1385,7 +1385,7 @@ QWidget* MainWindow::buildControls() {
     connect(renameConflicts_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
     const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");connect(workers_,&QSpinBox::valueChanged,this,[this](int value){outputProfiles_[videoQueueProfile_].parallelJobs=value;});auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
-    selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue");cancel_->setObjectName("cancelQueue");cancel_->setToolTip("Stop active video and animation conversions and pending outputs. Active image conversions finish.");
+    selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue");cancel_->setObjectName("cancelQueue");cancel_->setToolTip("Stop pending outputs and active video or animation conversions.");
     visible_->setToolTip("Convert all visible files. Fewer than 5 images share this session’s Quick job. Inside Jobs, rerun the current job.");selected_->setToolTip("Selections of 1–4 images share this session’s Quick job. Inside Jobs, rerun the current job.");
     // Start actions are placed outside the collapsible output settings.
     queueLayout->addWidget(cancel_);progress_=new QProgressBar;progress_->setObjectName("conversionProgress");progress_->setFormat("%p% (%v/%m)");progress_->setRange(0,1);progress_->setValue(0);queueLayout->addWidget(progress_);queueState_=new QLabel("Ready");queueState_->setWordWrap(true);queueLayout->addWidget(queueState_);layout->addStretch();
@@ -2136,13 +2136,18 @@ bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
                         // All possible targets can be skipped. Use the
                         // requested HDR target to report the conflict.
                         info.hdr=true;
-                    } else try {
+                    }
+                    if(!conflicts.contains(path)||mayBeAnimatedImage(path))try {
 #ifdef _WIN32
                         const auto source=inspect(std::filesystem::path(path.toStdWString()),[token]{return !token->load();});
 #else
                         const auto source=inspect(std::filesystem::u8path(path.toUtf8().constData()),[token]{return !token->load();});
 #endif
-                        info.hdr=source.raw||source.format=="JXR"||source.hdr||source.transfer=="Linear";info.gainmap=source.gainmap;
+                        if(source.animated)conflicts.remove(path);
+                        if(!conflicts.contains(path)) {
+                            info.hdr=source.raw||source.format=="JXR"||source.hdr||source.transfer=="Linear";
+                            info.gainmap=source.gainmap;
+                        }
                     }catch(const std::exception& e){info.error=QString::fromUtf8(e.what());}
                     catch(...){info.error="Unknown source inspection failure";}
                     prepared->insert(path,info);

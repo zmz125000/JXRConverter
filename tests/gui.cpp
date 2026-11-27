@@ -422,13 +422,20 @@ private slots:
             QByteArray out;put32(out,quint32(payload.size()));out.append(type,4);out+=payload;
             quint32 crc=~0u;for(int i=4;i<out.size();++i){crc^=quint8(out[i]);for(int bit=0;bit<8;++bit)crc=(crc>>1)^(0xedb88320u&quint32(-int(crc&1)));}put32(out,~crc);return out;
         };
-        // A valid one-frame APNG: native still conversion rejects animation,
-        // while the GUI can display the PNG's first frame from the same bytes.
+        // Unsupported CICP exercises the Qt fallback. A valid one-frame APNG
+        // should instead produce its thumbnail through the native path.
+        const auto fallbackBytes=bytes.left(33)+chunk("cICP",QByteArray::fromHex("02020001"))+bytes.mid(33);
+        QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::Truncate));
+        QCOMPARE(file.write(fallbackBytes),qint64(fallbackBytes.size()));file.close();
+        const auto nativePath=std::filesystem::u8path(path.toUtf8().constData());
+        QVERIFY_EXCEPTION_THROWN(jxrc::preview(nativePath,32),std::runtime_error);
+        QCOMPARE(readThumbnail(path,32).size(),QSize(32,16));
         QByteArray actl;put32(actl,1);put32(actl,0);
         QByteArray fctl;put32(fctl,0);put32(fctl,96);put32(fctl,48);put32(fctl,0);put32(fctl,0);fctl.append(QByteArray::fromHex("0001000a0000"));
         bytes.insert(33,chunk("acTL",actl)+chunk("fcTL",fctl));
         QVERIFY(file.open(QIODevice::WriteOnly|QIODevice::Truncate));QCOMPARE(file.write(bytes),qint64(bytes.size()));file.close();
-        QVERIFY_EXCEPTION_THROWN(jxrc::preview(std::filesystem::u8path(path.toUtf8().constData()),32),std::runtime_error);
+        QVERIFY(jxrc::inspect(nativePath).animated);
+        QCOMPARE(jxrc::preview(nativePath,32).width,32u);
         Record metadata;const auto thumb=readThumbnail(path,32,{},&metadata);
         QCOMPARE(thumb.size(),QSize(32,16));QCOMPARE(thumb.format(),QImage::Format_RGBA8888);
         QCOMPARE(metadata.width,96);QCOMPARE(metadata.height,48);QVERIFY(!metadata.raw);
@@ -1674,6 +1681,105 @@ private slots:
         QFile webp(written.last().at(2).toString());
         QVERIFY(webp.open(QIODevice::ReadOnly));
         QCOMPARE(webp.readAll().count("ANMF"),2);
+    }
+    void animatedImageInputs_data() {
+        using namespace jxrc;
+        QTest::addColumn<int>("inputFormat");
+        QTest::addColumn<bool>("hdr");
+        QTest::newRow("gif")<<int(AnimationFormat::gif)<<false;
+        QTest::newRow("webp")<<int(AnimationFormat::webp)<<false;
+        QTest::newRow("png-pq")<<int(AnimationFormat::png)<<true;
+        QTest::newRow("jxl-pq")<<int(AnimationFormat::jxl)<<true;
+        QTest::newRow("avif-pq")<<int(AnimationFormat::avif)<<true;
+    }
+    void animatedImageInputs() {
+        using namespace jxrc;
+        QFETCH(int,inputFormat);
+        QFETCH(bool,hdr);
+        const auto format=AnimationFormat(inputFormat);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path=[](const QString& value){return std::filesystem::u8path(value.toUtf8().constData());};
+        Options options;
+        options.mode=Mode::process;
+        options.quality.preset=Preset::lossless;
+        options.target=hdr?Target::png_hdr:Target::png;
+        AnimationOutput source;
+        source.format=format;
+        source.transfer=hdr?AnimationTransfer::pq:AnimationTransfer::sdr;
+        source.delayUs=100000;
+        auto sourceFile=directory.filePath("animated."+animationExtension(source));
+        if(format==AnimationFormat::gif) {
+            // Two rects use restore-to-previous and keep. The third displayed
+            // frame must have the transparent region restored at x=1.
+            QFile file(sourceFile);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            const auto gif=QByteArray::fromHex(
+                "47494638396102000100810000"
+                "000000ff000000ff000000ff"
+                "21f904050a0000002c00000000010001000002024c0100"
+                "21f9040d0a0000002c0100000001000100000202540100"
+                "21f904050a0000002c00000000010001000002025c0100"
+                "3b");
+            QCOMPARE(file.write(gif),qint64(gif.size()));
+        } else {
+            for(const auto color:{Qt::red,Qt::green,Qt::blue}) {
+                QImage image(16,16,QImage::Format_RGBA8888);
+                image.fill(color);
+                const auto frame=directory.filePath(QString("%1.png").arg(source.inputs.size()));
+                QVERIFY(image.save(frame));
+                source.inputs.append(frame);
+            }
+            QVERIFY(!convertAnimation(path(sourceFile),options,source,[]{return false;},[](int){}));
+        }
+        const auto info=inspect(path(sourceFile));
+        QVERIFY(info.animated);
+        QCOMPARE(info.hdr,hdr);
+        const auto thumb=readThumbnail(sourceFile,16);
+        QVERIFY(!thumb.isNull());
+        QCOMPARE(thumb.width(),int(info.width));
+        const auto first=thumb.pixelColor(0,0);
+        QVERIFY(first.red()>first.green()&&first.red()>first.blue());
+
+        const auto output=directory.filePath("still.png");
+        ConversionQueue queue;
+        QSignalSpy done(&queue,&ConversionQueue::batchFinished);
+        queue.start({{sourceFile,output,options}},1,2);
+        QTRY_COMPARE(done.count(),1);
+        QCOMPARE(done.last()[0].toInt(),1);
+        QVERIFY(!QFileInfo::exists(output));
+        for(int i=0;i<3;++i) {
+            const auto still=directory.filePath(QString("still_frame_%1.png").arg(i+1,6,10,QChar('0')));
+            const auto frameInfo=inspect(path(still));
+            QVERIFY(!frameInfo.animated);
+            QCOMPARE(frameInfo.hdr,hdr);
+            const auto image=readThumbnail(still,16);
+            QVERIFY(!image.isNull());
+            if(format==AnimationFormat::gif&&i==1) {
+                QVERIFY(image.pixelColor(1,0).green()>220);
+                QVERIFY(image.pixelColor(0,0).red()>220);
+            } else {
+                const auto color=image.pixelColor(0,0);
+                const int rgb[]={color.red(),color.green(),color.blue()};
+                QVERIFY(rgb[i]>rgb[(i+1)%3]&&rgb[i]>rgb[(i+2)%3]);
+                if(format==AnimationFormat::gif)QCOMPARE(image.pixelColor(1,0).alpha(),0);
+            }
+        }
+        queue.start({{sourceFile,output,options}},1,2);
+        QTRY_COMPARE(done.count(),2);
+        QCOMPARE(queue.skipped(),1);
+
+        AnimationOutput combined;
+        combined.format=AnimationFormat::png;
+        combined.inputs={sourceFile,sourceFile};
+        combined.delayUs=250000;
+        const auto animated=directory.filePath("combined.png");
+        QVERIFY(!convertAnimation(path(animated),options,combined,[]{return false;},[](int){}));
+        QFile file(animated);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const auto bytes=file.readAll();
+        QVERIFY(bytes.contains(QByteArray::fromHex("6163544c0000000600000000")));
+        QVERIFY(bytes.contains(QByteArray::fromHex("000100040000"))); // 1/4 s per frame.
     }
     void animationMixedSdrAndHdrFrames() {
         using namespace jxrc;

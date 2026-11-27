@@ -935,7 +935,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         };
         try {
             if(!source.isVideo()) {
-                addFrame(AnimationImageRenderer::render(pathFromQt(source.path),renderOptions,encoding,placement,cancelled));
+                AnimationImageRenderer::render_frames(pathFromQt(source.path),renderOptions,encoding,placement,addFrame,cancelled);
             } else {
                 auto stream=source.video;
                 const VideoColor color{sourcePrimaries(stream),sourceTransfer(stream)};

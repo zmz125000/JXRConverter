@@ -14,11 +14,12 @@
 #include <optional>
 
 namespace jxrc::gui {
-struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; bool skip_existing = false; std::optional<VideoOutput> video = {}; std::optional<AnimationOutput> animation = {}; int parallelism = 1; };
+struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; bool skip_existing = false; std::optional<VideoOutput> video = {}; std::optional<AnimationOutput> animation = {}; int parallelism = 1; bool rename_frame_conflicts = false; };
 int coreCount();
 int recommendedWorkers(int cores);
 bool hdrInput(const QString& path);
 bool needsHdrInspection(const QString& path);
+bool mayBeAnimatedImage(const QString& path);
 bool mayHaveGainMap(const QString& path);
 bool gainMapInput(const QString& path);
 QString outputDateFolder();
@@ -75,7 +76,7 @@ private:
     void cancelPendingMatching(const QSet<QString>* inputs, qint64 batch = -1);
     void recordPending(const Job&);
     void updateJobStatus(const Job&, const QString& state);
-    void finishFile(const Job&, const QString& error, bool cancelled, bool skipped = false);
+    void finishFile(const Job&, const QString& error, bool cancelled, bool skipped = false, const QString& actualOutput = {});
     void finishInput(const QString&, const QString& output, const QString& error, bool cancelled, bool skipped);
     QVector<Job> jobs_;
     int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, skipped_ = 0;

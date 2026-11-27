@@ -1,6 +1,7 @@
 #include "native/image_orientation.h"
 #include "native/image_size.h"
 #include "native/animation.h"
+#include "native/animation_decode.h"
 #include "jxrc/converter.hpp"
 #include "jxrc/version.hpp"
 #include "reader_pixels.h"
@@ -171,7 +172,8 @@ struct ConversionSession::Impl {
     bool half_jxr=false,scrgb=false,integer_sdr=false,gainmap=false,source_hdr=false;
     uhdr_color_gamut_t gamut=UHDR_CG_BT_709;
     int format=-1;
-    bool ready=false;
+    bool ready=false,animated=false;
+    std::string source_transfer;
     Options previous;
 };
 namespace {
@@ -222,11 +224,128 @@ Result convert(const std::filesystem::path& input,const std::filesystem::path& o
     return ConversionSession(input).convert(output,o);
 }
 Result ConversionSession::convert(const std::filesystem::path& output,const Options& o) {
-    return run(output,o,nullptr,{});
+    return convert_frames(output,o,false,{},{});
 }
+
+void ConversionSession::load(const std::function<bool()>& cancelled) {
+    auto& cache=*impl_;
+    if(cache.format>=0)return;
+    require(std::filesystem::is_regular_file(cache.input),"Input must be a regular file");
+    auto source=read(cache.input,cancelled);
+    const int format=kind(source);
+    const bool sequence_capable_raster=format==6&&
+        ((source.size()>=6&&!std::memcmp(source.data(),"GIF",3))||
+         (source.size()>=12&&!std::memcmp(source.data()+8,"WEBP",4))||
+         (source.size()>=8&&!std::memcmp(source.data(),"\x89PNG\r\n\x1a\n",8)));
+    if(format!=5&&(format!=6||sequence_capable_raster)) {
+        const auto info=inspect_bytes(source);
+        cache.gainmap=info.gainmap;cache.source_hdr=info.hdr;cache.bits=info.bits;
+        cache.input_width=info.width;cache.input_height=info.height;
+        cache.half_jxr=format==4&&info.hdr&&info.bits==16;
+        cache.animated=info.animated;cache.source_transfer=info.transfer;
+        cache.integer_sdr=!info.hdr&&(format==0||format==1||format==7||
+            (format==3&&!info.animated&&is_integer_jxl(source.data(),source.size())));
+    }
+    cache.bytes=std::move(source);cache.format=format;
+}
+
+void ConversionSession::read_frames(const Options& o,const AnimationFrameReader& frame,
+                                    const std::function<bool()>& cancelled) {
+    const auto& cache=*impl_;const auto& bytes=cache.bytes;
+    JxrcThreadBudget budget(o.threads);
+    if(cache.format==6) {
+        require(decode_raster_animation(bytes.data(),bytes.size(),frame,false,cancelled),"Unsupported raster animation");
+        return;
+    }
+    const int rc=cache.format==1?decode_avif_animation(bytes.data(),bytes.size(),frame,cancelled):
+        decode_jxl_animation(bytes.data(),bytes.size(),
+            is_scrgb_jxl(bytes.data(),bytes.size())?convert_gamut(o):(o.extended_bt2020&&!o.srgb_clamp),frame,cancelled);
+    require(rc==0,"Animation decode failed (codec "+std::to_string(rc)+")");
+}
+
+Result ConversionSession::convert_frames(const std::filesystem::path& output,const Options& o,bool rename_conflicts,
+                                          const std::function<bool()>& cancelled,
+                                          const std::function<void(const std::filesystem::path&)>& published) {
+    validate(o);
+    require(!output.empty(),"Empty output path");
+    load(cancelled);
+    if(!impl_->animated) {
+        const auto result=run(output,o,nullptr,cancelled);
+        if(published&&!result.skipped)published(output);
+        return result;
+    }
+
+    auto frame_options=o;
+    if(o.mode==Mode::preserve) {
+        // Coalesced JXL/AVIF frames and blended APNG frames may need encoding
+        // from linear working pixels. Retain the source transfer when possible.
+        const bool pq=impl_->source_transfer=="PQ",hlg=impl_->source_transfer=="HLG";
+        if(impl_->source_hdr) {
+            require(o.target==Target::png||o.target==Target::jxl||o.target==Target::avif||linear_jxl(o.target),
+                "This target cannot preserve the animated HDR source; use Process pixels mode");
+            if(o.target==Target::jxl)
+                frame_options.target=pq?Target::jxl_pq:hlg?Target::jxl_hlg:Target::jxl_linear;
+            if(o.target==Target::png)frame_options.target=hlg?Target::png_hlg:Target::png_hdr;
+            if(o.target==Target::avif)frame_options.target=hlg?Target::avif_hlg:Target::avif_pq;
+        }
+        frame_options.mode=Mode::process;
+        frame_options.jpeg_transcoding=false;
+    }
+    Result first;
+    bool wrote=false;
+    unsigned index=0;
+    read_frames(frame_options,[&](DecodedAnimationFrame&& frame) {
+        if(cancelled&&cancelled())throw std::runtime_error("Animation conversion cancelled");
+        const auto number=std::to_string(++index);
+        auto stem=output.stem();
+        stem+="_frame_"+std::string(number.size()<6?6-number.size():0,'0')+number;
+        const auto path_for=[&](unsigned suffix) {
+            auto name=stem;
+            if(suffix>1)name+="_"+std::to_string(suffix);
+            name+=output.extension();
+            return output.parent_path()/name;
+        };
+        auto path=path_for(1);
+        if(rename_conflicts) {
+            unsigned suffix=2;
+            while(std::filesystem::exists(std::filesystem::symlink_status(path)))path=path_for(suffix++);
+        }
+        const auto result=run(path,frame_options,nullptr,cancelled,nullptr,&frame);
+        if(!wrote)first=result;
+        if(!result.skipped) {
+            wrote=true;
+            if(published)published(path);
+        }
+    },cancelled);
+    require(index!=0,"Animation contains no image frames");
+    return first;
+}
+
 AnimationFrame AnimationImageRenderer::render(const std::filesystem::path& input,const Options& options,
                                       const AnimationEncoding& encoding,const AnimationPlacement& placement,
                                       const std::function<bool()>& cancelled) {
+    ConversionSession session(input);
+    return render_frame(session,options,encoding,placement,cancelled,nullptr);
+}
+
+void AnimationImageRenderer::render_frames(const std::filesystem::path& input,const Options& options,
+                                           const AnimationEncoding& encoding,const AnimationPlacement& placement,
+                                           const std::function<void(AnimationFrame&&)>& consume,
+                                           const std::function<bool()>& cancelled) {
+    ConversionSession session(input);
+    session.load(cancelled);
+    if(!session.impl_->animated) {
+        consume(render_frame(session,options,encoding,placement,cancelled,nullptr));
+        return;
+    }
+    session.read_frames(options,[&](DecodedAnimationFrame&& frame) {
+        consume(render_frame(session,options,encoding,placement,cancelled,&frame));
+    },cancelled);
+}
+
+AnimationFrame AnimationImageRenderer::render_frame(ConversionSession& session,const Options& options,
+                                      const AnimationEncoding& encoding,const AnimationPlacement& placement,
+                                      const std::function<bool()>& cancelled,DecodedAnimationFrame* decoded) {
     auto o=options;
     o.mode=Mode::process;
     const bool sdr=encoding.transfer==AnimationTransfer::sdr;
@@ -239,27 +358,24 @@ AnimationFrame AnimationImageRenderer::render(const std::filesystem::path& input
     const bool direct=sdr&&(encoding.primaries==1||encoding.primaries==9)&&
         (encoding.video||encoding.format==AnimationFormat::gif||encoding.format==AnimationFormat::webp)&&
         placement.stack==AnimationStack::off&&placement.resize==AnimationResize::off;
-    ConversionSession(input).run({},o,&frame,cancelled,direct?&encoding:nullptr);
+    session.run({},o,&frame,cancelled,direct?&encoding:nullptr,decoded);
     return frame;
 }
 Result ConversionSession::run(const std::filesystem::path& output,const Options& o,AnimationFrame* frame,
-                              const std::function<bool()>& cancelled,const AnimationEncoding* direct_frame) {
+                              const std::function<bool()>& cancelled,const AnimationEncoding* direct_frame,DecodedAnimationFrame* decoded) {
     auto& cache=*impl_;const auto& input=cache.input;
 
     JxrcThreadBudget thread_budget(o.threads);
     validate(o);require(frame||!output.empty(),"Empty output path");
-    require(std::filesystem::is_regular_file(input),"Input must be a regular file");
     std::error_code ec;
     require(frame||!std::filesystem::equivalent(input,output,ec),"Input and output refer to the same file");
     if(!frame&&!o.overwrite && std::filesystem::exists(std::filesystem::symlink_status(output))) {
         Result skipped;skipped.skipped=true;return skipped;
     }
-    if(cache.format<0){
-        auto source=read(input,cancelled);const int format=kind(source);
-        if(format!=6 && format!=5){const auto info=inspect_bytes(source);cache.gainmap=info.gainmap;cache.source_hdr=info.hdr;cache.bits=info.bits;cache.input_width=info.width;cache.input_height=info.height;cache.half_jxr=format==4&&info.hdr&&info.bits==16;cache.integer_sdr=!info.hdr&&(format==0||format==1||format==7||(format==3&&is_integer_jxl(source.data(),source.size())));}
-        cache.bytes=std::move(source);cache.format=format;
-    }
-    const auto& bytes=cache.bytes;const int format=cache.format;
+    load(cancelled);
+    const auto& bytes=cache.bytes;
+    const int format=decoded?6:cache.format;
+    if(decoded)cache.ready=false;
     std::optional<Staging> stage;
     if(!frame)stage.emplace(output);
     const auto path=stage?stage->file.u8string():std::string{};
@@ -267,16 +383,18 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
     q.transparency_background_white=white_background(o);q.remove_alpha=remove_alpha(o);
     q.png_bits=o.quality.png_depth;q.png_auto_bits=o.quality.auto_bit_depth;
     q.gain_map_reconstruction=static_cast<int>(o.gain_map_reconstruction);
-    const bool full_gainmap=cache.gainmap&&o.gain_map_reconstruction==GainMapReconstruction::full_image;
+    const bool gainmap=!decoded&&cache.gainmap;
+    const bool source_hdr=decoded?(cache.source_hdr||decoded->image.hdr()):cache.source_hdr;
+    const bool full_gainmap=gainmap&&o.gain_map_reconstruction==GainMapReconstruction::full_image;
     if(full_gainmap)require(o.mode==Mode::process,"Full gain-map reconstruction requires Process pixels mode");
     const bool sdr_target=o.target==Target::jpeg||o.target==Target::jxl||o.target==Target::avif||o.target==Target::png||o.target==Target::webp;
-    const bool base_only=cache.gainmap&&!full_gainmap&&sdr_target;
+    const bool base_only=gainmap&&!full_gainmap&&sdr_target;
     const bool mpcvr=o.sdr_tone_mapper==SdrToneMapper::mpcvr;
     const bool tonal_controls=!mpcvr&&(o.sdr_tone_mapper==SdrToneMapper::skiv_manual||!skiv_tone_mapper(o.sdr_tone_mapper));
     const std::array<float,3> zones=tonal_controls?std::array<float,3>{
         o.sdr_shadows,o.sdr_auto_tone_curve?0.f:o.sdr_midtones,o.sdr_highlights}:std::array<float,3>{};
     const bool tonal_edits=o.sdr_tone_map&&zones!=std::array<float,3>{};
-    if(cache.gainmap&&!full_gainmap) {
+    if(gainmap&&!full_gainmap) {
         const bool source_target=sdr_target||o.target==Target::jpeg_gainmap||o.target==Target::avif_gainmap;
         // Off/Auto can edit the stored SDR base, but rebuilding a gain map
         // or producing an HDR target requires the complete reconstruction.
@@ -284,11 +402,17 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             "Select Full gain-map reconstruction for HDR output or pixel processing that retains the gain map");
     }
     Result result;
-    std::unique_ptr<RegularImage> regular;
+    std::optional<RegularImage> raster_storage;
+    auto* regular=decoded?&decoded->image:nullptr;
+    const auto load_regular=[&] {
+        if(regular)return;
+        raster_storage.emplace(format==0?decode_jpeg(bytes.data(),bytes.size()):decode_regular(bytes.data(),bytes.size()));
+        regular=&*raster_storage;
+    };
     // Match each source to the shared canvas independently. HDR elsewhere in
     // an SDR animation does not require linearizing a compatible SDR raster.
-    if(direct_frame&&!o.exposure&&!tonal_edits&&!cache.source_hdr&&!cache.gainmap&&(format==0||format==6)) {
-        regular=std::make_unique<RegularImage>(format==0?decode_jpeg(bytes.data(),bytes.size()):decode_regular(bytes.data(),bytes.size()));
+    if(direct_frame&&!o.exposure&&!tonal_edits&&!source_hdr&&!gainmap&&(format==0||format==6)) {
+        load_regular();
         const int orient=int(regular->orientation);
         const auto w=orient>=5?regular->height:regular->width;
         const auto h=orient>=5?regular->width:regular->height;
@@ -304,20 +428,20 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
     }
     bool direct_sdr=false;
     if(!frame && o.mode==Mode::process && sdr_target && !o.exposure && !o.max_edge && !o.srgb_clamp && !tonal_edits) {
-        if(format==6&&!cache.source_hdr) {
-            regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
-            cache.source_hdr=regular->hdr();direct_sdr=!cache.source_hdr;
-        } else direct_sdr=cache.integer_sdr;
+        if(format==6&&!source_hdr) {
+            load_regular();
+            direct_sdr=!regular->hdr()&&regular->floating_pixels.empty();
+        } else direct_sdr=!decoded&&cache.integer_sdr;
     }
     if(direct_sdr && format==1 && o.target==Target::avif && cache.bits>q.avif_depth())direct_sdr=false;
     // Off/Auto export the stored base to SDR/source targets, retaining an
     // existing map in JPEG/AVIF. Full renders HDR before encoding any target.
-    const bool direct_gainmap=cache.gainmap && !full_gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp &&
+    const bool direct_gainmap=gainmap && !full_gainmap && !o.exposure && !o.max_edge && !o.srgb_clamp &&
         !(base_only&&tonal_edits);
     const bool direct_jxl=format==3 && (linear_jxl(o.target) || (o.mode==Mode::preserve && o.target==Target::jxl)) &&
         !o.exposure && !o.max_edge && (!convert_gamut(o) || o.mode==Mode::preserve) && is_scrgb_jxl(bytes.data(),bytes.size());
     if(o.mode==Mode::preserve && linear_jxl(o.target))require(format==4||direct_jxl,"Preserved linear HDR JXL requires a scRGB JXR source");
-    if(o.target==Target::webp && o.mode==Mode::preserve && cache.source_hdr && !base_only)
+    if(o.target==Target::webp && o.mode==Mode::preserve && source_hdr && !base_only)
         throw std::runtime_error("WebP is SDR; use Process pixels mode for HDR input");
     if(o.mode==Mode::preserve && format==4)require(o.target==Target::jxl||linear_jxl(o.target),"JXR preservation requires linear JXL output");
     bool source_done=false;
@@ -325,7 +449,7 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
         require(format==0||format==1||format==3||format==6||format==7,"Source preservation supports JPEG, AVIF, HEIC, JXL and regular raster images; use --mode process for RAW/JXR");
         int info[5]{};const int target=o.target==Target::jpeg||o.target==Target::jpeg_gainmap?0:(o.target==Target::jxl||direct_jxl)?1:o.target==Target::png?3:o.target==Target::webp?kWebpSourceTarget:2;
         int rc=0;
-        if(o.jpeg_transcoding && format==0&&!cache.gainmap) {
+        if(o.jpeg_transcoding && format==0&&!gainmap) {
             require(is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))!=1,"JPEG coefficient transcoding cannot retain a gain map");
             const auto parser=decode_jpeg(bytes.data(),bytes.size(),true);
             require(!parser.cmyk,"CMYK JPEG coefficient transcoding is unsupported; disable Lossless JPEG transcoding to preserve CMYK samples in JXL");
@@ -336,7 +460,7 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             rc=1;
         } else {
             if(format==6) {
-                if(!regular)regular=std::make_unique<RegularImage>(decode_regular(bytes.data(),bytes.size()));
+                load_regular();
                 if(o.target==Target::webp)require(!regular->hdr(),"WebP is SDR; use Process pixels mode for HDR input");
                 require(regular->floating_pixels.empty(),"Floating-point HDR input requires Process pixels mode");
                 if(o.keep_exif&&regular->format=="TIFF")regular->exif=portable_source_exif(bytes.data(),bytes.size(),regular->width,regular->height,regular->orientation);
@@ -345,7 +469,7 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             // Try the integer/source path first: opaque images need no color
             // processing. Only actual transparency requires linear compositing.
             const bool flatten=rc==-97&&q.remove_alpha;
-            if(flatten&&cache.gainmap&&!base_only)throw std::runtime_error("Select Full gain-map reconstruction to remove alpha from a transparent gain-map source");
+            if(flatten&&gainmap&&!base_only)throw std::runtime_error("Select Full gain-map reconstruction to remove alpha from a transparent gain-map source");
             const bool webp_render=o.target==Target::webp&&o.mode==Mode::process;
             if(rc==0&&o.target==Target::webp&&!webp_render)
                 throw std::runtime_error("WebP cannot preserve this source color encoding; use Process pixels mode");
@@ -389,10 +513,14 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
                 if(!cache.scrgb)rc=decode_jxr_f32(bytes.data(),bytes.size(),linear,w,h,&gamut,convert_gamut(o));
             }
             else if(format==6) {
-                const auto raster=regular?std::move(*regular):decode_regular(bytes.data(),bytes.size());
-                w=raster.width;h=raster.height;raster_orientation=raster.orientation;cache.bits=raster.bits;cache.source_hdr=raster.hdr();
+                load_regular();
+                auto& raster=*regular;
+                w=raster.width;h=raster.height;raster_orientation=raster.orientation;cache.bits=raster.bits;
+                if(!decoded)cache.source_hdr=raster.hdr();
                 if(o.keep_exif)exif=raster.format=="TIFF"?portable_source_exif(bytes.data(),bytes.size(),w,h,raster.orientation):raster.exif;
-                regular_to_linear(raster,linear,gamut);
+                if(decoded&&decoded->linear_gamut) {
+                    linear=std::move(raster.floating_pixels);gamut=*decoded->linear_gamut;
+                } else regular_to_linear(raster,linear,gamut);
             }
             else {
                 int cg=0;const bool previous=paired_sdr;paired_sdr=gain_target(o.target);
@@ -558,8 +686,19 @@ Preview preview_bytes(const std::vector<uint8_t>& bytes,unsigned edge,ImageInfo*
     else if(format==3)rc=decode_jxl_to_linear_f16(bytes.data(),bytes.size(),linear,w,h,&gamut,&hdr,&transfer,false,edge,false,nullptr,nullptr);
     else if(format==4)rc=decode_jxr_memory(bytes.data(),bytes.size(),linear,w,h,&gamut,std::min(edge,768u));
     else if(format==6) {
-        auto raster=decode_regular(bytes.data(),bytes.size());
-        if(source_info)*source_info=inspect_regular(raster);
+        DecodedAnimationFrame first;
+        const bool animated=decode_raster_animation(bytes.data(),bytes.size(),
+            [&](DecodedAnimationFrame&& frame){first=std::move(frame);},true,cancelled);
+        auto raster=animated?std::move(first.image):decode_regular(bytes.data(),bytes.size());
+        if(source_info) {
+            *source_info=inspect_regular(raster);
+            if(animated) {
+                if(raster.format=="GIF") {
+                    try {source_info->animated=inspect_gif(bytes.data(),bytes.size()).animated;}
+                    catch(const std::exception&) {/* Keep a usable first frame. */}
+                } else source_info->animated=true;
+            }
+        }
         w=raster.width;h=raster.height;raster_orientation=raster.orientation;
         if(!raster.floating_pixels.empty()) {
             auto reduced=reduce_preview(raster.floating_pixels.data(),w,h,size_t(w)*4,4,edge);

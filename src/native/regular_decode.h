@@ -34,3 +34,5 @@ int convert_regular_source(const RegularImage&, int target, const char*, StillEn
 
 bool is_linear_image(const uint8_t*, size_t);
 RegularImage decode_linear_image(const uint8_t*, size_t, bool metadata_only=false);
+
+RegularImage decode_png_frame(const uint8_t*, size_t);

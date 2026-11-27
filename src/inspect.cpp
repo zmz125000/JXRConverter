@@ -52,7 +52,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         dec->imageDimensionLimit=0;
         if(avifDecoderSetIOMemory(dec.get(),bytes.data(),bytes.size())!=AVIF_RESULT_OK||avifDecoderParse(dec.get())!=AVIF_RESULT_OK)throw std::runtime_error("Unsupported AVIF/HEIF header");
         auto* image=dec->image;out.width=image->width;out.height=image->height;out.bits=image->depth;out.format="AVIF";
-        out.gainmap=image->gainMap!=nullptr;
+        out.gainmap=image->gainMap!=nullptr;out.animated=dec->imageCount>1;
         out.transfer=out.gainmap?"Gain map":image->transferCharacteristics==16?"PQ":image->transferCharacteristics==18?"HLG":image->transferCharacteristics==8?"Linear":"SDR";
         out.hdr=out.gainmap||image->transferCharacteristics==16||image->transferCharacteristics==18||image->transferCharacteristics==8;
         out.primaries=image->icc.size?"ICC":image->colorPrimaries==9?"BT.2020":image->colorPrimaries==12?"Display P3":"BT.709";
@@ -66,7 +66,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         JxlDecoderSetInput(dec.get(),bytes.data(),bytes.size());JxlDecoderCloseInput(dec.get());
         float intensity=0;
         for(;;){auto status=JxlDecoderProcessInput(dec.get());
-            if(status==JXL_DEC_BASIC_INFO){JxlBasicInfo info{};if(JxlDecoderGetBasicInfo(dec.get(),&info)!=JXL_DEC_SUCCESS)break;out.width=info.xsize;out.height=info.ysize;out.bits=info.bits_per_sample;out.format="JXL";intensity=info.intensity_target;out.hdr=info.intensity_target>=400.f;}
+            if(status==JXL_DEC_BASIC_INFO){JxlBasicInfo info{};if(JxlDecoderGetBasicInfo(dec.get(),&info)!=JXL_DEC_SUCCESS)break;out.width=info.xsize;out.height=info.ysize;out.bits=info.bits_per_sample;out.format="JXL";intensity=info.intensity_target;out.animated=info.have_animation;out.hdr=info.intensity_target>=400.f;}
             else if(status==JXL_DEC_COLOR_ENCODING){JxlColorEncoding color{};
                 if(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS) {
                     out.transfer=color.transfer_function==JXL_TRANSFER_FUNCTION_PQ?"PQ":color.transfer_function==JXL_TRANSFER_FUNCTION_HLG?"HLG":color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR?"Linear":"SDR";

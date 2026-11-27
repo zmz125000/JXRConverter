@@ -81,8 +81,12 @@ QString outputDateFolder() {
     while(name.endsWith(' ')||name.endsWith('.'))name.chop(1);
     return name;
 }
+bool mayBeAnimatedImage(const QString& path) {
+    static const QSet<QString> formats={"gif","webp","awebp","png","apng","jxl","avif"};
+    return formats.contains(QFileInfo(path).suffix().toLower());
+}
 bool needsHdrInspection(const QString& path) {
-    static const QSet<QString> mixed={"png","jxl","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","tif","tiff"};
+    static const QSet<QString> mixed={"png","apng","jxl","jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","tif","tiff"};
     return mixed.contains(QFileInfo(path).suffix().toLower());
 }
 bool hdrInput(const QString& path) {
@@ -93,7 +97,7 @@ bool hdrInput(const QString& path) {
         // scanning their pixels for values above SDR white.
         return info.hdr||info.transfer=="Linear";
     }
-    static const QSet<QString> sdrExtensions={"jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","webp","tif","tiff","bmp","gif"};
+    static const QSet<QString> sdrExtensions={"jpg","jpeg","jpe","avif","heic","heif","heics","heifs","hif","webp","awebp","tif","tiff","bmp","gif"};
     return !sdrExtensions.contains(extension);
 }
 bool mayHaveGainMap(const QString& path) {
@@ -178,7 +182,9 @@ QVector<Job> makeJobs(const QStringList& inputs,const QString& directory,const O
         const QString output=outputPath();outputs.insert(pathKey(output));
         if(sources.contains(pathKey(output)))throw std::invalid_argument("Output would replace an input file");
         Options snapshot=options;if(layout.rename_conflicts)snapshot.overwrite=false;
-        result.append({input,output,snapshot,0,layout.preserve_original_date});
+        Job job{input,output,snapshot,0,layout.preserve_original_date};
+        job.rename_frame_conflicts=layout.rename_conflicts;
+        result.append(std::move(job));
     }
     return result;
 }
@@ -345,16 +351,18 @@ void ConversionQueue::pump() {
         // Rotate rather than swap so each source retains its render-family order.
         std::rotate(jobs_.begin()+next_,jobs_.begin()+candidate,jobs_.begin()+candidate+1);
         const Job job=jobs_[next_++];
-        if(job.skip_existing||(!job.options.overwrite&&outputExists(job.output))) {
+        const bool couldExpand=!converter_&&!job.video&&!job.animation&&mayBeAnimatedImage(job.input);
+        if(job.skip_existing||(!couldExpand&&!job.options.overwrite&&outputExists(job.output))) {
             ++skipped_;++finished_;finishFile(job,{},false,true);continue;
         }
         ++active_;activeThreads_+=int(job.options.threads);forJobInput(job,[&](const QString& input){activeInputs_.insert(input);});activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);
         std::shared_ptr<ConversionSession> session;
         std::shared_ptr<std::atomic_bool> mediaCancelled;
-        if(job.video||job.animation) {
+        if(job.video||job.animation||couldExpand) {
             mediaCancelled=std::make_shared<std::atomic_bool>(false);
             activeMedia_.insert(job.input,mediaCancelled);
-        } else if(!converter_) {
+        }
+        if(!job.video&&!job.animation&&!converter_) {
             auto& stored=sessions_[job.input];
             if(!stored)stored=std::make_shared<ConversionSession>(nativePath(job.input));
             session=stored;
@@ -364,30 +372,37 @@ void ConversionQueue::pump() {
         std::shared_ptr<QDateTime> original;
         if(job.preserve_original_date){auto& stored=originalDates_[job.input];if(!stored)stored=std::make_shared<QDateTime>();original=stored;}
         pool_.start([this,job,session,original,mediaCancelled] {
-            QString error;bool skipped=false,cancelled=false;
+            QString error,actualOutput;bool skipped=false,cancelled=false;
             try {
                 if(!job.preparation_error.isEmpty())throw std::runtime_error(job.preparation_error.toStdString());
                 if(!QDir().mkpath(QFileInfo(job.output).absolutePath()))throw std::runtime_error("Cannot create output folder");
                 if(original&&!original->isValid())*original=originalDate(job.input);
-                if(mediaCancelled) {
-                    const auto stop=[&]{return mediaCancelled->load();};
+                const auto stop=[&]{return mediaCancelled&&mediaCancelled->load();};
+                if(job.video||job.animation) {
                     const auto report=[this,output=job.output](int percent){
                         QMetaObject::invokeMethod(this,[this,output,percent]{emit mediaProgress(output,percent);},Qt::QueuedConnection);
                     };
                     if(job.animation)skipped=convertAnimation(nativePath(job.output),job.options,*job.animation,stop,report);
                     else skipped=convertVideo(job.input,nativePath(job.output),job.options,*job.video,stop,report);
+                    if(original&&!skipped)preserveDate(job.output,*original);
+                } else if(session) {
+                    const auto published=[&](const std::filesystem::path& path) {
+                        const auto name=QString::fromStdString(path.u8string());
+                        if(actualOutput.isEmpty())actualOutput=name;
+                        if(original)preserveDate(name,*original);
+                    };
+                    skipped=session->convert_frames(nativePath(job.output),job.options,job.rename_frame_conflicts,stop,published).skipped;
                 } else {
-                    const auto result=session?session->convert(nativePath(job.output),job.options):converter_(nativePath(job.input),nativePath(job.output),job.options);
-                    skipped=result.skipped;
+                    skipped=converter_(nativePath(job.input),nativePath(job.output),job.options).skipped;
+                    if(original&&!skipped)preserveDate(job.output,*original);
                 }
-                if(original&&!skipped)preserveDate(job.output,*original);
             }catch(const std::exception& e){error=QString::fromUtf8(e.what());}catch(...){error="Unknown conversion failure";}
             if(!error.isEmpty()&&mediaCancelled&&mediaCancelled->load()){cancelled=true;error.clear();}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
-            QMetaObject::invokeMethod(this,[this,job,error,skipped,cancelled] {
+            QMetaObject::invokeMethod(this,[this,job,error,skipped,cancelled,actualOutput] {
                 --active_;activeThreads_-=int(job.options.threads);forJobInput(job,[&](const QString& input){activeInputs_.remove(input);});activeOutputs_.remove(job.input);activeBatches_.remove(job.input);activeMedia_.remove(job.input);++finished_;
                 if(cancelled)++cancelled_;else if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
-                finishFile(job,error,cancelled,skipped);
+                finishFile(job,error,cancelled,skipped,actualOutput);
                 pump();
             },Qt::QueuedConnection);
         });
@@ -409,13 +424,14 @@ void ConversionQueue::updateJobStatus(const Job& job,const QString& state) {
         if(state!="Queued"||!activeInputs_.contains(input))emit statusChanged(input,state,job.output);
     });
 }
-void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancelled,bool skipped) {
+void ConversionQueue::finishFile(const Job& job,const QString& error,bool cancelled,bool skipped,const QString& actualOutput) {
     const QString outcome=cancelled?"Cancelled":!error.isEmpty()?"Failed":skipped?"Skipped":"Finished";
     const auto aliases=batchAliases_.take(jobKey(job));
     emit outputFinished(job.batch,job.input,job.output,outcome);
     for(auto alias:aliases)if(alias!=job.batch)emit outputFinished(alias,job.input,job.output,outcome);
     const StatusBatch updates(job.animation?this:nullptr);
-    forJobInput(job,[&](const QString& input){finishInput(input,job.output,error,cancelled,skipped);});
+    const auto& displayed=error.isEmpty()&&!actualOutput.isEmpty()?actualOutput:job.output;
+    forJobInput(job,[&](const QString& input){finishInput(input,displayed,error,cancelled,skipped);});
 }
 void ConversionQueue::finishInput(const QString& input,const QString& output,const QString& error,bool cancelled,bool skipped) {
     if(!error.isEmpty())fileErrors_[input]+=error+"\nOutput: "+output+"\n";

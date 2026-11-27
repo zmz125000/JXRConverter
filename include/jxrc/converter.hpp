@@ -7,6 +7,8 @@
 #include <memory>
 #include <vector>
 
+struct DecodedAnimationFrame;
+
 namespace jxrc {
 enum class Mode { preserve, process };
 enum class TransparencyBackground { white, black, white_remove_alpha, black_remove_alpha };
@@ -89,10 +91,17 @@ public:
     ConversionSession(const ConversionSession&) = delete;
     ConversionSession& operator=(const ConversionSession&) = delete;
     Result convert(const std::filesystem::path& output, const Options& options = {});
+    // Still inputs retain the requested path. Animations publish numbered stills.
+    Result convert_frames(const std::filesystem::path& output, const Options& options,
+                          bool rename_conflicts, const std::function<bool()>& cancelled,
+                          const std::function<void(const std::filesystem::path&)>& published);
 private:
     friend struct AnimationImageRenderer;
     Result run(const std::filesystem::path&, const Options&, AnimationFrame*, const std::function<bool()>&,
-               const AnimationEncoding* direct_frame = nullptr);
+               const AnimationEncoding* direct_frame = nullptr, ::DecodedAnimationFrame* decoded = nullptr);
+    void load(const std::function<bool()>& cancelled);
+    void read_frames(const Options&, const std::function<void(::DecodedAnimationFrame&&)>&,
+                     const std::function<bool()>& cancelled);
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };
@@ -100,6 +109,7 @@ struct ImageInfo {
     unsigned width = 0, height = 0, bits = 0;
     bool raw = false, gainmap = false, hdr = false, wide_gamut = false;
     std::string format, transfer, primaries;
+    bool animated = false;
 };
 struct Preview {
     unsigned width = 0, height = 0;
