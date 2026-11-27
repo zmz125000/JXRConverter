@@ -19,7 +19,7 @@ struct AnimationFrame {
     unsigned width = 0, height = 0;
     unsigned primaries = 1;
     std::vector<float> rgba; // Straight alpha, display-linear RGB with 203-nit white.
-    std::vector<uint8_t> rgba8; // Direct sRGB frame, mutually exclusive with rgba.
+    std::vector<uint8_t> rgba8; // Encoded in the output gamut with the sRGB transfer, mutually exclusive with rgba.
 };
 
 struct AnimationEncoding;

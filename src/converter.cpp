@@ -199,20 +199,32 @@ void orient_rgba(std::vector<Sample>& values,unsigned w,unsigned h,int orient) {
     values.swap(oriented);
 }
 
-bool prepare_animation_srgb(RegularImage& raster,bool opaque_required) {
-    if(raster.bits!=8||raster.channels!=4||raster.transfer!=13||raster.primaries!=1||
+bool prepare_animation_rgb8(RegularImage& raster,unsigned primaries,bool opaque_required) {
+    if(raster.bits!=8||raster.channels!=4||raster.transfer!=13||
        !raster.floating_pixels.empty())return false;
     if(opaque_required)for(size_t i=3;i<raster.pixels.size();i+=4)if(raster.pixels[i]!=255)return false;
-    if(raster.icc.empty())return true;
+    if(raster.icc.empty()&&raster.primaries==primaries)return true;
 
-    // GIF and animated WebP expect sRGB. Honor an embedded profile even
-    // when geometry and pixel edits allow the frame to stay in 8-bit RGBA.
-    skcms_ICCProfile source{};
-    if(!skcms_Parse(raster.icc.data(),raster.icc.size(),&source))return false;
+    // Normalize to the animation's common gamut while keeping compatible
+    // SDR frames in 8-bit RGBA, including when the list contains HDR frames.
+    skcms_ICCProfile source{},destination{};
+    const skcms_ICCProfile* src=skcms_sRGB_profile();
+    const skcms_ICCProfile* dst=src;
+    if(!raster.icc.empty()) {
+        if(!skcms_Parse(raster.icc.data(),raster.icc.size(),&source))return false;
+        src=&source;
+    } else if(raster.primaries!=1) {
+        if(raster.primaries!=9||!make_bt2020_profile(&source,skcms_sRGB_TransferFunction()))return false;
+        src=&source;
+    }
+    if(primaries==9) {
+        if(!make_bt2020_profile(&destination,skcms_sRGB_TransferFunction()))return false;
+        dst=&destination;
+    }
     const auto format=skcms_PixelFormat_RGBA_8888;
     const auto alpha=skcms_AlphaFormat_Unpremul;
-    return skcms_Transform(raster.pixels.data(),format,alpha,&source,
-                           raster.pixels.data(),format,alpha,skcms_sRGB_profile(),raster.pixels.size()/4);
+    return skcms_Transform(raster.pixels.data(),format,alpha,src,
+                           raster.pixels.data(),format,alpha,dst,raster.pixels.size()/4);
 }
 
 auto processing_key(const Options& o,int format) {
@@ -241,8 +253,10 @@ AnimationFrame AnimationImageRenderer::render(const std::filesystem::path& input
     o.target=sdr?Target::png:Target::png_hdr;
     o.keep_exif=false;
     o.jpeg_transcoding=false;
+    // The animation's shared gamut is applied after HDR tone mapping.
+    o.srgb_clamp=false;
     AnimationFrame frame;
-    const bool direct=sdr&&encoding.primaries==1&&
+    const bool direct=sdr&&(encoding.primaries==1||encoding.primaries==9)&&
         (encoding.video||encoding.format==AnimationFormat::gif||encoding.format==AnimationFormat::webp)&&
         placement.stack==AnimationStack::off&&placement.resize==AnimationResize::off;
     ConversionSession(input).run({},o,&frame,cancelled,direct?&encoding:nullptr);
@@ -299,9 +313,11 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
         const auto w=orient>=5?regular->height:regular->width;
         const auto h=orient>=5?regular->width:regular->height;
         if(orient>=1&&orient<=8&&w<=direct_frame->width&&h<=direct_frame->height&&
-           (!o.max_edge||std::max(w,h)<=o.max_edge)&&prepare_animation_srgb(*regular,direct_frame->video||remove_alpha(o))) {
+           (!o.max_edge||std::max(w,h)<=o.max_edge)&&
+           prepare_animation_rgb8(*regular,direct_frame->primaries,direct_frame->video||remove_alpha(o))) {
             orient_rgba(regular->pixels,regular->width,regular->height,orient);
             frame->width=w;frame->height=h;
+            frame->primaries=direct_frame->primaries;
             frame->rgba8=std::move(regular->pixels);
             return result;
         }

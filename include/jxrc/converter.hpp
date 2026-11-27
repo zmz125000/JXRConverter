@@ -98,7 +98,7 @@ private:
 };
 struct ImageInfo {
     unsigned width = 0, height = 0, bits = 0;
-    bool raw = false, gainmap = false, hdr = false;
+    bool raw = false, gainmap = false, hdr = false, wide_gamut = false;
     std::string format, transfer, primaries;
 };
 struct Preview {

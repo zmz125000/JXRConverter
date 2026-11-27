@@ -667,7 +667,18 @@ struct AnimationEncoder::Impl {
             WebPBytes result;
             require(WebPAnimEncoderAdd(webp.get(),nullptr,webpTime(),nullptr)!=0&&
                     WebPAnimEncoderAssemble(webp.get(),&result.data)!=0,"Cannot finalize WebP animation.");
-            write(file,result.data.bytes,result.data.size);
+            if(format.primaries==9) {
+                // WebP carries wide-gamut SDR in its container ICC chunk.
+                auto profile=ultrahdr::IccHelper::writeIccProfile(UHDR_CT_SRGB,UHDR_CG_BT_2100);
+                const size_t prefix=ultrahdr::kICCIdentifierSize;
+                require(profile&&profile->getLength()>prefix,"Cannot create WebP animation color profile.");
+                const WebPData icc{static_cast<const uint8_t*>(profile->getData())+prefix,profile->getLength()-prefix};
+                const std::unique_ptr<WebPMux,decltype(&WebPMuxDelete)> mux(WebPMuxCreate(&result.data,0),WebPMuxDelete);
+                WebPBytes tagged;
+                require(mux&&WebPMuxSetChunk(mux.get(),"ICCP",&icc,0)==WEBP_MUX_OK&&
+                        WebPMuxAssemble(mux.get(),&tagged.data)==WEBP_MUX_OK,"Cannot store WebP animation color profile.");
+                write(file,tagged.data.bytes,tagged.data.size);
+            } else write(file,result.data.bytes,result.data.size);
         } else if(avif) {
             AvifBytes result;
             avifCheck(avifEncoderFinish(avif.get(),&result.data));

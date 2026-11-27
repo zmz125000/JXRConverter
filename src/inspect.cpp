@@ -4,6 +4,7 @@
 #include "input_format.h"
 #include "heif_decode.h"
 #include "regular_decode.h"
+#include "linear_color_profile.h"
 #include <avif/avif.h>
 #include <algorithm>
 #include <jxl/decode_cxx.h>
@@ -41,7 +42,8 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         out.gainmap=is_uhdr_image(const_cast<uint8_t*>(bytes.data()),static_cast<int>(bytes.size()))==1;out.transfer="sRGB";
         if(out.gainmap)out.transfer="Gain map";
         out.hdr=out.gainmap;
-        auto icc=source_jpeg_icc(bytes.data(),bytes.size());out.primaries=icc.empty()?"sRGB":"ICC";
+        out.primaries=jpeg.icc.empty()?"sRGB":"ICC";
+        out.wide_gamut=!jpeg.cmyk&&icc_needs_wide_gamut(jpeg.icc.data(),jpeg.icc.size());
         int orientation=source_orientation(bytes.data(),bytes.size(),0,nullptr);if(orientation>=5)std::swap(out.width,out.height);
     } else if(is_avif_input(bytes.data(),bytes.size())) {
         std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> dec(avifDecoderCreate(),avifDecoderDestroy);
@@ -54,6 +56,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         out.transfer=out.gainmap?"Gain map":image->transferCharacteristics==16?"PQ":image->transferCharacteristics==18?"HLG":image->transferCharacteristics==8?"Linear":"SDR";
         out.hdr=out.gainmap||image->transferCharacteristics==16||image->transferCharacteristics==18||image->transferCharacteristics==8;
         out.primaries=image->icc.size?"ICC":image->colorPrimaries==9?"BT.2020":image->colorPrimaries==12?"Display P3":"BT.709";
+        out.wide_gamut=image->colorPrimaries==9||image->colorPrimaries==12||icc_needs_wide_gamut(image->icc.data,image->icc.size);
         int orientation=source_orientation(bytes.data(),bytes.size(),1,nullptr);if(orientation>=5)std::swap(out.width,out.height);
     } else if(is_heif_input(bytes.data(),bytes.size())) {
         out=inspect_heif(bytes.data(),bytes.size());
@@ -65,7 +68,21 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         for(;;){auto status=JxlDecoderProcessInput(dec.get());
             if(status==JXL_DEC_BASIC_INFO){JxlBasicInfo info{};if(JxlDecoderGetBasicInfo(dec.get(),&info)!=JXL_DEC_SUCCESS)break;out.width=info.xsize;out.height=info.ysize;out.bits=info.bits_per_sample;out.format="JXL";intensity=info.intensity_target;out.hdr=info.intensity_target>=400.f;}
             else if(status==JXL_DEC_COLOR_ENCODING){JxlColorEncoding color{};
-                if(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS){out.transfer=color.transfer_function==JXL_TRANSFER_FUNCTION_PQ?"PQ":color.transfer_function==JXL_TRANSFER_FUNCTION_HLG?"HLG":color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR?"Linear":"SDR";out.hdr=out.hdr||(intensity==80.f && color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR && color.primaries==JXL_PRIMARIES_SRGB)||color.transfer_function==JXL_TRANSFER_FUNCTION_PQ||color.transfer_function==JXL_TRANSFER_FUNCTION_HLG;out.primaries=color.primaries==JXL_PRIMARIES_2100?"BT.2020":color.primaries==JXL_PRIMARIES_P3?"Display P3":"BT.709";}else{out.transfer="ICC";out.primaries="ICC";}break;
+                if(JxlDecoderGetColorAsEncodedProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&color)==JXL_DEC_SUCCESS) {
+                    out.transfer=color.transfer_function==JXL_TRANSFER_FUNCTION_PQ?"PQ":color.transfer_function==JXL_TRANSFER_FUNCTION_HLG?"HLG":color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR?"Linear":"SDR";
+                    out.hdr=out.hdr||(intensity==80.f&&color.transfer_function==JXL_TRANSFER_FUNCTION_LINEAR&&color.primaries==JXL_PRIMARIES_SRGB)||color.transfer_function==JXL_TRANSFER_FUNCTION_PQ||color.transfer_function==JXL_TRANSFER_FUNCTION_HLG;
+                    out.primaries=color.primaries==JXL_PRIMARIES_2100?"BT.2020":color.primaries==JXL_PRIMARIES_P3?"Display P3":"BT.709";
+                    out.wide_gamut=color.primaries!=JXL_PRIMARIES_SRGB&&color.color_space!=JXL_COLOR_SPACE_GRAY;
+                } else {
+                    out.transfer="ICC";out.primaries="ICC";
+                    size_t size=0;
+                    if(JxlDecoderGetICCProfileSize(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,&size)==JXL_DEC_SUCCESS&&size&&size<=16u*1024*1024) {
+                        std::vector<uint8_t> icc(size);
+                        if(JxlDecoderGetColorAsICCProfile(dec.get(),JXL_COLOR_PROFILE_TARGET_ORIGINAL,icc.data(),icc.size())==JXL_DEC_SUCCESS)
+                            out.wide_gamut=icc_needs_wide_gamut(icc.data(),icc.size());
+                    }
+                }
+                break;
             }else if(status==JXL_DEC_ERROR||status==JXL_DEC_NEED_MORE_INPUT||status==JXL_DEC_SUCCESS)break;
         }
     } else if(bytes.size()>=4&&bytes[0]=='I'&&bytes[1]=='I'&&bytes[2]==0xbc&&bytes[3]==1) {

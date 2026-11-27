@@ -1709,7 +1709,9 @@ private slots:
         QVERIFY(!convertAnimation(pathFromQt(output),options,target,[]{return false;},[](int){}));
         QFile encoded(output);
         QVERIFY(encoded.open(QIODevice::ReadOnly));
-        QCOMPARE(encoded.readAll().count("ANMF"),2);
+        const auto encodedBytes=encoded.readAll();
+        QCOMPARE(encodedBytes.count("ANMF"),2);
+        QVERIFY(encodedBytes.contains("ICCP"));
     }
     void animationByteFramesHonorIcc() {
         using namespace jxrc;
@@ -1734,6 +1736,46 @@ private slots:
             QVERIFY(qAbs(int(frame.rgba8[1])-expected.green())<=1);
             QVERIFY(qAbs(int(frame.rgba8[2])-expected.blue())<=1);
             QCOMPARE(int(frame.rgba8[3]),source.alpha());
+        }
+    }
+    void webpAnimationSelectsSharedWideGamut() {
+        using namespace jxrc;
+        const auto directory=root("animation-webp-gamut");
+        const auto jpeg=makeImage(directory,"sdr.jpg",16,16,100);
+        QVERIFY(!jpeg.isEmpty());
+        const auto pathFromQt=[](const QString& path){return std::filesystem::u8path(path.toUtf8().constData());};
+        QImage image(16,16,QImage::Format_RGBA8888);
+        image.fill(QColor(235,40,95));
+        const auto p3=directory+"/p3.png",srgb=directory+"/srgb.png";
+        image.setColorSpace(QColorSpace::DisplayP3);
+        QVERIFY(image.save(p3,"PNG"));
+        image.setColorSpace(QColorSpace::SRgb);
+        QVERIFY(image.save(srgb,"PNG"));
+        QVERIFY(inspect(pathFromQt(p3)).wide_gamut);
+        QVERIFY(!inspect(pathFromQt(srgb)).wide_gamut);
+
+        Options options;
+        options.mode=Mode::process;
+        const AnimationEncoding wide{AnimationFormat::webp,AnimationTransfer::sdr,16,16,8,9,1000000};
+        const AnimationPlacement placement;
+        const auto wideFrame=AnimationImageRenderer::render(pathFromQt(jpeg),options,wide,placement,{});
+        const auto narrowFrame=AnimationImageRenderer::render(pathFromQt(jpeg),options,
+            {AnimationFormat::webp,AnimationTransfer::sdr,16,16,8,1,1000000},placement,{});
+        QVERIFY(wideFrame.rgba.empty());
+        QCOMPARE(wideFrame.rgba8.size(),size_t(16*16*4));
+        QVERIFY(wideFrame.rgba8!=narrowFrame.rgba8);
+
+        AnimationOutput target;
+        for(const auto& [input,clamp]:{std::pair{p3,false},std::pair{srgb,false},std::pair{p3,true}}) {
+            options.srgb_clamp=clamp;
+            target.inputs={jpeg,input};
+            const auto output=input+(clamp?"-clamped.webp":".webp");
+            QVERIFY(!convertAnimation(pathFromQt(output),options,target,[]{return false;},[](int){}));
+            QFile encoded(output);
+            QVERIFY(encoded.open(QIODevice::ReadOnly));
+            const auto bytes=encoded.readAll();
+            QCOMPARE(bytes.count("ANMF"),2);
+            QCOMPARE(bytes.contains("ICCP"),input==p3&&!clamp);
         }
     }
     void animationFramePlacement() {

@@ -3,6 +3,7 @@
 // gain-map interpretation follows LocalViewer's HeifContainer/AppleGainMapDecode.
 #include "heif_decode.h"
 #include "hdr_parallel.h"
+#include "linear_color_profile.h"
 #include "ultrahdr/jpegdecoderhelper.h"
 #include <libheif/heif.h>
 #include <algorithm>
@@ -138,6 +139,13 @@ jxrc::ImageInfo inspect_heif(const uint8_t* data,size_t size){
     Input input(data,size);const auto* base=input.base.get();jxrc::ImageInfo info;info.format="HEIC";info.width=heif_image_handle_get_width(base);info.height=heif_image_handle_get_height(base);info.bits=heif_image_handle_get_luma_bits_per_pixel(base);
     info.gainmap=bool(input.gain)||proxdr(data,size).jpeg;heif_color_profile_nclx* color=nullptr;
     if(heif_image_handle_get_nclx_color_profile(base,&color).code==heif_error_Ok&&color){info.transfer=color->transfer_characteristics==16?"PQ":color->transfer_characteristics==18?"HLG":color->transfer_characteristics==8?"Linear":"SDR";info.primaries=color->color_primaries==9?"BT.2020":color->color_primaries==12?"Display P3":"BT.709";heif_nclx_color_profile_free(color);}else{info.transfer="SDR";info.primaries="ICC";}
+    info.wide_gamut=info.primaries=="BT.2020"||info.primaries=="Display P3";
+    const auto iccSize=heif_image_handle_get_raw_color_profile_size(base);
+    if(!info.wide_gamut&&iccSize&&iccSize<=16u*1024*1024) {
+        std::vector<uint8_t> icc(iccSize);
+        if(heif_image_handle_get_raw_color_profile(base,icc.data()).code==heif_error_Ok)
+            info.wide_gamut=icc_needs_wide_gamut(icc.data(),icc.size());
+    }
     info.hdr=info.gainmap||info.transfer=="PQ"||info.transfer=="HLG"||info.transfer=="Linear";if(info.gainmap)info.transfer="Gain map";return info;
 }
 HeifSource decode_heif(const uint8_t* data,size_t size,unsigned edge){

@@ -582,8 +582,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
             sourceBits=std::max(sourceBits,info.gainmap&&options.gain_map_reconstruction==GainMapReconstruction::full_image?32u:info.bits);
             // JXR and linear sources may have extended sRGB colors even when
             // the source container names its primaries BT.709.
-            wide|=info.hdr||info.raw||info.primaries.find("2020")!=std::string::npos||
-                  info.primaries.find("P3")!=std::string::npos||info.transfer=="Linear";
+            wide|=info.hdr||info.raw||info.wide_gamut||info.transfer=="Linear";
         }
         source.size=animationSize(source.size,options.max_edge);
         if(source.size.isEmpty())throw std::runtime_error("Animation source dimensions are unavailable.");
@@ -613,7 +612,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         // canvas down where possible and fit any oversized frame within it.
         canvas={std::max(2,canvas.width()&~1),std::max(2,canvas.height()&~1)};
     }
-    unsigned bits=sourceBits>8||!sdr?16:8;
+    unsigned bits=!(gif||webp)&&(sourceBits>8||!sdr)?16:8;
     if(!asVideo&&target.format==AnimationFormat::png&&sdr&&!options.quality.auto_bit_depth)bits=unsigned(options.quality.png_depth);
     if(!asVideo&&target.format==AnimationFormat::avif) {
         const auto& q=options.quality;
@@ -622,7 +621,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         bits=std::min(cap,!sdr?std::max(10u,sourceBits>10?12u:10u):sourceBits>10?12u:sourceBits>8?10u:8u);
         if(!sdr&&bits<10)throw std::invalid_argument("HDR AVIF animation requires a 10- or 12-bit AVIF maximum depth.");
     }
-    const bool srgb=gif||webp||options.srgb_clamp||transfer==AnimationTransfer::scrgb;
+    const bool srgb=gif||options.srgb_clamp||transfer==AnimationTransfer::scrgb;
     const unsigned primaries=asVideo?(sdr?1u:9u):srgb?1u:!sdr||wide?9u:1u;
     const AnimationEncoding encoding{target.format,transfer,unsigned(canvas.width()),unsigned(canvas.height()),bits,primaries,target.delayUs,asVideo};
     Staging stage(output);

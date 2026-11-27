@@ -369,6 +369,7 @@ jxrc::ImageInfo inspect_regular(const RegularImage& image) {
     jxrc::ImageInfo out;out.width=image.width;out.height=image.height;out.bits=image.bits;out.format=image.format;out.hdr=image.hdr();
     out.transfer=image.transfer==8?"Linear":image.hdr()?(image.transfer==16?"PQ":"HLG"):image.icc.empty()?"sRGB":"ICC";
     out.primaries=image.icc.empty()?(image.primaries==9?"BT.2020":image.primaries==12?"Display P3":"BT.709"):"ICC";
+    out.wide_gamut=image.primaries==9||image.primaries==12||icc_needs_wide_gamut(image.icc.data(),image.icc.size());
     if(image.transfer==8&&image.icc.empty()&&(image.format=="EXR"||image.format=="Radiance"||image.format=="PFM"||image.format=="TIFF")) {
         const auto& c=image.chromaticities;
         if(std::abs(c[0]-.708f)<.0001f&&std::abs(c[2]-.170f)<.0001f)out.primaries="BT.2020";
