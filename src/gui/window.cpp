@@ -636,7 +636,7 @@ QList<QWidget*> MainWindow::persistentControls() const {
     return QList<QWidget*>{checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,transparencyBackground_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
         convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
-        findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
+        findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoSdrGamma_,videoDepth_,videoChroma_,videoEncoder_,
         videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,videoGpuToneMapping_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_,animationStack_,animationResize_,animationGifIndexedColor_}
         +stillTone_.settings()+videoTone_.settings();
 }
@@ -800,12 +800,15 @@ QWidget* MainWindow::buildVideoControls() {
     videoContainer_=combo({"MP4","Matroska (MKV)","QuickTime (MOV)","WebM"},"videoOutputContainer");
     videoTransfer_=combo({"Auto · follow source","SDR","HDR · PQ","HDR · HLG"},"videoOutputTransfer");
     videoTransfer_->setToolTip("Auto follows the source transfer when supported by the selected codec and bit depth. PQ and HLG require an HDR source.");
+    videoSdrGamma_=combo({"Auto","Rec.709","Gamma 2.2","Gamma 2.4 (BT.1886)","sRGB"},"videoSdrGamma");
+    videoSdrGamma_->setToolTip("Auto keeps the source transfer when possible and uses Rec.709 for rendered frames. Explicit curves use CPU pixel processing. Gamma 2.4 targets BT.1886 displays.");
     videoDepth_=combo({"Auto","8 bit","10 bit","12 bit"},"videoOutputDepth");
     videoDepth_->setItemData(0,0);videoDepth_->setItemData(1,8);videoDepth_->setItemData(2,10);videoDepth_->setItemData(3,12);
     videoChroma_=combo({"4:2:0","4:2:2","4:4:4"},"videoOutputChroma");
     formatForm->addRow("Codec",videoCodec_);
     formatForm->addRow("Container",videoContainer_);
     formatForm->addRow("Dynamic range",videoTransfer_);
+    formatForm->addRow("SDR gamma",videoSdrGamma_);
     formatForm->addRow("Bit depth",videoDepth_);
     formatForm->addRow("Chroma subsampling",videoChroma_);
     layout->addWidget(formats);
@@ -863,7 +866,7 @@ QWidget* MainWindow::buildVideoControls() {
     layout->addWidget(processing);
     layout->addStretch();
 
-    for(auto* box:{videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoEncoder_,videoRate_,videoAudio_})
+    for(auto* box:{videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoSdrGamma_,videoDepth_,videoEncoder_,videoRate_,videoAudio_})
         connect(box,&QComboBox::currentIndexChanged,this,[this]{updateVideoControls();updateCounts();});
     connect(reset,&QPushButton::clicked,this,[this]{loadVideoEncoderSettings(true);updateVideoControls();});
     connect(videoGpuToneMapping_,&QCheckBox::toggled,this,&MainWindow::updateVideoControls);
@@ -977,7 +980,7 @@ QWidget* MainWindow::buildAnimationControls() {
         {"Highlight stops",highlight_},{"Shadows",shadows_},{"Midtones",midtones_},{"Highlights",highlights_},
         {"Camera look",cameraLook_},{"Linear HDR",linearHdr_},{"Disable HDR boost",disableRawBoost_}});
     summary(videoSettings,animationVideoSummary_,"Video output",{{"Mode",videoMode_},{"Codec",videoCodec_},{"Container",videoContainer_},
-        {"Dynamic range",videoTransfer_},{"Bit depth",videoDepth_},{"Chroma subsampling",videoChroma_}});
+        {"Dynamic range",videoTransfer_},{"SDR gamma",videoSdrGamma_},{"Bit depth",videoDepth_},{"Chroma subsampling",videoChroma_}});
     summary(videoSettings,animationVideoSummary_,"Video encoder",{{"Encoder",videoEncoder_},{"Encoder preset",videoPreset_},{"Tune",videoTune_},
         {"Rate control",videoRate_},{"Quality factor",videoFactor_},{"Target bitrate",videoBitrate_},{"Encoder parameters",videoParameters_}});
     toneSummary(videoSettings,animationVideoSummary_,videoTone_);
@@ -1208,7 +1211,8 @@ void MainWindow::updateVideoControls() {
     videoAudioBitrate_->setMaximum(opus?512:960);
     videoAudioForm_->setRowVisible(videoAudioBitrate_,audio==VideoAudio::aac||opus||
         (audio==VideoAudio::automatic&&container!=VideoContainer::mkv));
-    videoGpuToneMapping_->setEnabled(!hdr&&videoMode_->currentIndex()==0);
+    videoSdrGamma_->setEnabled(!hdr);
+    videoGpuToneMapping_->setEnabled(!hdr&&videoMode_->currentIndex()==0&&videoSdrGamma_->currentIndex()==int(SdrVideoGamma::automatic));
     videoTone_.group->setEnabled(!hdr&&!(videoGpuToneMapping_->isEnabled()&&videoGpuToneMapping_->isChecked()));
     videoExposure_->setEnabled(videoMode_->currentIndex()==1);
 }
@@ -1231,6 +1235,7 @@ VideoOutput MainWindow::videoTarget() const {
     output.codec=VideoCodec(videoCodec_->currentIndex());
     output.container=VideoContainer(videoContainer_->currentIndex());
     output.transfer=VideoTransfer(videoTransfer_->currentIndex());
+    output.sdrGamma=SdrVideoGamma(std::max(0,videoSdrGamma_->currentIndex()));
     output.encoder=VideoEncoder(videoEncoder_->currentIndex());
     output.rate=VideoRate(videoRate_->currentData().toInt());
     output.depth=videoDepth_->currentData().toInt();

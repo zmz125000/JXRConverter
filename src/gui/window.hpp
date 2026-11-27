@@ -167,7 +167,7 @@ private:
     QSpinBox* animationEdge_;
     QList<std::pair<QWidget*,QLabel*>> animationImageSummary_, animationVideoSummary_;
     unsigned animationDelayUs_=AnimationOutput{}.delayUs;
-    QComboBox *videoMode_, *videoCodec_, *videoContainer_, *videoTransfer_, *videoDepth_, *videoChroma_, *videoEncoder_;
+    QComboBox *videoMode_, *videoCodec_, *videoContainer_, *videoTransfer_, *videoSdrGamma_, *videoDepth_, *videoChroma_, *videoEncoder_;
     QComboBox *videoPreset_, *videoTune_, *videoRate_, *videoAudio_;
     QSpinBox *videoFactor_, *videoBitrate_, *videoAudioBitrate_, *videoMaxEdge_;
     QLineEdit* videoParameters_;

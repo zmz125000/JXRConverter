@@ -1,4 +1,5 @@
 #pragma once
+#include "video_gamma.h"
 
 #include "jxrc/converter.hpp"
 
@@ -34,6 +35,7 @@ struct AnimationEncoding {
     unsigned width, height, bits, primaries;
     unsigned delay_us;
     bool video = false;
+    SdrVideoGamma video_gamma = SdrVideoGamma::rec709;
 };
 
 // The optional stack stores premultiplied linear pixels in the output gamut.
@@ -43,7 +45,7 @@ JXRC_API std::vector<uint8_t> animation_rgba8(const std::vector<float>&);
 JXRC_API std::vector<uint16_t> animation_rgba16(const std::vector<float>&);
 JXRC_API std::vector<uint8_t> place_animation_rgba8(AnimationFrame&&, const AnimationEncoding&,
                                                  const AnimationPlacement&, const Options&);
-JXRC_API std::vector<uint16_t> animation_bt709_rgba16(const std::vector<uint8_t>&);
+JXRC_API std::vector<uint16_t> animation_video_rgba16(const std::vector<uint8_t>&,SdrVideoGamma);
 JXRC_API void clear_gif_canvas_between_frames(const std::filesystem::path&, const std::function<bool()>& cancelled);
 
 class JXRC_API AnimationEncoder {

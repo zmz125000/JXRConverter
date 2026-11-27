@@ -41,13 +41,18 @@ unsigned sourcePrimaries(const VideoStream& stream) {
     return stream.size.height()<=480?6:stream.size.height()<=576?5:1;
 }
 
+unsigned gammaTransferCode(const QString& name) {
+    if(name=="gamma22"||name=="bt470m")return 4;
+    if(name=="gamma28"||name=="bt470bg")return 5;
+    return 0;
+}
+
 unsigned sourceTransfer(const VideoStream& stream) {
     if(stream.transfer)return unsigned(stream.transfer);
     const auto& name=stream.transferName;
     if(name=="iec61966-2-1")return 13;
     if(name=="linear")return 8;
-    if(name=="gamma22")return 4;
-    if(name=="gamma28")return 5;
+    if(const auto gamma=gammaTransferCode(name))return gamma;
     if(name=="bt709"||name=="smpte170m"||name=="bt2020-10"||name=="bt2020-12"||!tagged(name))return 1;
     throw std::runtime_error("Unsupported source video transfer for pixel processing.");
 }
@@ -57,6 +62,13 @@ QString matrixFilter(const QString& matrix,unsigned fallback) {
     if(matrix=="smpte170m"||matrix=="bt470bg")return "bt601";
     if(matrix=="bt709"||matrix=="smpte240m"||matrix=="fcc")return matrix;
     return fallback==9?"bt2020":fallback==5||fallback==6?"bt601":"bt709";
+}
+
+QString sdrTransferTag(SdrVideoGamma gamma) {
+    if(gamma==SdrVideoGamma::gamma22)return "4";
+    if(gamma==SdrVideoGamma::srgb)return "13";
+    // BT.1886 describes the reference display for Rec.709 video signaling.
+    return "bt709";
 }
 
 QSize outputSize(const QSize& source,unsigned maxEdge) {
@@ -265,7 +277,7 @@ void writeFrame(VideoProcess& encoder,const char* data,qsizetype size,const std:
 
 void streamFrames(const QString& ffmpeg,const QStringList& args,VideoProcess& encoder,EncodeProgress& progress,
                   const QSize& size,VideoColor source,VideoColor output,const Options& options,
-                  unsigned outputBits,const std::function<bool()>& cancelled) {
+                  unsigned outputBits,SdrVideoGamma gamma,const std::function<bool()>& cancelled) {
     const auto pixels=quint64(size.width())*quint64(size.height());
     if(!pixels||pixels>quint64(std::numeric_limits<qsizetype>::max())/6)
         throw std::runtime_error("Video frame dimensions exceed addressable memory.");
@@ -381,7 +393,7 @@ void streamFrames(const QString& ffmpeg,const QStringList& args,VideoProcess& en
                     decodedQueue.pop_front();
                 }
                 if(stopped())throw std::runtime_error("Video conversion cancelled");
-                process_video_pixels(reinterpret_cast<uint8_t*>(frame.data()),size_t(pixels),source,output,options,working,outputBits);
+                process_video_pixels(reinterpret_cast<uint8_t*>(frame.data()),size_t(pixels),source,output,options,working,outputBits,gamma);
                 {
                     std::lock_guard<std::mutex> lock(mutex);
                     encodedQueue.push_back(std::move(frame));
@@ -536,8 +548,9 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     if(hdrOutput&&h264)throw std::runtime_error("H.264 output uses SDR. Choose HEVC or AV1 for HDR.");
     if(hdrOutput&&target.depth==8)throw std::runtime_error("HDR output requires Auto, 10-bit, or 12-bit output depth.");
     const int outputTransfer=!hdrOutput?1:transfer==VideoTransfer::pq?16:transfer==VideoTransfer::hlg?18:stream.transfer;
-    const bool gpuToneMap=target.gpuToneMapping&&!target.processPixels&&stream.hdr()&&!hdrOutput;
-    const bool processed=!gpuToneMap&&(stream.dolbyVision||target.processPixels||
+    const bool customSdrGamma=!hdrOutput&&target.sdrGamma!=SdrVideoGamma::automatic;
+    const bool gpuToneMap=target.gpuToneMapping&&!target.processPixels&&stream.hdr()&&!hdrOutput&&!customSdrGamma;
+    const bool processed=!gpuToneMap&&(stream.dolbyVision||target.processPixels||customSdrGamma||
         (stream.hdr()&&stream.transfer!=outputTransfer));
     const bool converted=processed||gpuToneMap;
     const QString rgbFormat=QSysInfo::ByteOrder==QSysInfo::LittleEndian?"rgb48le":"rgb48be";
@@ -564,13 +577,15 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
         tagged(stream.matrixName)&&!rgbSource?stream.matrixName:defaultMatrix;
     const QString primaries=converted?(hdrOutput?"bt2020":"bt709"):
         tagged(stream.primariesName)?stream.primariesName:defaultPrims;
-    const QString trc=converted?(outputTransfer==16?"smpte2084":outputTransfer==18?"arib-std-b67":"bt709"):
-        tagged(stream.transferName)?stream.transferName:"bt709";
+    const auto sourceGamma=gammaTransferCode(stream.transferName);
+    const QString inputTrc=sourceGamma?QString::number(sourceGamma):tagged(stream.transferName)?stream.transferName:QString("bt709");
+    const QString trc=converted?(outputTransfer==16?QString("smpte2084"):outputTransfer==18?QString("arib-std-b67"):sdrTransferTag(target.sdrGamma)):inputTrc;
     const QString range=!converted&&!rgbSource&&stream.rangeName=="pc"?"pc":"tv";
     const QString scale=QString("scale=%1:%2:out_color_matrix=%3:out_range=%4:flags=accurate_rnd+full_chroma_int")
         .arg(size.width()).arg(size.height()).arg(matrixFilter(matrix,defaultPrimaries),range);
     const QString sar=QString("setsar=sar=%1:max=10000").arg(stream.displayAspect*size.height()/size.width(),0,'f',9);
     QString filter=scale+(processed?":in_range=pc":QString{})+",format="+pixFmt+","+sar;
+    if(processed)filter+=QString(",setparams=range=limited:color_primaries=%1:color_trc=%2:colorspace=%3").arg(primaries,trc,matrix);
     if(gpuToneMap) {
         // Let libplacebo convert directly from the source YUV and preserve VFR timestamps.
         filter=QString("libplacebo=w=%1:h=%2:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:"
@@ -617,7 +632,7 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
                                   "-threads",decodeThreads,"-i",input,"-map",QString("0:%1").arg(stream.index),
                                   "-an","-vf",decodeFilter,"-c:v","rawvideo","-threads:v","1","-pix_fmt",rgbFormat,
                                   "-f","rawvideo"};
-        streamFrames(ffmpeg,decode,encoder,progress,size,srcColor,destColor,options,eightBitPipe?8u:16u,cancelled);
+        streamFrames(ffmpeg,decode,encoder,progress,size,srcColor,destColor,options,eightBitPipe?8u:16u,target.sdrGamma,cancelled);
     }
     while(encoder.process.state()!=QProcess::NotRunning) {
         checkCancelled(cancelled);
@@ -814,7 +829,8 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
     }
     const bool srgb=gif||options.srgb_clamp||transfer==AnimationTransfer::scrgb;
     const unsigned primaries=asVideo?(sdr?1u:9u):srgb?1u:!sdr||wide?9u:1u;
-    const AnimationEncoding encoding{target.format,transfer,unsigned(canvas.width()),unsigned(canvas.height()),bits,primaries,target.delayUs,asVideo};
+    const auto gamma=asVideo?target.video->sdrGamma:SdrVideoGamma::rec709;
+    const AnimationEncoding encoding{target.format,transfer,unsigned(canvas.width()),unsigned(canvas.height()),bits,primaries,target.delayUs,asVideo,gamma};
     Staging stage(output);
     std::unique_ptr<AnimationEncoder> native;
     std::unique_ptr<VideoProcess> ffmpegEncoder;
@@ -826,7 +842,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         const auto rgb=QSysInfo::ByteOrder==QSysInfo::LittleEndian?"rgba64le":"rgba64be";
         const auto pixFmt=encoderPixelFormat(sourceBits>8,!sdr,video);
         const auto matrix=sdr?"bt709":"bt2020";
-        const auto trc=sdr?"bt709":transfer==AnimationTransfer::pq?"smpte2084":"arib-std-b67";
+        const auto trc=sdr?sdrTransferTag(gamma):transfer==AnimationTransfer::pq?QString("smpte2084"):QString("arib-std-b67");
         const auto colorspace=sdr?"bt709":"bt2020nc";
         const auto filter=QString("scale=in_range=pc:out_range=tv:out_color_matrix=%1:flags=accurate_rnd+full_chroma_int,format=%2,"
                                   "setparams=range=limited:color_primaries=%1:color_trc=%3:colorspace=%4")
@@ -899,7 +915,7 @@ bool convertAnimation(const std::filesystem::path& output,const Options& options
         if(!frame.rgba8.empty()) {
             const auto rgba=place_animation_rgba8(std::move(frame),encoding,placement,options);
             if(native)native->add(rgba);
-            else if(asVideo)sendVideo(animation_bt709_rgba16(rgba));
+            else if(asVideo)sendVideo(animation_video_rgba16(rgba,gamma));
             else sendGif(rgba);
         } else {
             const auto pixels=compose_animation_frame(std::move(frame),encoding,placement,options,stack);

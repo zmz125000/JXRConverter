@@ -1,5 +1,6 @@
 #pragma once
 #include "jxrc/converter.hpp"
+#include "../native/video_gamma.h"
 #include <QStringList>
 
 namespace jxrc::gui {
@@ -23,6 +24,7 @@ struct VideoOutput {
     VideoCodec codec = VideoCodec::hevc;
     VideoContainer container = VideoContainer::mp4;
     VideoTransfer transfer = VideoTransfer::automatic;
+    SdrVideoGamma sdrGamma = SdrVideoGamma::automatic;
     VideoEncoder encoder = VideoEncoder::software;
     VideoRate rate = VideoRate::crf;
     VideoChroma chroma = VideoChroma::yuv420;

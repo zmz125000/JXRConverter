@@ -347,7 +347,7 @@ std::vector<float> compose_animation_frame(AnimationFrame&& frame, const Animati
         switch(format.transfer) {
         case AnimationTransfer::pq:return linear_to_pq_code(v);
         case AnimationTransfer::hlg:return unit(v);
-        case AnimationTransfer::sdr:return format.video?bt709_oetf(v):srgb_oetf(v);
+        case AnimationTransfer::sdr:return format.video?sdr_video_oetf(v,format.video_gamma):srgb_oetf(v);
         case AnimationTransfer::scrgb:return v*(kSdrWhiteNits/80.f);
         case AnimationTransfer::linear:return v;
         }
@@ -426,17 +426,16 @@ std::vector<uint8_t> place_animation_rgba8(AnimationFrame&& frame, const Animati
     return canvas;
 }
 
-std::vector<uint16_t> animation_bt709_rgba16(const std::vector<uint8_t>& pixels) {
-    // The video pipe is RGB16 with a BT.709 transfer. Convert sRGB codes
-    // through a lookup table while keeping the frame in integer buffers.
-    static const auto bt709=[] {
-        std::array<uint16_t,256> table{};
-        for(unsigned i=0;i<table.size();++i)table[i]=uint16_t(std::lround(bt709_oetf(srgb_eotf(i/255.f))*65535.f));
-        return table;
-    }();
+std::vector<uint16_t> animation_video_rgba16(const std::vector<uint8_t>& pixels,SdrVideoGamma gamma) {
+    // The direct raster path receives sRGB. Convert its codes directly to
+    // the video transfer without allocating a floating-point frame.
+    std::array<uint16_t,256> table{};
+    for(unsigned i=0;i<table.size();++i)
+        table[i]=gamma==SdrVideoGamma::srgb?uint16_t(i*257):
+            uint16_t(std::lround(sdr_video_oetf(srgb_eotf(i/255.f),gamma)*65535.f));
     std::vector<uint16_t> result(pixels.size());
     for(size_t i=0;i<pixels.size();i+=4) {
-        for(unsigned c=0;c<3;++c)result[i+c]=bt709[pixels[i+c]];
+        for(unsigned c=0;c<3;++c)result[i+c]=table[pixels[i+c]];
         result[i+3]=uint16_t(pixels[i+3])*257;
     }
     return result;

@@ -2,10 +2,31 @@
 #include "codec_api.h"
 #include "render_analysis.h"
 #include "sdr_mapping.h"
+#include <array>
 #include <cstring>
 
 namespace jxrc {
 namespace {
+template<unsigned GammaTenths>
+float power_oetf(float linear) {
+    if(!(linear>0.f))return 0.f;
+    if(linear>=1.f)return 1.f;
+    static constexpr unsigned steps=4096;
+    static constexpr float exponent=10.f/GammaTenths;
+    static const auto lut=[] {
+        std::array<float,steps+1> values{};
+        for(unsigned i=0;i<=steps;++i) {
+            const float x=float(i)/steps;
+            values[i]=std::pow(x*x,exponent);
+        }
+        return values;
+    }();
+    const float position=std::sqrt(linear)*steps;
+    const unsigned index=std::min(unsigned(position),steps-1);
+    if(index<16)return std::pow(linear,exponent);
+    return lut[index]+(lut[index+1]-lut[index])*(position-index);
+}
+
 skiv::Matrix rgb_to_xyz(unsigned primaries) {
     switch(primaries) {
     case 9:return skiv::rgb2020_xyz;
@@ -42,6 +63,17 @@ void render_video_pixels_inplace(const uint8_t* codes,size_t count,unsigned chan
 }
 }
 
+float sdr_video_oetf(float linear,SdrVideoGamma gamma) {
+    switch(gamma) {
+    case SdrVideoGamma::gamma22:return power_oetf<22>(linear);
+    case SdrVideoGamma::gamma24:return power_oetf<24>(linear);
+    case SdrVideoGamma::srgb:return srgb_oetf(linear);
+    case SdrVideoGamma::automatic:
+    case SdrVideoGamma::rec709:return bt709_oetf(linear);
+    }
+    return bt709_oetf(linear);
+}
+
 AnimationFrame render_animation_video_frame(const uint8_t* codes,unsigned width,unsigned height,
                                              VideoColor source,bool sdr,const Options& options) {
     JxrcThreadBudget budget(options.threads);
@@ -71,7 +103,7 @@ AnimationFrame render_animation_video_frame(const uint8_t* codes,unsigned width,
 }
 
 void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoColor output,
-                          const Options& options,std::vector<float>& working,unsigned output_bits) {
+                          const Options& options,std::vector<float>& working,unsigned output_bits,SdrVideoGamma gamma) {
     JxrcThreadBudget budget(options.threads);
     const bool sdr_output=output.transfer==1;
     render_video_pixels_inplace(codes,count,3,source,sdr_output,options,working);
@@ -98,7 +130,7 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
                 }
                 if(output.transfer==18)linear_to_hlg_rgb(r,g,b,output_gamut);
                 const auto enc=[&](float value) -> uint8_t {
-                    const float code=output.transfer==16?linear_to_pq_code(value):sdr_output?bt709_oetf(value):value;
+                    const float code=output.transfer==16?linear_to_pq_code(value):sdr_output?sdr_video_oetf(value,gamma):value;
                     return uint8_t(std::clamp(code,0.f,1.f)*255.f+0.5f);
                 };
                 dst[0]=enc(r);dst[1]=enc(g);dst[2]=enc(b);
@@ -117,7 +149,7 @@ void process_video_pixels(uint8_t* codes,size_t count,VideoColor source,VideoCol
                 }
                 if(output.transfer==18)linear_to_hlg_rgb(r,g,b,output_gamut);
                 const auto enc=[&](float value) -> uint16_t {
-                    const float code=output.transfer==16?linear_to_pq_code(value):sdr_output?bt709_oetf(value):value;
+                    const float code=output.transfer==16?linear_to_pq_code(value):sdr_output?sdr_video_oetf(value,gamma):value;
                     return uint16_t(std::clamp(code,0.f,1.f)*65535.f+0.5f);
                 };
                 dst[0]=enc(r);dst[1]=enc(g);dst[2]=enc(b);

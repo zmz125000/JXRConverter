@@ -1370,6 +1370,7 @@ private slots:
         auto* codec=window.findChild<QComboBox*>("videoOutputCodec");
         auto* container=window.findChild<QComboBox*>("videoOutputContainer");
         auto* transfer=window.findChild<QComboBox*>("videoOutputTransfer");
+        auto* gamma=window.findChild<QComboBox*>("videoSdrGamma");
         auto* depth=window.findChild<QComboBox*>("videoOutputDepth");
         auto* backend=window.findChild<QComboBox*>("videoEncoder");
         auto* rate=window.findChild<QComboBox*>("videoRateControl");
@@ -1382,6 +1383,9 @@ private slots:
         QVERIFY(gpuTone->isEnabled()&&!gpuTone->isChecked());
         gpuTone->setChecked(true);
         QVERIFY(!cpuTone->isEnabled());
+        gamma->setCurrentIndex(int(jxrc::SdrVideoGamma::gamma24));
+        QVERIFY(!gpuTone->isEnabled()&&cpuTone->isEnabled());
+        gamma->setCurrentIndex(int(jxrc::SdrVideoGamma::automatic));
         mode->setCurrentIndex(1);
         QVERIFY(!gpuTone->isEnabled()&&cpuTone->isEnabled());
         mode->setCurrentIndex(0);
@@ -1392,9 +1396,11 @@ private slots:
 
         depth->setCurrentIndex(depth->findData(8));
         transfer->setCurrentIndex(int(VideoTransfer::pq));
+        QVERIFY(!gamma->isEnabled());
         QCOMPARE(depth->currentData().toInt(),0);
         codec->setCurrentIndex(int(VideoCodec::h264));
         QCOMPARE(transfer->currentIndex(),int(VideoTransfer::automatic));
+        QVERIFY(gamma->isEnabled());
         QVERIFY(!(container->model()->flags(container->model()->index(int(VideoContainer::webm),0))&Qt::ItemIsEnabled));
 
         factor->setValue(19);
@@ -1936,6 +1942,8 @@ private slots:
         tabs->setCurrentIndex(1);
         auto* codec=window.findChild<QComboBox*>("videoOutputCodec");
         codec->setCurrentIndex(int(VideoCodec::h264));
+        auto* gamma=window.findChild<QComboBox*>("videoSdrGamma");
+        gamma->setCurrentIndex(int(jxrc::SdrVideoGamma::gamma24));
         auto* rate=window.findChild<QComboBox*>("videoRateControl");
         rate->setCurrentIndex(rate->findData(int(VideoRate::cqp)));
         window.findChild<QSpinBox*>("videoQualityFactor")->setValue(20);
@@ -1947,6 +1955,7 @@ private slots:
         QVERIFY(!image->isVisible());
         QVERIFY(video->isVisible());
         QCOMPARE(summary("videoOutputCodec")->text(),codec->currentText());
+        QCOMPARE(summary("videoSdrGamma")->text(),gamma->currentText());
         QCOMPARE(summary("videoQualityFactor")->text(),QString("20"));
         QVERIFY(summary("videoQualityFactor")->isVisible());
         QVERIFY(!summary("videoBitrate")->isVisible());
@@ -2045,6 +2054,66 @@ private slots:
         QVERIFY(format->isEnabled());
         QVERIFY(transfer->isEnabled());
         QCOMPARE(transfer->currentIndex(),int(jxrc::AnimationTransfer::pq));
+    }
+    void videoSdrGammaTransfers() {
+        const auto pathFromQt=[](const QString& path){return std::filesystem::u8path(path.toUtf8().constData());};
+        const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
+        const auto ffprobe=QStandardPaths::findExecutable("ffprobe");
+        if(ffmpeg.isEmpty()||ffprobe.isEmpty())QSKIP("FFmpeg and ffprobe are unavailable");
+        QProcess process;
+        process.start(ffmpeg,{"-hide_banner","-encoders"});
+        QVERIFY(process.waitForFinished());
+        if(!process.readAllStandardOutput().contains("libx264"))QSKIP("FFmpeg lacks the x264 encoder");
+
+        const auto directory=root("video-sdr-gamma");
+        QVERIFY(QDir().mkpath(directory));
+        const auto input=directory+"/shadow.png";
+        QImage shadow(32,32,QImage::Format_RGB888);
+        shadow.setColorSpace(QColorSpace::SRgb);
+        shadow.fill(QColor(32,32,32));
+        QVERIFY(shadow.save(input));
+        const auto decodedColor=[&](const QString& output,const QString& tag,int expected) {
+            process.start(ffprobe,{"-v","error","-select_streams","v:0","-show_entries","stream=color_transfer",
+                                  "-of","default=nw=1:nk=1",output});
+            QVERIFY(process.waitForFinished());
+            QCOMPARE(process.exitCode(),0);
+            auto actual=QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+            if(actual=="bt470m")actual="gamma22";
+            QCOMPARE(actual,tag);
+            process.start(ffmpeg,{"-v","error","-i",output,"-frames:v","1","-vf",
+                "scale=in_range=tv:out_range=pc:in_color_matrix=bt709,format=rgb24","-f","rawvideo","pipe:1"});
+            QVERIFY(process.waitForFinished());
+            QCOMPARE(process.exitCode(),0);
+            const auto rgb=process.readAllStandardOutput();
+            QCOMPARE(rgb.size(),32*32*3);
+            QVERIFY2(std::abs(int(uint8_t(rgb[0]))-expected)<=2,qPrintable(QString::number(uint8_t(rgb[0]))));
+        };
+        jxrc::Options options;
+        options.threads=2;
+        AnimationOutput target;
+        target.inputs={input};
+        auto& video=target.video.emplace();
+        video.codec=VideoCodec::h264;
+        video.transfer=VideoTransfer::sdr;
+        video.rate=VideoRate::lossless;
+        video.preset="ultrafast";
+        const auto cancelled=[] {return false;};
+        const auto progress=[](int) {};
+        const QStringList tags={"bt709","gamma22","bt709","iec61966-2-1"};
+        const int samples[]={17,37,44,32};
+        QString original;
+        for(int i=0;i<tags.size();++i) {
+            video.sdrGamma=jxrc::SdrVideoGamma(i+int(jxrc::SdrVideoGamma::rec709));
+            if(i==2)target.placement.resize=jxrc::AnimationResize::fit_up; // Exercise the F32 image path too.
+            const auto output=directory+QString("/gamma-%1.mp4").arg(i);
+            QVERIFY(!convertAnimation(pathFromQt(output),options,target,cancelled,progress));
+            decodedColor(output,tags[i],samples[i]);
+            if(i==1)original=output;
+        }
+        video.sdrGamma=jxrc::SdrVideoGamma::gamma24;
+        const auto converted=directory+"/converted.mp4";
+        QVERIFY(!convertVideo(original,pathFromQt(converted),options,video,cancelled,progress));
+        decodedColor(converted,"bt709",44);
     }
     void animationVideoSlowMotion() {
         const auto ffmpeg=QStandardPaths::findExecutable("ffmpeg");
