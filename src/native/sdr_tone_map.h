@@ -8,16 +8,15 @@
 
 // Working RGB is linear display light with 1.0 = 203 nits. Preserve every
 // pixel below the selected metric shoulder; alpha is preserved.
-inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
-                                            float shoulder, float range_nits,
-                                            jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
-                                            jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
-                                            std::array<float,3> luma = {.2126f,.7152f,.0722f},
-                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
-    std::vector<float> sdr=hdr;
+inline void tone_map_sdr_inplace(std::vector<float>& sdr,
+                                 float shoulder, float range_nits,
+                                 jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
+                                 jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
+                                 std::array<float,3> luma = {.2126f,.7152f,.0722f},
+                                 std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
     const size_t pixels=sdr.size()/4;
     const unsigned jobs=hdr_pixel_jobs(pixels);
-    const AutoSdrTone auto_tone=auto_curve?analyze_auto_sdr_tone(hdr,luma):AutoSdrTone{};
+    const AutoSdrTone auto_tone=auto_curve?analyze_auto_sdr_tone(sdr,luma):AutoSdrTone{};
     if(auto_curve)zones[1]=0.f;
     const bool has_zones=zones!=std::array<float,3>{};
     if(auto_tone.active()||has_zones) {
@@ -42,7 +41,7 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
             for(size_t i=begin*4;i<end*4;i+=4)for(unsigned c=0;c<3;++c)
                 sdr[i+c]=std::clamp(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f,1.f);
         });
-        return sdr;
+        return;
     }
     const float span=range-shoulder;
     // Normalized Reinhard shoulder: continuous slope 1 at the join, 0..1
@@ -59,22 +58,22 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
         }
         log_scale=(lo+hi)*.5;
     }
+    const float log_scale_f=float(log_scale);
+    const float inv_log_scale_f=1.f/log_scale_f;
+    const float headroom=1.f-shoulder;
+    const float inv_headroom=1.f/headroom;
+    const float ext_k=headroom/(span*span);
+    const float reinhard_k=headroom*((span+knee)/span);
     const auto curve=[&](float peak) {
-        float mapped=peak;
-        if(peak>shoulder) {
-            const float above=std::min(peak,range)-shoulder;
-            const float headroom=1.f-shoulder;
-            if(mapper==jxrc::SdrToneMapper::logarithmic) {
-                mapped=shoulder+float(log_scale*std::log1p(above/log_scale));
-            } else if(mapper==jxrc::SdrToneMapper::extended_reinhard) {
-                // White-point extension keeps more slope at the endpoint than
-                // the normalized asymptotic curve, retaining highlight texture.
-                mapped=shoulder+above*(1.f+above*headroom/(span*span))/(1.f+above/headroom);
-            } else {
-                mapped=shoulder+headroom*(above/(above+knee))*((span+knee)/span);
-            }
+        if(peak<=shoulder)return peak;
+        const float above=std::min(peak,range)-shoulder;
+        if(mapper==jxrc::SdrToneMapper::logarithmic) {
+            return shoulder+log_scale_f*std::log1p(above*inv_log_scale_f);
+        } else if(mapper==jxrc::SdrToneMapper::extended_reinhard) {
+            return shoulder+above*(1.f+above*ext_k)/(1.f+above*inv_headroom);
+        } else {
+            return shoulder+reinhard_k*(above/(above+knee));
         }
-        return mapped;
     };
     hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned) {
         for(size_t i=begin*4;i<end*4;i+=4) {
@@ -86,10 +85,19 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                 const float metric=mapping==jxrc::SdrColorMapping::luminance?
                     rgb[0]*luma[0]+rgb[1]*luma[1]+rgb[2]*luma[2]:std::max({rgb[0],rgb[1],rgb[2]});
                 const float scale=metric>0.f?curve(metric)/metric:0.f;
-                for(unsigned c=0;c<3;++c)rgb[c]*=scale;
-                for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(rgb[c],0.f,1.f);
+                for(unsigned c=0;c<3;++c)sdr[i+c]=std::clamp(rgb[c]*scale,0.f,1.f);
             }
         }
     });
+}
+
+inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
+                                            float shoulder, float range_nits,
+                                            jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
+                                            jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
+                                            std::array<float,3> luma = {.2126f,.7152f,.0722f},
+                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
+    std::vector<float> sdr=hdr;
+    tone_map_sdr_inplace(sdr,shoulder,range_nits,mapper,mapping,luma,zones,auto_range,auto_curve);
     return sdr;
 }

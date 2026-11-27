@@ -4,6 +4,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
+#include <cstring>
 #include <vector>
 
 namespace sdr_auto_tone {
@@ -11,8 +13,37 @@ namespace sdr_auto_tone {
 inline double pq(double y) {
     const double n = std::clamp(y * (203.0 / 10000.0), 0.0, 1.0);
     if (n <= 0.0) return 0.0;
-    const double p = std::pow(n, 0.1593017578125);
-    return std::pow((0.8359375 + 18.8515625 * p) / (1.0 + 18.6875 * p), 78.84375);
+    if (n >= 1.0) return 1.0;
+    // IEEE-754 float log2-spaced LUT: 512 steps per octave over [2^-30, 1.0].
+    constexpr uint32_t kMinExp = 97;  // 2^-30 (~9.3e-10, < 1e-5 nits)
+    constexpr uint32_t kMaxExp = 127; // 2^0 = 1.0
+    constexpr uint32_t kMantBits = 9;
+    constexpr uint32_t kShift = 23 - kMantBits;
+    constexpr uint32_t kBase = kMinExp << kMantBits;
+    constexpr uint32_t kSize = ((kMaxExp - kMinExp) << kMantBits) + 1;
+    static const std::vector<double> lut = [] {
+        std::vector<double> table(kSize + 1);
+        for (uint32_t i = 0; i <= kSize; ++i) {
+            const uint32_t bits = (kBase + i) << kShift;
+            float fv = 0.f;
+            std::memcpy(&fv, &bits, sizeof(fv));
+            const double v = std::min(double(fv), 1.0);
+            const double p = std::pow(v, 0.1593017578125);
+            table[i] = std::pow((0.8359375 + 18.8515625 * p) / (1.0 + 18.6875 * p), 78.84375);
+        }
+        return table;
+    }();
+    const float nf = float(n);
+    uint32_t bits = 0;
+    std::memcpy(&bits, &nf, sizeof(bits));
+    const uint32_t key = bits >> kShift;
+    if (key < kBase) {
+        const double p = std::pow(n, 0.1593017578125);
+        return std::pow((0.8359375 + 18.8515625 * p) / (1.0 + 18.6875 * p), 78.84375);
+    }
+    const uint32_t idx = std::min(key - kBase, kSize - 1);
+    const double frac = double(bits & ((1u << kShift) - 1u)) * (1.0 / double(1u << kShift));
+    return lut[idx] + (lut[idx + 1] - lut[idx]) * frac;
 }
 inline double inverse_pq(double code) {
     const double c = std::clamp(code, 0.0, 1.0);

@@ -12,15 +12,22 @@
 #include <QTcpSocket>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
+#include <exception>
 #include <fstream>
 #include <cmath>
 #include <limits>
+#include <mutex>
 #include <stdexcept>
+#include <thread>
 
 namespace jxrc::gui {
 namespace {
 using video::VideoStream;
-constexpr qsizetype framePipeBuffer = 1024 * 1024;
+constexpr qsizetype framePipeBuffer = 4 * 1024 * 1024;
 
 bool tagged(const QString& name) {
     return !name.isEmpty()&&name!="unknown"&&name!="unspecified"&&name!="reserved";
@@ -258,16 +265,188 @@ void writeFrame(VideoProcess& encoder,const char* data,qsizetype size,const std:
 
 void streamFrames(const QString& ffmpeg,const QStringList& args,VideoProcess& encoder,EncodeProgress& progress,
                   const QSize& size,VideoColor source,VideoColor output,const Options& options,
-                  const std::function<bool()>& cancelled) {
-    std::vector<float> working;
+                  unsigned outputBits,const std::function<bool()>& cancelled) {
+    const auto pixels=quint64(size.width())*quint64(size.height());
+    if(!pixels||pixels>quint64(std::numeric_limits<qsizetype>::max())/6)
+        throw std::runtime_error("Video frame dimensions exceed addressable memory.");
+    const qsizetype inFrameBytes=qsizetype(pixels*6);
+    const qsizetype outFrameBytes=qsizetype(pixels*(outputBits==8?3:6));
+    constexpr int kSlots=3;
+
+    std::mutex mutex;
+    std::condition_variable cvFree,cvDecoded,cvEncoded;
+    std::deque<QByteArray> freeQueue,decodedQueue,encodedQueue;
+    for(int i=0;i<kSlots;++i)freeQueue.emplace_back(inFrameBytes,Qt::Uninitialized);
+    bool readerDone=false,processorDone=false;
+    std::atomic<bool> abort{false};
+    std::exception_ptr workerError;
+    const auto recordError=[&](std::exception_ptr err) {
+        std::lock_guard<std::mutex> lock(mutex);
+        if(!workerError)workerError=err;
+        abort.store(true,std::memory_order_release);
+        cvFree.notify_all();
+        cvDecoded.notify_all();
+        cvEncoded.notify_all();
+    };
+    const auto stopped=[&] { return abort.load(std::memory_order_acquire)||cancelled(); };
+
+    // Stage 1: FFmpeg decoder + TCP socket reader on its own thread.
+    std::thread reader([&] {
+        try {
+            QTcpServer server;
+            if(!server.listen(QHostAddress::LocalHost))
+                throw std::runtime_error(("Cannot open video decoder stream: "+server.errorString()).toStdString());
+            QStringList decodeArgs=args;
+            decodeArgs << QString("tcp://127.0.0.1:%1").arg(server.serverPort());
+            VideoProcess decoder(ffmpeg,decodeArgs,true);
+            while(!server.hasPendingConnections()) {
+                if(stopped())throw std::runtime_error("Video conversion cancelled");
+                decoder.readErrors();
+                if(server.waitForNewConnection(50))break;
+                if(decoder.process.waitForFinished(0)||decoder.process.state()==QProcess::NotRunning)
+                    decoder.fail("Video decoder did not open its frame stream");
+            }
+            std::unique_ptr<QTcpSocket> socket(server.nextPendingConnection());
+            socket->setReadBufferSize(framePipeBuffer);
+            server.close();
+
+            QByteArray frame;
+            auto acquireSlot=[&]() -> bool {
+                std::unique_lock<std::mutex> lock(mutex);
+                while(freeQueue.empty()&&!stopped()) {
+                    cvFree.wait_for(lock,std::chrono::milliseconds(50));
+                }
+                if(stopped())return false;
+                frame=std::move(freeQueue.front());
+                freeQueue.pop_front();
+                return true;
+            };
+            if(!acquireSlot())throw std::runtime_error("Video conversion cancelled");
+
+            qsizetype available=0;
+            bool wroteFrame=false;
+            while(true) {
+                if(stopped())throw std::runtime_error("Video conversion cancelled");
+                decoder.readErrors();
+                const auto read=socket->read(frame.data()+available,inFrameBytes-available);
+                if(read>0)available+=read;
+                if(available==inFrameBytes) {
+                    {
+                        std::lock_guard<std::mutex> lock(mutex);
+                        decodedQueue.push_back(std::move(frame));
+                    }
+                    cvDecoded.notify_one();
+                    wroteFrame=true;
+                    available=0;
+                    if(!acquireSlot())throw std::runtime_error("Video conversion cancelled");
+                } else if(socket->state()==QAbstractSocket::UnconnectedState&&socket->bytesAvailable()==0) {
+                    break;
+                } else {
+                    if(!socket->waitForReadyRead(50)&&socket->state()!=QAbstractSocket::UnconnectedState)
+                        decoder.process.waitForFinished(0);
+                }
+            }
+            while(decoder.process.state()!=QProcess::NotRunning) {
+                if(stopped())throw std::runtime_error("Video conversion cancelled");
+                decoder.readErrors();
+                decoder.process.waitForFinished(50);
+            }
+            decoder.checkExit("Video decode failed");
+            if(available||!wroteFrame)throw std::runtime_error("FFmpeg did not return complete video frames.");
+        } catch(...) {
+            recordError(std::current_exception());
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            readerDone=true;
+        }
+        cvDecoded.notify_all();
+    });
+
+    // Stage 2: CPU pixel processing / tone mapping on its own thread (using the parallel pool).
+    std::thread processor([&] {
+        try {
+            std::vector<float> working;
+            while(true) {
+                QByteArray frame;
+                {
+                    std::unique_lock<std::mutex> lock(mutex);
+                    cvDecoded.wait(lock,[&] { return !decodedQueue.empty()||readerDone||abort.load(std::memory_order_acquire); });
+                    if(abort.load(std::memory_order_acquire))break;
+                    if(decodedQueue.empty()) {
+                        if(readerDone)break;
+                        continue;
+                    }
+                    frame=std::move(decodedQueue.front());
+                    decodedQueue.pop_front();
+                }
+                if(stopped())throw std::runtime_error("Video conversion cancelled");
+                process_video_pixels(reinterpret_cast<uint8_t*>(frame.data()),size_t(pixels),source,output,options,working,outputBits);
+                {
+                    std::lock_guard<std::mutex> lock(mutex);
+                    encodedQueue.push_back(std::move(frame));
+                }
+                cvEncoded.notify_one();
+            }
+        } catch(...) {
+            recordError(std::current_exception());
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            processorDone=true;
+        }
+        cvEncoded.notify_all();
+    });
+
+    struct JoinGuard {
+        std::atomic<bool>& abort;
+        std::condition_variable &cvFree,&cvDecoded,&cvEncoded;
+        std::thread &reader,&processor;
+        ~JoinGuard() {
+            abort.store(true,std::memory_order_release);
+            cvFree.notify_all();
+            cvDecoded.notify_all();
+            cvEncoded.notify_all();
+            if(reader.joinable())reader.join();
+            if(processor.joinable())processor.join();
+        }
+    } guard{abort,cvFree,cvDecoded,cvEncoded,reader,processor};
+
+    // Stage 3: Encoder writer on the calling thread (keeps QProcess encoder thread-affine).
     const auto poll=[&] {
         progress.poll();
         if(encoder.process.state()==QProcess::NotRunning)encoder.fail("Video encode failed");
     };
-    readFrames(ffmpeg,args,size,6,cancelled,[&](QByteArray& frame) {
-        process_video_pixels(reinterpret_cast<uint8_t*>(frame.data()),size_t(frame.size()/6),source,output,options,working);
-        writeFrame(encoder,frame.constData(),frame.size(),cancelled,poll);
-    },poll);
+    while(true) {
+        QByteArray frame;
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            while(encodedQueue.empty()&&!processorDone&&!abort.load(std::memory_order_acquire)) {
+                cvEncoded.wait_for(lock,std::chrono::milliseconds(50));
+                lock.unlock();
+                checkCancelled(cancelled);
+                poll();
+                lock.lock();
+            }
+            if(!encodedQueue.empty()&&!abort.load(std::memory_order_acquire)) {
+                frame=std::move(encodedQueue.front());
+                encodedQueue.pop_front();
+            } else {
+                break;
+            }
+        }
+        writeFrame(encoder,frame.constData(),outFrameBytes,cancelled,poll);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            freeQueue.push_back(std::move(frame));
+        }
+        cvFree.notify_one();
+    }
+
+    if(reader.joinable())reader.join();
+    if(processor.joinable())processor.join();
+    if(workerError)std::rethrow_exception(workerError);
+    checkCancelled(cancelled);
     encoder.process.closeWriteChannel();
 }
 }
@@ -368,8 +547,10 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
         format.endsWith("14")||format.endsWith("16")||format.endsWith("48")||format.endsWith("64");
     const auto pixFmt=encoderPixelFormat(deep,hdrOutput,target);
     const int budget=int(std::max(1u,options.threads));
-    const int decodingThreads=processed?std::clamp(budget/3,1,4):budget;
-    const int encodingThreads=processed?std::max(1,budget-decodingThreads):budget;
+    const int decodingThreads=processed?std::clamp(budget/2,1,4):budget;
+    const int encodingThreads=processed?std::max(1,budget-(decodingThreads>1?1:0)):budget;
+    const bool eightBitPipe=processed&&!hdrOutput&&(pixFmt=="yuv420p"||pixFmt=="yuv422p"||pixFmt=="yuv444p"||pixFmt=="nv12");
+    const QString encodeRgbFormat=eightBitPipe?QString("rgb24"):rgbFormat;
     const QString encodeThreads=QString::number(encodingThreads);
     const QString decodeThreads=QString::number(decodingThreads);
     const QString raster=QString("%1x%2").arg(size.width()).arg(size.height());
@@ -400,7 +581,7 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
     }
     QStringList encode={"-hide_banner","-loglevel","error","-nostdin","-xerror","-filter_threads",encodeThreads,
                         "-progress","pipe:1","-y"};
-    if(processed)encode << "-thread_queue_size" << "2" << "-f" << "rawvideo" << "-pixel_format" << rgbFormat << "-video_size" << raster
+    if(processed)encode << "-thread_queue_size" << "8" << "-f" << "rawvideo" << "-pixel_format" << encodeRgbFormat << "-video_size" << raster
                         << "-framerate" << stream.frameRate << "-i" << "pipe:0";
     const QString sourceIndex=processed?"1":"0";
     encode << "-threads" << decodeThreads << "-i" << input << "-map"
@@ -436,7 +617,7 @@ bool convertVideo(const QString& input,const std::filesystem::path& output,const
                                   "-threads",decodeThreads,"-i",input,"-map",QString("0:%1").arg(stream.index),
                                   "-an","-vf",decodeFilter,"-c:v","rawvideo","-threads:v","1","-pix_fmt",rgbFormat,
                                   "-f","rawvideo"};
-        streamFrames(ffmpeg,decode,encoder,progress,size,srcColor,destColor,options,cancelled);
+        streamFrames(ffmpeg,decode,encoder,progress,size,srcColor,destColor,options,eightBitPipe?8u:16u,cancelled);
     }
     while(encoder.process.state()!=QProcess::NotRunning) {
         checkCancelled(cancelled);

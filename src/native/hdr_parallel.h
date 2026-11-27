@@ -29,22 +29,22 @@ inline unsigned hdr_pixel_jobs(size_t pixels, unsigned max_threads = 0) {
     }
     max_threads = jxrc_limit_threads(max_threads);
     return static_cast<unsigned>(std::min<size_t>(
-        std::min(max_threads, 8u), std::max<size_t>(1, pixels / 262144)));
+        std::min(max_threads, 8u), std::max<size_t>(1, pixels / 131072)));
 }
+
+JXRC_API void jxrc_parallel_for(size_t pixels, unsigned jobs,
+                                void (*fn)(void*, size_t, size_t, unsigned), void* ctx);
 
 template <typename Work>
 void hdr_parallel_pixels(size_t pixels, unsigned jobs, Work work) {
-    std::vector<std::thread> workers;
-    workers.reserve(jobs - 1);
-    for (unsigned job = 1; job < jobs; ++job) {
-        const size_t begin = pixels * job / jobs;
-        const size_t end = pixels * (job + 1) / jobs;
-        try {
-            workers.emplace_back(work, begin, end, job);
-        } catch (const std::system_error&) {
-            work(begin, end, job);
-        }
+    if (jobs <= 1) {
+        work(0, pixels, 0);
+        return;
     }
-    work(0, pixels / jobs, 0);
-    for (auto& worker : workers) worker.join();
+    jxrc_parallel_for(
+        pixels, jobs,
+        [](void* ctx, size_t begin, size_t end, unsigned job) {
+            (*static_cast<Work*>(ctx))(begin, end, job);
+        },
+        &work);
 }

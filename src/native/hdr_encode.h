@@ -11,8 +11,23 @@
 #include "ultrahdr_api.h"
 
 inline float bt709_oetf(float value) {
-    const float linear=std::clamp(value,0.f,1.f);
-    return linear<.0180539685f?4.5f*linear:1.0992968268f*std::pow(linear,.45f)-.0992968268f;
+    if (!(value > 0.f)) return 0.f;
+    if (value >= 1.f) return 1.f;
+    if (value < .0180539685f) return 4.5f * value;
+    constexpr unsigned kSteps = 4096;
+    static const std::vector<float> lut = [] {
+        std::vector<float> table(kSteps + 1);
+        for (unsigned i = 0; i <= kSteps; ++i) {
+            const double u = double(i) / double(kSteps);
+            const double l = u * u;
+            table[i] = float(1.09929682680944 * std::pow(l, 0.45) - 0.09929682680944);
+        }
+        return table;
+    }();
+    const float pos = std::sqrt(value) * float(kSteps);
+    const unsigned idx = std::min(unsigned(pos), kSteps - 1);
+    const float frac = pos - float(idx);
+    return lut[idx] + (lut[idx + 1] - lut[idx]) * frac;
 }
 
 class RenderAnalysis;
