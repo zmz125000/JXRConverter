@@ -1,3 +1,4 @@
+#include "image_orientation.h"
 #include "output_file.h"
 #include "image_size.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
@@ -158,15 +159,13 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
     auto runner=JxlResizableParallelRunnerMake(nullptr);
     auto decoder=JxlDecoderMake(nullptr);if(!decoder || !runner)return Image(nullptr,avifImageDestroy);
     JxlDecoderSetParallelRunner(decoder.get(),JxlResizableParallelRunner,runner.get());
-    int events=JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING|JXL_DEC_FULL_IMAGE;
-    if(keep_exif)events|=JXL_DEC_BOX|JXL_DEC_BOX_COMPLETE;
-    if(JxlDecoderSubscribeEvents(decoder.get(),events)!=JXL_DEC_SUCCESS)return Image(nullptr,avifImageDestroy);
-    if(keep_exif)JxlDecoderSetDecompressBoxes(decoder.get(),JXL_TRUE);
+    if(JxlDecoderSubscribeEvents(decoder.get(),JXL_DEC_BASIC_INFO|JXL_DEC_COLOR_ENCODING|JXL_DEC_FULL_IMAGE)!=JXL_DEC_SUCCESS)
+        return Image(nullptr,avifImageDestroy);
     const auto* cms=JxlGetDefaultCms();if(cms)JxlDecoderSetCms(decoder.get(),*cms);
     JxlDecoderSetUnpremultiplyAlpha(decoder.get(),JXL_TRUE);
     JxlDecoderSetInput(decoder.get(),data,size);JxlDecoderCloseInput(decoder.get());
-    JxlBasicInfo info{};JxlColorEncoding color{};bool structured=false,complete=false,collecting=false;
-    std::vector<uint8_t> pixels,box;
+    JxlBasicInfo info{};JxlColorEncoding color{};bool structured=false,complete=false;
+    std::vector<uint8_t> pixels;
     std::vector<uint8_t> black;
     int black_index=-1;
     bool cmyk=false;
@@ -209,28 +208,9 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
                 black.resize(count);
                 if(JxlDecoderSetExtraChannelBuffer(decoder.get(),&format,black.data(),black.size(),black_index)!=JXL_DEC_SUCCESS)return Image(nullptr,avifImageDestroy);
             }
-        } else if(status==JXL_DEC_BOX) {
-            JxlBoxType type;
-            if(JxlDecoderGetBoxType(decoder.get(),type,JXL_TRUE)==JXL_DEC_SUCCESS && !memcmp(type,"Exif",4)) {
-                box.resize(1024*1024);collecting=JxlDecoderSetBoxBuffer(decoder.get(),box.data(),box.size())==JXL_DEC_SUCCESS;
-            }
-        } else if(status==JXL_DEC_BOX_COMPLETE && collecting) {
-            box.resize(box.size()-JxlDecoderReleaseBoxBuffer(decoder.get()));collecting=false;
-            if(box.size()>=4) {
-                const uint32_t offset=uint32_t(box[0])<<24|uint32_t(box[1])<<16|uint32_t(box[2])<<8|box[3];
-                if(offset<=box.size()-4)exif.assign(box.begin()+4+offset,box.end());
-            }
-            if(complete)break;
-        } else if(status==JXL_DEC_BOX_NEED_MORE_OUTPUT && collecting) {
-            JxlDecoderReleaseBoxBuffer(decoder.get());collecting=false;if(complete)break;
         } else if(status==JXL_DEC_FULL_IMAGE) {
-            complete=true;if(!keep_exif || !exif.empty())break;
-            JxlDecoderSkipFrames(decoder.get(),0x7fffffffu);
-        } else if(status==JXL_DEC_SUCCESS)break;
-        else if(status==JXL_DEC_ERROR || status==JXL_DEC_NEED_MORE_INPUT) {
-            if(complete)break;
-            return Image(nullptr,avifImageDestroy);
-        }
+            complete=true;break;
+        } else if(status==JXL_DEC_SUCCESS||status==JXL_DEC_ERROR||status==JXL_DEC_NEED_MORE_INPUT)break;
     }
     if(!complete)return Image(nullptr,avifImageDestroy);
     if(cmyk) {
@@ -257,10 +237,10 @@ Image jxl_image(const uint8_t* data,size_t size,int target,StillEncodeQuality qu
         t=color.transfer_function==JXL_TRANSFER_FUNCTION_GAMMA?
             (std::abs(color.gamma-1.0/2.2)<0.0001?4:std::abs(color.gamma-1.0/2.8)<0.0001?5:2):static_cast<int>(color.transfer_function);
     }
-    if(!exif.empty()) {
-        size_t offset=0;
-        if(avifGetExifOrientationOffset(exif.data(),exif.size(),&offset)==AVIF_RESULT_OK && offset<exif.size())exif[offset]=1;
-    }
+    const unsigned orient=jxl_exif_orientation(data,size,keep_exif?&exif:nullptr);
+    const unsigned bytes_per_pixel=format.data_type==JXL_TYPE_UINT8?4:format.data_type==JXL_TYPE_FLOAT?16:8;
+    orient_image(pixels,info.xsize,info.ysize,orient,bytes_per_pixel);
+    normalize_exif(exif);
     if(target==1) {
         StillSourceColor source;source.bits=info.bits_per_sample;source.exponent_bits=info.exponent_bits_per_sample;
         source.cmyk=cmyk;source.gray=info.num_color_channels==1;
@@ -609,6 +589,9 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
         if(!downsize_map(image,quality.jpeg_gain_map_scale()))return -89;
         if(oldW!=image->gainMap->image->width || oldH!=image->gainMap->image->height)original_map=nullptr;
     }
+    const unsigned orient=(image->transformFlags&(AVIF_TRANSFORM_IROT|AVIF_TRANSFORM_IMIR))?
+        image_orientation(image):orientation(quality.exif,quality.exif_size);
+    if(orient>=5)std::swap(info[0],info[1]);
     if(target==0)return gain?write_gainmap_jpeg(image,path,quality,original_map,original_map_size):write_source_jpeg(image,path,quality);
     if(target==2) {
         // Equivalent ICCs can use CICP; custom ICCs remain intact in the ISO container.
@@ -639,7 +622,7 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
     color.transfer=image->transferCharacteristics;color.icc=image->icc.data;color.icc_size=image->icc.size;
     if((color.transfer==16 || color.transfer==18) && (color.primaries==1 || color.primaries==9 || color.primaries==12))color.icc_size=0;
     color.orientation=orientation(quality.exif,quality.exif_size);
-    if(image->transformFlags) {
+    if(image->transformFlags & (AVIF_TRANSFORM_IROT|AVIF_TRANSFORM_IMIR|AVIF_TRANSFORM_CLAP)) {
         if(image->transformFlags & AVIF_TRANSFORM_CLAP)return -90;
         color.orientation=image_orientation(image);
     }
@@ -647,7 +630,6 @@ int write_source(avifImage* image,int target,const char* path,StillEncodeQuality
     std::vector<uint8_t> rgb;
     if(!rgb_pixels(image,sixteen?16:8,rgb))return -91;
     if(target==3 || target==kWebpSourceTarget) {
-        if(color.orientation>=5)std::swap(info[0],info[1]);
         if(!keep_exif)quality.exif_size=0;
         if(color.primaries==0||color.primaries==2)color.primaries=1;
         if(color.transfer==0||color.transfer==2)color.transfer=13;
@@ -774,9 +756,6 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
         if(encoded){std::copy(info,info+5,out_info);return encoded;}
         if(unsupported)return 0;
         if(!image)return -94;
-        // Source EXIF may describe the original orientation; pixels are already oriented.
-        size_t offset=0;
-        if(!exif.empty() && avifGetExifOrientationOffset(exif.data(),exif.size(),&offset)==AVIF_RESULT_OK && offset<exif.size())exif[offset]=1;
     } else return 0;
     avifImage* source_image=decoded_image?decoded_image:image.get();
     if((target==1||target==3||target==kWebpSourceTarget)&&source_image->gainMap&&quality.gain_map_reconstruction!=2) {
@@ -808,7 +787,8 @@ int convert_source(const uint8_t* data, size_t size, int kind, int target,
     quality.exif=exif.data();quality.exif_size=exif.size();
     // AVIF's stored transforms are authoritative; applying EXIF to an already transformed
     // source would overwrite them. Keep the source metadata directly in that case.
-    if((kind==1||kind==7) && target==2) {
+    if(target==2&&(kind==7||(kind==1&&(orient==1||
+       (source_image->transformFlags&(AVIF_TRANSFORM_IROT|AVIF_TRANSFORM_IMIR)))))) {
         if(!keep_exif)avifRWDataFree(&source_image->exif);
         quality.exif=nullptr;quality.exif_size=0;
     }
@@ -831,7 +811,7 @@ int source_orientation(const uint8_t* data,size_t size,int kind,std::vector<uint
         dec->ignoreExif=AVIF_FALSE;
         if(avifDecoderSetIOMemory(dec.get(),data,size)!=AVIF_RESULT_OK||avifDecoderParse(dec.get())!=AVIF_RESULT_OK)return -1;
         if(dec->image->transformFlags&AVIF_TRANSFORM_CLAP)return -1;
-        return dec->image->transformFlags?image_orientation(dec->image):orientation(dec->image->exif.data,dec->image->exif.size);
+        return dec->image->transformFlags&(AVIF_TRANSFORM_IROT|AVIF_TRANSFORM_IMIR)?image_orientation(dec->image):orientation(dec->image->exif.data,dec->image->exif.size);
     }
     return 1;
 }
@@ -861,6 +841,7 @@ int convert_regular_source(const RegularImage& raster, int target, const char* p
         return rc==0?1:rc;
     }
     if(target==1) {
+        if(raster.orientation>=5)std::swap(info[0],info[1]);
         StillSourceColor color;color.bits=raster.bits;color.orientation=raster.orientation;
         color.channels=raster.channels;color.cmyk=raster.cmyk;color.gray=raster.gray;
         color.primaries=raster.primaries;color.transfer=raster.transfer;
@@ -869,6 +850,7 @@ int convert_regular_source(const RegularImage& raster, int target, const char* p
         return rc==0?1:rc;
     }
     if(target==0) {
+        if(raster.orientation>=5)std::swap(info[0],info[1]);
         StillSourceColor color;color.bits=raster.bits;color.orientation=raster.orientation;
         color.channels=raster.channels;color.cmyk=raster.cmyk;color.gray=raster.gray;
         color.primaries=raster.primaries;color.transfer=raster.transfer;

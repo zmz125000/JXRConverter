@@ -8,7 +8,7 @@
 #undef max
 #endif
 // Real JPEG XR pixels plus photographic and GPS IFDs, written by jxrlib.
-static void write_jxr_exif_fixture(const std::filesystem::path& path,const std::vector<uint8_t>& tiff) {
+static void write_jxr_exif_fixture(const std::filesystem::path& path,const std::vector<uint8_t>& tiff,ORIENTATION orientation=O_NONE) {
     auto require=[](ERR result){if(Failed(result))throw std::runtime_error("JXR EXIF fixture failed");};
     std::vector<uint8_t> memory(1024*1024);WMPStream* stream=nullptr;PKImageEncode* encoder=nullptr;
     require(CreateWS_Memory(&stream,memory.data(),memory.size()));require(PKImageEncode_Create_WMP(&encoder));
@@ -30,6 +30,7 @@ static void write_jxr_exif_fixture(const std::filesystem::path& path,const std::
         else require(PKImageEncode_SetGPSInfoMetadata_WMP(encoder,ifd.data(),length));
     }
     std::vector<uint8_t> rgb(64*48*3);for(size_t i=0;i<rgb.size();++i)rgb[i]=uint8_t(i%251);
+    encoder->WMP.oOrientation=orientation;
     require(encoder->WritePixels(encoder,48,rgb.data(),64*3));const size_t length=size_t(encoder->WMP.nOffImage)+size_t(encoder->WMP.nCbImage);
     std::ofstream output(path,std::ios::binary);output.write(reinterpret_cast<const char*>(memory.data()),length);
     if(!output)throw std::runtime_error("Cannot save JXR fixture");

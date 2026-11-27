@@ -44,7 +44,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
         out.hdr=out.gainmap;
         out.primaries=jpeg.icc.empty()?"sRGB":"ICC";
         out.wide_gamut=!jpeg.cmyk&&icc_needs_wide_gamut(jpeg.icc.data(),jpeg.icc.size());
-        int orientation=source_orientation(bytes.data(),bytes.size(),0,nullptr);if(orientation>=5)std::swap(out.width,out.height);
+        if(jpeg.orientation>=5)std::swap(out.width,out.height);
     } else if(is_avif_input(bytes.data(),bytes.size())) {
         std::unique_ptr<avifDecoder,decltype(&avifDecoderDestroy)> dec(avifDecoderCreate(),avifDecoderDestroy);
         if(!dec)throw std::runtime_error("Cannot allocate AVIF inspector");
@@ -85,6 +85,7 @@ ImageInfo inspect_bytes(const std::vector<uint8_t>& bytes) {
                 break;
             }else if(status==JXL_DEC_ERROR||status==JXL_DEC_NEED_MORE_INPUT||status==JXL_DEC_SUCCESS)break;
         }
+        if(jxl_exif_orientation(bytes.data(),bytes.size())>=5)std::swap(out.width,out.height);
     } else if(bytes.size()>=4&&bytes[0]=='I'&&bytes[1]=='I'&&bytes[2]==0xbc&&bytes[3]==1) {
         out=inspect_jxr(bytes.data(),bytes.size());
     } else if(is_regular_image(bytes.data(),bytes.size())) {

@@ -1264,6 +1264,69 @@ static void exif_retention(const fs::path& dir) {
     check(xrExif["Exif.Photo.DateTimeOriginal"].toString()=="2025:06:12 14:30:00","JXR photographic directory lost");
     check(xrExif.findKey(Exiv2::ExifKey("Exif.GPSInfo.GPSLatitude"))!=xrExif.end(),"JXR GPS directory lost");
     const auto xrPath=dir/"photo.jxr";write_jxr_exif_fixture(xrPath,tiff);sources.push_back(xrPath);
+    const auto xrRotated=dir/"rotated.jxr";
+    write_jxr_exif_fixture(xrRotated,tiff,O_RCW);
+    const auto originalPreview=jxrc::preview(xrPath,64);
+    const auto rotatedPreview=jxrc::preview(xrRotated,64);
+    const auto rotatedInfo=jxrc::inspect(xrRotated);
+    check(rotatedInfo.width==48&&rotatedInfo.height==64,"JXR container orientation inspection");
+    check(rotatedPreview.width==48&&rotatedPreview.height==64,"JXR container orientation preview");
+    for(unsigned y=0;y<48;++y)for(unsigned x=0;x<64;++x) {
+        const auto from=originalPreview.rgba.data()+(y*64+x)*4;
+        const auto to=rotatedPreview.rgba.data()+(x*48+47-y)*4;
+        check(std::equal(from,from+4,to),"JXR container orientation pixels");
+    }
+    const auto rotatedXrPng=dir/"rotated-jxr.png";
+    jxrc::Options rotatedOptions;rotatedOptions.mode=jxrc::Mode::process;rotatedOptions.target=jxrc::Target::png;
+    const auto xrOutput=jxrc::convert(xrRotated,rotatedXrPng,rotatedOptions);
+    check(xrOutput.width==48&&xrOutput.height==64,"JXR container orientation conversion");
+    // EXIF-only JXL from a metadata editor, and a conflicting EXIF tag
+    // on a JXL with native orientation. Apply exactly one transform.
+    for(unsigned nativeOrientation:{1u,6u}) {
+        const auto jxlPath=dir/("orientation-"+std::to_string(nativeOrientation)+".jxl");
+        StillSourceColor color;color.orientation=nativeOrientation;
+        StillEncodeQuality sourceQuality(0);sourceQuality.exif=tiff.data();sourceQuality.exif_size=tiff.size();
+        check(encode_jxl_source(64,48,originalPreview.rgba.data(),false,color,jxlPath.string().c_str(),sourceQuality)==0,"JXL orientation fixture");
+        const auto info=jxrc::inspect(jxlPath);
+        const auto preview=jxrc::preview(jxlPath,64);
+        check(info.width==48&&info.height==64&&preview.width==48&&preview.height==64,"JXL metadata orientation");
+        for(auto mode:{jxrc::Mode::preserve,jxrc::Mode::process}) {
+            rotatedOptions.mode=mode;
+            rotatedOptions.max_edge=mode==jxrc::Mode::process?32:0;
+            const auto output=dir/("rotated-jxl-"+std::to_string(nativeOrientation)+"-"+std::to_string(int(mode))+".png");
+            const auto result=jxrc::convert(jxlPath,output,rotatedOptions);
+            const auto image=jxrc::inspect(output);
+            check(image.width==result.width&&image.height==result.height&&image.width<image.height,"JXL output orientation");
+        }
+    }
+    // Pixel aspect ratio alone does not override an EXIF rotation in AVIF.
+    const auto avifPath=dir/"orientation-exif-only.avif";
+    std::unique_ptr<avifImage,decltype(&avifImageDestroy)> avif(avifImageCreate(64,48,8,AVIF_PIXEL_FORMAT_YUV444),avifImageDestroy);
+    check(bool(avif),"Oriented AVIF fixture allocation");
+    avif->colorPrimaries=AVIF_COLOR_PRIMARIES_BT709;
+    avif->transferCharacteristics=AVIF_TRANSFER_CHARACTERISTICS_SRGB;
+    avif->matrixCoefficients=AVIF_MATRIX_COEFFICIENTS_BT709;
+    avif->transformFlags=AVIF_TRANSFORM_PASP;
+    avif->pasp={2,1};
+    check(avifRWDataSet(&avif->exif,tiff.data(),tiff.size())==AVIF_RESULT_OK,"AVIF EXIF-only fixture");
+    avifRGBImage rgb;avifRGBImageSetDefaults(&rgb,avif.get());
+    rgb.format=AVIF_RGB_FORMAT_RGBA;rgb.pixels=const_cast<uint8_t*>(originalPreview.rgba.data());rgb.rowBytes=64*4;
+    check(avifImageRGBToYUV(avif.get(),&rgb)==AVIF_RESULT_OK,"AVIF orientation fixture pixels");
+    std::unique_ptr<avifEncoder,decltype(&avifEncoderDestroy)> encoder(avifEncoderCreate(),avifEncoderDestroy);
+    check(bool(encoder),"Oriented AVIF fixture encoder");encoder->speed=10;
+    avifRWData encoded=AVIF_DATA_EMPTY;
+    check(avifEncoderWrite(encoder.get(),avif.get(),&encoded)==AVIF_RESULT_OK,"Oriented AVIF fixture encode");
+    write(avifPath,{encoded.data,encoded.data+encoded.size});avifRWDataFree(&encoded);
+    const auto avifInfo=jxrc::inspect(avifPath);
+    const auto avifPreview=jxrc::preview(avifPath,64);
+    check(avifInfo.width==48&&avifInfo.height==64&&avifPreview.width==48&&avifPreview.height==64,"AVIF EXIF-only orientation");
+    for(auto target:{jxrc::Target::avif,jxrc::Target::png}) {
+        rotatedOptions={};rotatedOptions.target=target;rotatedOptions.keep_exif=false;
+        const auto output=dir/("rotated-avif-"+std::to_string(int(target)));
+        const auto result=jxrc::convert(avifPath,output,rotatedOptions);
+        const auto image=jxrc::inspect(output);
+        check(result.width==48&&result.height==64&&image.width==48&&image.height==64,"AVIF EXIF-only orientation export");
+    }
     // A real HDR source catches the Ultra HDR encoder's missing EXIF wiring.
     StillEncodeQuality quality(1);quality.exif=tiff.data();quality.exif_size=tiff.size();
     auto pixels=fixture();const auto hdr=dir/"photo-hdr.jxl";

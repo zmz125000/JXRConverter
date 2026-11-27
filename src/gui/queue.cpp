@@ -233,6 +233,11 @@ Job makeAnimationJob(const QString& directory,const Options& options,AnimationOu
 }
 ConversionQueue::ConversionQueue(QObject* parent,Convert converter):QObject(parent),converter_(std::move(converter)) {}
 ConversionQueue::~ConversionQueue() { for(const auto& token:activeMedia_)token->store(true);pool_.clear();pool_.waitForDone(); }
+static void setJobBudget(Job& job,int parallelism,int cores) {
+    job.parallelism=std::clamp(parallelism,1,std::max(1,cores));
+    job.options.threads=std::max(1,cores/job.parallelism);
+}
+
 void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     if(busy())throw std::logic_error("A conversion batch is already running");
     if(jobs.isEmpty())return;
@@ -240,17 +245,16 @@ void ConversionQueue::start(QVector<Job> jobs,int parallelism,int cores) {
     orderJobs(jobs);
     sessions_.clear();originalDates_.clear();activeInputs_.clear();activeOutputs_.clear();activeBatches_.clear();batchAliases_.clear();
     jobs_=std::move(jobs);next_=active_=finished_=succeeded_=failed_=cancelled_=skipped_=0;
-    limit_=std::clamp(parallelism,1,std::max(1,cores));pool_.setMaxThreadCount(limit_);
-    threadBudget_=std::max(1,cores/limit_);
+    cores_=std::max(1,cores);activeThreads_=0;pool_.setMaxThreadCount(cores_);
     remaining_.clear();fileCancelled_.clear();fileSkipped_.clear();fileSucceeded_.clear();fileErrors_.clear();
-    for(auto& job:jobs_){job.options.threads=threadBudget_;recordPending(job);updateJobStatus(job,"Queued");}
+    for(auto& job:jobs_){setJobBudget(job,parallelism,cores);recordPending(job);updateJobStatus(job,"Queued");}
     pump();
 }
 void ConversionQueue::enqueue(QVector<Job> jobs,int parallelism,int cores) {
     if(!busy()){start(std::move(jobs),parallelism,cores);return;}
     const StatusBatch updates(this);
     orderJobs(jobs);
-    for(auto& job:jobs){job.options.threads=threadBudget_;recordPending(job);}
+    for(auto& job:jobs){setJobBudget(job,parallelism,cores);recordPending(job);}
     jobs_+=jobs;
     for(const auto& job:jobs)updateJobStatus(job,"Queued");
     pump();
@@ -294,7 +298,7 @@ void ConversionQueue::enqueueNext(QVector<Job> jobs,int parallelism,int cores) {
         if(activeOutputs_.value(job.input)==job.output){batchAliases_[jobKey({job.input,job.output,{},activeBatches_.value(job.input)})].insert(job.batch);continue;}
         const auto pending=pendingOutputs.constFind(outputKey(job));
         if(pending!=pendingOutputs.cend()){batchAliases_[jobKey(priority[pending.value()])].insert(job.batch);continue;}
-        job.options.threads=threadBudget_;
+        setJobBudget(job,parallelism,cores);
         recordPending(job);
         pendingOutputs.insert(outputKey(job),priority.size());priority.append(job);added.append(job);
     }
@@ -330,17 +334,21 @@ void ConversionQueue::cancelPendingMatching(const QSet<QString>* inputs,qint64 b
     if(!busy())emit batchFinished(succeeded_,failed_,cancelled_);
 }
 void ConversionQueue::pump() {
-    while(active_<limit_&&next_<jobs_.size()) {
+    while(activeThreads_<cores_&&next_<jobs_.size()) {
         int candidate=next_;
         while(candidate<jobs_.size()&&usesInput(jobs_[candidate],activeInputs_))++candidate;
         if(candidate==jobs_.size())break;
+        const auto& pending=jobs_[candidate];
+        // Respect the submitted job's parallel limit and the aggregate CPU budget
+        // when image and video jobs with different profiles share the queue.
+        if(active_>=pending.parallelism || (active_>0 && activeThreads_+int(pending.options.threads)>cores_))break;
         // Rotate rather than swap so each source retains its render-family order.
         std::rotate(jobs_.begin()+next_,jobs_.begin()+candidate,jobs_.begin()+candidate+1);
         const Job job=jobs_[next_++];
         if(job.skip_existing||(!job.options.overwrite&&outputExists(job.output))) {
             ++skipped_;++finished_;finishFile(job,{},false,true);continue;
         }
-        ++active_;forJobInput(job,[&](const QString& input){activeInputs_.insert(input);});activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);
+        ++active_;activeThreads_+=int(job.options.threads);forJobInput(job,[&](const QString& input){activeInputs_.insert(input);});activeOutputs_.insert(job.input,job.output);activeBatches_.insert(job.input,job.batch);
         std::shared_ptr<ConversionSession> session;
         std::shared_ptr<std::atomic_bool> mediaCancelled;
         if(job.video||job.animation) {
@@ -377,7 +385,7 @@ void ConversionQueue::pump() {
             if(!error.isEmpty()&&mediaCancelled&&mediaCancelled->load()){cancelled=true;error.clear();}
             error.replace("--mode process","Process pixels mode");error.replace("--raw-exposure","RAW exposure");
             QMetaObject::invokeMethod(this,[this,job,error,skipped,cancelled] {
-                --active_;forJobInput(job,[&](const QString& input){activeInputs_.remove(input);});activeOutputs_.remove(job.input);activeBatches_.remove(job.input);activeMedia_.remove(job.input);++finished_;
+                --active_;activeThreads_-=int(job.options.threads);forJobInput(job,[&](const QString& input){activeInputs_.remove(input);});activeOutputs_.remove(job.input);activeBatches_.remove(job.input);activeMedia_.remove(job.input);++finished_;
                 if(cancelled)++cancelled_;else if(!error.isEmpty())++failed_;else if(skipped)++skipped_;else ++succeeded_;
                 finishFile(job,error,cancelled,skipped);
                 pump();

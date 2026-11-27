@@ -14,7 +14,7 @@
 #include <optional>
 
 namespace jxrc::gui {
-struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; bool skip_existing = false; std::optional<VideoOutput> video = {}; std::optional<AnimationOutput> animation = {}; };
+struct Job { QString input, output; Options options; qint64 batch = 0; bool preserve_original_date = false; QString preparation_error = {}; bool skip_existing = false; std::optional<VideoOutput> video = {}; std::optional<AnimationOutput> animation = {}; int parallelism = 1; };
 int coreCount();
 int recommendedWorkers(int cores);
 bool hdrInput(const QString& path);
@@ -78,10 +78,10 @@ private:
     void finishFile(const Job&, const QString& error, bool cancelled, bool skipped = false);
     void finishInput(const QString&, const QString& output, const QString& error, bool cancelled, bool skipped);
     QVector<Job> jobs_;
-    int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, skipped_ = 0, limit_ = 1;
+    int next_ = 0, active_ = 0, finished_ = 0, succeeded_ = 0, failed_ = 0, cancelled_ = 0, skipped_ = 0;
     QThreadPool pool_;
     Convert converter_;
-    unsigned threadBudget_ = 1;
+    int cores_ = 1, activeThreads_ = 0;
     QSet<QString> activeInputs_;
     QHash<QString,QString> activeOutputs_;
     QHash<QString,qint64> activeBatches_;

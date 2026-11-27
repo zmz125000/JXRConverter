@@ -1,3 +1,6 @@
+#include "image_orientation.h"
+#include "codec_api.h"
+#include "regular_decode.h"
 #include "image_size.h"
 #include "working_pixels.h"
 // Derived from LocalViewer; see NOTICE and COPYING. Android entry points removed.
@@ -219,13 +222,11 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
     (void)JxlDecoderSetUnpremultiplyAlpha(dec.get(), JXL_TRUE);
 
     const int events = JXL_DEC_BASIC_INFO | JXL_DEC_COLOR_ENCODING | JXL_DEC_FULL_IMAGE |
-        (thumbnail_edge > 0 ? JXL_DEC_FRAME_PROGRESSION : 0) |
-        (out_exif ? JXL_DEC_BOX | JXL_DEC_BOX_COMPLETE : 0);
+        (thumbnail_edge > 0 ? JXL_DEC_FRAME_PROGRESSION : 0);
     if (JxlDecoderSubscribeEvents(dec.get(), events) !=
         JXL_DEC_SUCCESS) {
         return -4;
     }
-    if (out_exif && JxlDecoderSetDecompressBoxes(dec.get(), JXL_TRUE) != JXL_DEC_SUCCESS) return -4;
     if (thumbnail_edge > 0 &&
         JxlDecoderSetProgressiveDetail(dec.get(), kLastPasses) != JXL_DEC_SUCCESS) return -4;
     JxlDecoderSetParallelRunner(dec.get(), JxlResizableParallelRunner, runner.get());
@@ -244,45 +245,10 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
     std::vector<float> black;
     int black_index=-1;
     JxlPixelFormat format = {4, JXL_TYPE_FLOAT, JXL_NATIVE_ENDIAN, 0};
-    std::vector<uint8_t> exif_box;
-    bool collecting_exif = false;
-    bool exif_finished = false;
-    bool frame_complete = false;
-
     for (;;) {
-        JxlDecoderStatus status = JxlDecoderProcessInput(dec.get());
-        if (status == JXL_DEC_ERROR) {
-            // Malformed trailing metadata must not invalidate an already decoded image.
-            if (frame_complete) break;
-            ALOGE("JxlDecoderProcessInput error");
-            return -5;
-        }
-        if (status == JXL_DEC_NEED_MORE_INPUT) {
-            if (frame_complete) break;
-            ALOGE("JXL truncated");
-            return -6;
-        }
-        if (status == JXL_DEC_BOX && out_exif && !exif_finished) {
-            JxlBoxType type;
-            if (JxlDecoderGetBoxType(dec.get(), type, JXL_TRUE) == JXL_DEC_SUCCESS && memcmp(type, "Exif", 4) == 0) {
-                exif_box.resize(1024 * 1024);
-                collecting_exif = JxlDecoderSetBoxBuffer(dec.get(), exif_box.data(), exif_box.size()) == JXL_DEC_SUCCESS;
-            }
-        } else if (status == JXL_DEC_BOX_COMPLETE && collecting_exif) {
-            const size_t count = exif_box.size() - JxlDecoderReleaseBoxBuffer(dec.get());
-            exif_box.resize(count);
-            *out_exif = std::move(exif_box);
-            collecting_exif = false;
-            exif_finished = true;
-            if (frame_complete) break;
-        } else if (status == JXL_DEC_BOX_NEED_MORE_OUTPUT && collecting_exif) {
-            // Oversized EXIF is optional; stop buffering it and keep decoding pixels.
-            JxlDecoderReleaseBoxBuffer(dec.get());
-            collecting_exif = false;
-            exif_finished = true;
-            exif_box.clear();
-            if (frame_complete) break;
-        } else if (status == JXL_DEC_BASIC_INFO) {
+        const auto status = JxlDecoderProcessInput(dec.get());
+        if (status == JXL_DEC_ERROR || status == JXL_DEC_NEED_MORE_INPUT)return -5;
+        if (status == JXL_DEC_BASIC_INFO) {
             if (JxlDecoderGetBasicInfo(dec.get(), &info) != JXL_DEC_SUCCESS) return -7;
             for(unsigned i=0;i<info.num_extra_channels;++i) {
                 JxlExtraChannelInfo extra;
@@ -353,14 +319,7 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
             // Files without suitable steps simply continue to the complete frame.
             if (ratio > 0 && (std::max(w, h) + ratio - 1) / ratio >= thumbnail_edge &&
                 JxlDecoderFlushImage(dec.get()) == JXL_DEC_SUCCESS) break;
-        } else if (status == JXL_DEC_FULL_IMAGE) {
-            frame_complete = true;
-            if (!out_exif || exif_finished) break;
-            // Preserve the reader's first-frame behavior while scanning trailing boxes.
-            JxlDecoderSkipFrames(dec.get(), 0x7fffffffu);
-        } else if (status == JXL_DEC_SUCCESS) {
-            break;
-        }
+        } else if (status == JXL_DEC_FULL_IMAGE || status == JXL_DEC_SUCCESS)break;
     }
 
     if (pixels.empty() || w == 0 || h == 0) return -12;
@@ -497,6 +456,8 @@ int decode_jxl_impl(const uint8_t* data, size_t len, std::vector<Sample>& out_rg
         });
     }
 
+    orient_image(out_rgba,w,h,jxl_exif_orientation(data,len,out_exif));
+
     ALOGI("JXL CMS %ux%u cg=%d pq=%d hlg=%d original=%d intensity=%.1f scale=%.3f hdr=%d "
           "composite=%d",
           w, h, (int)cg, is_pq ? 1 : 0, is_hlg ? 1 : 0, original_profile ? 1 : 0, intensity, scale,
@@ -515,6 +476,50 @@ int decode_jxl_to_linear_f16(const uint8_t* data,size_t size,std::vector<uint16_
 int decode_jxl_to_linear_f32(const uint8_t* data,size_t size,std::vector<float>& rgba,unsigned& w,unsigned& h,
     uhdr_color_gamut_t* gamut,bool* hdr,int* transfer,bool bt2020,std::vector<uint8_t>* exif) {
     return decode_jxl_impl(data,size,rgba,w,h,gamut,hdr,transfer,false,0,bt2020,exif,nullptr);
+}
+
+// libjxl applies the codestream orientation itself. Some metadata editors
+// instead write an EXIF-only orientation, including in Brotli-compressed boxes.
+unsigned jxl_exif_orientation(const uint8_t* data,size_t size,std::vector<uint8_t>* exif) {
+    if(exif)exif->clear();
+    if(size<12 || std::memcmp(data,"\0\0\0\x0cJXL \r\n\x87\n",12))return 1;
+    auto dec=JxlDecoderMake(nullptr);
+    if(!dec || JxlDecoderSetKeepOrientation(dec.get(),JXL_TRUE)!=JXL_DEC_SUCCESS ||
+       JxlDecoderSetDecompressBoxes(dec.get(),JXL_TRUE)!=JXL_DEC_SUCCESS ||
+       JxlDecoderSubscribeEvents(dec.get(),JXL_DEC_BASIC_INFO|JXL_DEC_BOX|JXL_DEC_BOX_COMPLETE)!=JXL_DEC_SUCCESS)return 1;
+    JxlDecoderSetInput(dec.get(),data,size);JxlDecoderCloseInput(dec.get());
+    bool nativeOrientation=false,collecting=false;
+    std::vector<uint8_t> box,metadata;
+    for(;;) {
+        const auto status=JxlDecoderProcessInput(dec.get());
+        if(status==JXL_DEC_BASIC_INFO) {
+            JxlBasicInfo info{};
+            if(JxlDecoderGetBasicInfo(dec.get(),&info)!=JXL_DEC_SUCCESS)return 1;
+            nativeOrientation=info.orientation!=JXL_ORIENT_IDENTITY;
+            if((nativeOrientation&&!exif)||!metadata.empty())break;
+        } else if(status==JXL_DEC_BOX && metadata.empty()) {
+            JxlBoxType type;
+            if(JxlDecoderGetBoxType(dec.get(),type,JXL_TRUE)==JXL_DEC_SUCCESS && !std::memcmp(type,"Exif",4)) {
+                box.resize(1024*1024);
+                collecting=JxlDecoderSetBoxBuffer(dec.get(),box.data(),box.size())==JXL_DEC_SUCCESS;
+            }
+        } else if(status==JXL_DEC_BOX_COMPLETE && collecting) {
+            box.resize(box.size()-JxlDecoderReleaseBoxBuffer(dec.get()));collecting=false;
+            if(box.size()<4)continue;
+            const size_t offset=uint32_t(box[0])<<24|uint32_t(box[1])<<16|uint32_t(box[2])<<8|box[3];
+            if(offset<=box.size()-4)metadata.assign(box.begin()+4+offset,box.end());
+            JxlBasicInfo info{};
+            if(!metadata.empty()&&JxlDecoderGetBasicInfo(dec.get(),&info)==JXL_DEC_SUCCESS) {
+                nativeOrientation=info.orientation!=JXL_ORIENT_IDENTITY;
+                break;
+            }
+        } else if(status==JXL_DEC_BOX_NEED_MORE_OUTPUT && collecting) {
+            JxlDecoderReleaseBoxBuffer(dec.get());collecting=false;
+        } else if(status==JXL_DEC_SUCCESS||status==JXL_DEC_ERROR||status==JXL_DEC_NEED_MORE_INPUT)break;
+    }
+    const unsigned orientation=nativeOrientation?1:regular_orientation(metadata);
+    if(exif)*exif=std::move(metadata);
+    return orientation;
 }
 
 bool is_scrgb_jxl(const uint8_t* data,size_t size) {

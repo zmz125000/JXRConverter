@@ -75,6 +75,7 @@ private:
     void updateAnimationSummary();
     void convertAnimationFiles(QStringList paths,bool reuseJob,bool quick);
     bool videoConversionActive() const;
+    void updateOutputQueueProfile();
     VideoOutput videoTarget() const;
     void loadVideoEncoderSettings(bool reset = false);
     void saveVideoEncoderSettings() const;
@@ -136,7 +137,7 @@ private:
     struct SourceRouting { bool hdr = false, gainmap = false; QString error; };
     using Routing = QHash<QString, SourceRouting>;
     bool convertPaths(const QStringList&, const QVector<Target>&, bool exactTargets = false, bool priority = false, bool append = false, bool reuseJob = false, bool quick = false, std::shared_ptr<const Routing> routing = {});
-    bool startConversion(QVector<Job>, qint64 batch, bool priority, bool append, bool reuseJob, bool reuseQuick, bool quick, const QString& directory);
+    bool startConversion(QVector<Job>, qint64 batch, bool priority, bool append, bool reuseJob, bool reuseQuick, bool quick, const QString& directory, int parallelJobs);
     void reportError(const QString&, const QStringList& paths = {});
     void stopQueue();
     void checkForUpdates();
@@ -206,7 +207,13 @@ private:
     QPushButton* running_;
     QProgressBar* progress_;
     QStringList recentFolders_, recentOutputFolders_, recentFiles_, lastFiles_;
-    QString appliedSearch_, lastOutputFolder_;
+    QString appliedSearch_;
+    struct OutputQueueProfile {
+        QString directory, lastFolder;
+        int parallelJobs = 1;
+    };
+    OutputQueueProfile outputProfiles_[2];
+    bool videoQueueProfile_ = false;
     QSet<QString> loggedWarnings_, selectedImages_, selectedTabImages_, rememberedImages_;
     QHash<qint64,QSet<QString>> jobSelections_;
     struct OutputProgress {QString input, state;};

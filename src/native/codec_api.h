@@ -13,6 +13,7 @@ bool raw_jpeg_thumbnail(const uint8_t*,size_t,std::vector<uint8_t>&);
 int decode_raw(const uint8_t*,size_t,const jxrc::RawControls&,bool,unsigned,std::vector<uint8_t>&,unsigned&,unsigned&,int&);
 int transcode_jpeg(const uint8_t*,size_t,const char*,bool);
 std::vector<uint8_t> source_jpeg_icc(const uint8_t*,size_t);
+unsigned jxl_exif_orientation(const uint8_t*,size_t,std::vector<uint8_t>* = nullptr);
 int source_orientation(const uint8_t*,size_t,int,std::vector<uint8_t>*);
 void normalize_exif(std::vector<uint8_t>&);
 void scale_rgba_f16_max_edge(std::vector<uint16_t>&,unsigned&,unsigned&,unsigned);

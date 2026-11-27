@@ -1,3 +1,4 @@
+#include "image_orientation.h"
 #include "output_file.h"
 #include "image_size.h"
 #include "working_pixels.h"
@@ -453,10 +454,14 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<Sample>
     decoder->fStreamOwner = 1;
     stream = nullptr;
 
-    I32 width = 0, height = 0;
-    err = decoder->GetSize(decoder, &width, &height);
-    if (Failed(err) || width <= 0 || height <= 0 || !fits_working_image(width,height)) {
-        ALOGE("GetSize failed/out of range: %d %dx%d", err, (int)width, (int)height);
+    // Decode the stored raster and orient the final RGBA buffer. jxrlib's
+    // incremental Copy path cannot rotate a frame by 90 degrees.
+    const unsigned orientations[]={1,4,2,3,6,7,5,8};
+    const unsigned transform=decoder->WMP.wmiI.oOrientation;
+    const auto orientation=transform<O_MAX?orientations[transform]:1;
+    const auto width=decoder->WMP.wmiI.cWidth,height=decoder->WMP.wmiI.cHeight;
+    if (!fits_working_image(width,height)) {
+        ALOGE("JPEG XR dimensions out of range");
         release_all();
         return false;
     }
@@ -796,6 +801,7 @@ bool decode_jxr_from_memory(const uint8_t* data, size_t len, std::vector<Sample>
             pix == JxrPix::Fixed16;
         *out_untagged_linear = linear_storage && !have_valid_icc;
     }
+    orient_image(out_rgba,w,h,orientation);
     return true;
 }
 

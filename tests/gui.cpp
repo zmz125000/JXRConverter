@@ -2445,12 +2445,13 @@ private slots:
         ConversionQueue queue(nullptr,[&](const std::filesystem::path& input,const std::filesystem::path& output,const jxrc::Options& options){if(input.filename()=="a")gate.acquire();converted.append({QString::fromStdString(input.string()),QString::fromStdString(output.string()),options});return jxrc::Result{};});
         jxrc::Options first;first.quality.codec_quality=42;first.exposure=1.5f;Job a{"a",root("snapshots/a"),first,1},b{"b",root("snapshots/b"),first,1};
         QSignalSpy done(&queue,&ConversionQueue::batchFinished),outputs(&queue,&ConversionQueue::outputFinished);
-        queue.start({a,b},1,4);jxrc::Options second;second.quality.codec_quality=17;second.exposure=-2;Job c{"c",root("snapshots/c"),second,2};queue.enqueue({c},3,12);
+        queue.start({a,b},1,4);jxrc::Options second;second.quality.codec_quality=17;second.exposure=-2;Job c{"c",root("snapshots/c"),second,2};queue.enqueue({c},3,9);
         auto promote=b;promote.batch=0;queue.enqueueNext({promote},1,4);const bool pending=queue.hasPendingBatch(0);queue.cancelBatch(0);
         a.options.quality.codec_quality=99;c.options.exposure=8;c.output="changed";gate.release();
         QVERIFY(pending);QVERIFY(!queue.hasPendingBatch(0));QVERIFY(queue.hasPendingBatch(2));QTRY_COMPARE(done.count(),1);
         QCOMPARE(done[0][0].toInt(),2);QCOMPARE(done[0][2].toInt(),1);QCOMPARE(converted.size(),2);
         QCOMPARE(converted[0].options.quality.codec_quality,42);QCOMPARE(converted[0].options.exposure,1.5f);QCOMPARE(converted[1].options.quality.codec_quality,17);QCOMPARE(converted[1].options.exposure,-2.f);QCOMPARE(converted[1].output,root("snapshots/c"));
+        QCOMPARE(converted[0].options.threads,4u);QCOMPARE(converted[1].options.threads,3u);
         bool owner=false,alias=false;for(const auto& value:outputs)if(value[3].toString()=="Cancelled"){owner|=value[0].toLongLong()==1;alias|=value[0].toLongLong()==0;}QVERIFY(owner);QVERIFY(alias);
     }
     void runningJobFlagsAndSharedPriorityOutput() {
@@ -2991,6 +2992,42 @@ private slots:
         QVERIFY(makeJobs({raw},root("layout/output"),options)[0].output.endsWith("_gainmap.avif"));
         MainWindow window;auto* rename=window.findChild<QCheckBox*>("renameConflicts");auto* overwrite=window.findChild<QCheckBox*>("overwrite");
         QVERIFY(rename && overwrite);rename->setChecked(true);QVERIFY(!overwrite->isEnabled());rename->setChecked(false);QVERIFY(overwrite->isEnabled());
+    }
+    void outputQueueProfiles() {
+        appSettings().clear();
+        const auto images=root("image-output"),videos=root("video-output");
+        appSettings().setValue("conversion/output",images);
+        appSettings().setValue("controls/parallelJobs",1);
+        const auto videoJobs=std::min(3,coreCount());
+        {
+            MainWindow window;
+            auto* tabs=window.findChild<QTabWidget*>("settingsTabs");
+            auto* folder=window.findChild<QLineEdit*>("outputDirectory");
+            auto* jobs=window.findChild<QSpinBox*>("parallelJobs");
+            tabs->setCurrentIndex(1);
+            QCOMPARE(folder->text(),images);
+            QCOMPARE(jobs->value(),1);
+            folder->setText(videos);jobs->setValue(videoJobs);
+            tabs->setCurrentIndex(0);
+            QCOMPARE(folder->text(),images);
+            QCOMPARE(jobs->value(),1);
+            tabs->setCurrentIndex(2);
+            QCOMPARE(folder->text(),images);
+            window.findChild<QCheckBox*>("animationAsVideo")->setChecked(true);
+            QCOMPARE(folder->text(),videos);
+            QCOMPARE(jobs->value(),videoJobs);
+            tabs->setCurrentIndex(1);
+        }
+        MainWindow restored;
+        auto* tabs=restored.findChild<QTabWidget*>("settingsTabs");
+        auto* folder=restored.findChild<QLineEdit*>("outputDirectory");
+        auto* jobs=restored.findChild<QSpinBox*>("parallelJobs");
+        QCOMPARE(tabs->currentIndex(),1);
+        QCOMPARE(folder->text(),videos);
+        QCOMPARE(jobs->value(),videoJobs);
+        tabs->setCurrentIndex(0);
+        QCOMPARE(folder->text(),images);
+        QCOMPARE(jobs->value(),1);
     }
     void outputFolderHistory() {
         appSettings().clear();

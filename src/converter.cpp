@@ -1,3 +1,4 @@
+#include "native/image_orientation.h"
 #include "native/image_size.h"
 #include "native/animation.h"
 #include "jxrc/converter.hpp"
@@ -178,27 +179,6 @@ bool remove_alpha(const Options& o) {return o.transparency_background==Transpare
 bool white_background(const Options& o) {return o.transparency_background==TransparencyBackground::white||o.transparency_background==TransparencyBackground::white_remove_alpha;}
 bool scrgb_output(const Options& o) {return o.target==Target::jxl_scrgb;}
 bool convert_gamut(const Options& o) {return o.convert_gamut && !o.srgb_clamp && !scrgb_output(o);}
-template<class Sample>
-void orient_rgba(std::vector<Sample>& values,unsigned w,unsigned h,int orient) {
-    if(values.empty()||orient==1)return;
-    const unsigned dw=orient>=5?h:w;
-    std::vector<Sample> oriented(values.size());
-    for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x) {
-        unsigned dx=x,dy=y;
-        switch(orient) {
-        case 2:dx=w-1-x;break;
-        case 3:dx=w-1-x;dy=h-1-y;break;
-        case 4:dy=h-1-y;break;
-        case 5:dx=y;dy=x;break;
-        case 6:dx=h-1-y;dy=x;break;
-        case 7:dx=h-1-y;dy=w-1-x;break;
-        case 8:dx=y;dy=w-1-x;break;
-        }
-        std::copy_n(values.data()+(size_t(y)*w+x)*4,4,oriented.data()+(size_t(dy)*dw+dx)*4);
-    }
-    values.swap(oriented);
-}
-
 bool prepare_animation_rgb8(RegularImage& raster,unsigned primaries,bool opaque_required) {
     if(raster.bits!=8||raster.channels!=4||raster.transfer!=13||
        !raster.floating_pixels.empty())return false;
@@ -309,13 +289,13 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
     // an SDR animation does not require linearizing a compatible SDR raster.
     if(direct_frame&&!o.exposure&&!tonal_edits&&!cache.source_hdr&&!cache.gainmap&&(format==0||format==6)) {
         regular=std::make_unique<RegularImage>(format==0?decode_jpeg(bytes.data(),bytes.size()):decode_regular(bytes.data(),bytes.size()));
-        const int orient=format==0?source_orientation(bytes.data(),bytes.size(),format,nullptr):int(regular->orientation);
+        const int orient=int(regular->orientation);
         const auto w=orient>=5?regular->height:regular->width;
         const auto h=orient>=5?regular->width:regular->height;
         if(orient>=1&&orient<=8&&w<=direct_frame->width&&h<=direct_frame->height&&
            (!o.max_edge||std::max(w,h)<=o.max_edge)&&
            prepare_animation_rgb8(*regular,direct_frame->primaries,direct_frame->video||remove_alpha(o))) {
-            orient_rgba(regular->pixels,regular->width,regular->height,orient);
+            orient_image(regular->pixels,regular->width,regular->height,orient);
             frame->width=w;frame->height=h;
             frame->primaries=direct_frame->primaries;
             frame->rgba8=std::move(regular->pixels);
@@ -350,6 +330,7 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
             const auto parser=decode_jpeg(bytes.data(),bytes.size(),true);
             require(!parser.cmyk,"CMYK JPEG coefficient transcoding is unsupported; disable Lossless JPEG transcoding to preserve CMYK samples in JXL");
             info[0]=parser.width;info[1]=parser.height;info[3]=13;
+            if(parser.orientation>=5)std::swap(info[0],info[1]);
             rc=transcode_jpeg(bytes.data(),bytes.size(),path.c_str(),o.keep_exif);
             require(rc==0,"JPEG coefficient transcoding failed (codec "+std::to_string(rc)+")");
             rc=1;
@@ -423,18 +404,12 @@ Result ConversionSession::run(const std::filesystem::path& output,const Options&
                     linear.size()==size_t(w)*h*4,
                     "Image decode failed (codec "+std::to_string(rc)+")");
             if(o.keep_exif&&(format==4||format==5))exif=portable_source_exif(bytes.data(),bytes.size(),w,h);
-            // JXL decoder emits a 4-byte box offset before TIFF; normalize orientation after decode.
-            if(format==3&&!exif.empty()) {
-                require(exif.size()>=4,"Invalid JXL EXIF");
-                const size_t offset=4+(uint32_t(exif[0])<<24|uint32_t(exif[1])<<16|uint32_t(exif[2])<<8|exif[3]);
-                require(offset<=exif.size(),"Invalid JXL EXIF offset");exif.erase(exif.begin(),exif.begin()+offset);
-            }
             const int orient=format==7?1:format==6?int(raster_orientation):source_orientation(bytes.data(),bytes.size(),format,format==0&&o.keep_exif?&exif:nullptr);
             require(orient>=1&&orient<=8,"Unsupported image orientation/crop");
             if(orient!=1) {
-                orient_rgba(linear,w,h,orient);
-                orient_rgba(sdr_base,w,h,orient);
-                if(orient>=5)std::swap(w,h);
+                auto baseWidth=w,baseHeight=h;
+                orient_image(linear,w,h,orient);
+                orient_image(sdr_base,baseWidth,baseHeight,orient);
             }
             normalize_exif(exif);
             // RAW exposure belongs before its camera look, tone controls and

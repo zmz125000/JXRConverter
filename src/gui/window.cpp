@@ -443,7 +443,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         updateReorderMode();
     };
     connect(sidebar->tabBar(),&QTabBar::tabBarClicked,this,setInteractionForPage);
-    connect(sidebar,&QTabWidget::currentChanged,this,[this,setInteractionForPage](int index){setInteractionForPage(index);updateCounts();if(animationConversionActive())updateAnimationSummary();});
+    connect(sidebar,&QTabWidget::currentChanged,this,[this,setInteractionForPage](int index){setInteractionForPage(index);updateOutputQueueProfile();updateCounts();if(animationConversionActive())updateAnimationSummary();});
     connect(outputToggle,&QPushButton::toggled,this,[outputScroll,outputToggle](bool on){outputScroll->setVisible(on);outputToggle->setText(on?"▾ Output queue":"▸ Output queue");});
     splitter->addWidget(browser);splitter->addWidget(sidePanel);splitter->setChildrenCollapsible(false);splitter->setStretchFactor(0,1);splitter->setSizes({1050,std::max(370,fullControlsWidth)});
     auto* spacer=new QWidget;spacer->setSizePolicy(QSizePolicy::Expanding,QSizePolicy::Preferred);toolbar->addWidget(spacer);
@@ -609,7 +609,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     for(auto* widget:filterControls())defaultFilters_.controls.insert(widget->objectName(),widget->property(settingProperty(widget)));
     auto settings=appSettings();restoreGeometry(settings.value("window/geometry").toByteArray());viewMode_->button(std::clamp(settings.value("browser/view",0).toInt(),0,2))->setChecked(true);size_->setValue(settings.value("browser/minCellDp",200).toInt());
     wheelChanges_->setChecked(settings.value("browser/wheelChanges",false).toBool());
-    output_->setText(settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString());recursive_->setChecked(settings.value("browser/recursive",true).toBool());includeVideos_->setChecked(settings.value("browser/includeVideos",true).toBool());
+    recursive_->setChecked(settings.value("browser/recursive",true).toBool());includeVideos_->setChecked(settings.value("browser/includeVideos",true).toBool());
     restoreSettings();setInteractionForPage(sidebar->currentIndex());appliedSearch_=loadFilters_->isChecked()?settings.value("search/applied",search_->text()).toString():QString{};direction->setText(sortOrder_==Qt::AscendingOrder?"Ascending":"Descending");proxy_->sort(sort_->currentData().toInt(),sortOrder_);filterScroll->setVisible(metadataFilters_->isChecked());outputScroll->setVisible(outputToggle->isChecked());outputToggle->setText(outputToggle->isChecked()?"▾ Output queue":"▸ Output queue");
     catalog_->setAspectSampling(autoAspect_->isChecked());updateMode();updateFilter();updatePresentation();updateCounts();requestAspectSample(false);
     QTimer::singleShot(0,this,&MainWindow::checkForUpdates);
@@ -620,7 +620,7 @@ MainWindow::~MainWindow() {
     if(routingToken_)routingToken_->store(false);
     routingWorkers_.waitForDone();
     saveJobs();saveSettings();
-    auto settings=appSettings();settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("browser/includeVideos",includeVideos_->isChecked());settings.setValue("conversion/output",output_->text());
+    auto settings=appSettings();settings.setValue("window/geometry",saveGeometry());settings.setValue("browser/view",viewMode_->checkedId());settings.setValue("browser/minCellDp",size_->value());settings.setValue("browser/wheelChanges",wheelChanges_->isChecked());settings.setValue("browser/recursive",recursive_->isChecked());settings.setValue("browser/includeVideos",includeVideos_->isChecked());
 }
 namespace {
 const char* settingProperty(QWidget* widget) {
@@ -635,7 +635,7 @@ const char* settingProperty(QWidget* widget) {
 QList<QWidget*> MainWindow::persistentControls() const {
     return QList<QWidget*>{checkUpdates_,smoothScrolling_,autoAspect_,portraitAspect_,thumbnailFit_,mode_,preset_,avifDepth_,pngDepth_,autoBitDepth_,rawMode_,wb_,quality_,distance_,downsize_,exif_,transcode_,reconstruction_,transparencyBackground_,
         exposure_,maxEdge_,bt2020_,convertGamut_,srgbClamp_,rawExposure_,kelvin_,highlight_,shoulder_,nits_,shadows_,midtones_,highlights_,cameraLook_,linearHdr_,disableRawBoost_,rawAutoExposure_,rawProtectHighlights_,
-        convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,workers_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
+        convertedFolder_,parentFolders_,dateFolders_,jobFolders_,formatFolders_,flattenFolders_,jumpToJob_,sourceFolder_,renameConflicts_,preserveOriginalDate_,overwrite_,loadFolder_,loadFiles_,loadJobs_,loadFilters_,acceptSdr_,metadataFilters_,today_,dateEnabled_,dateFrom_,dateTo_,search_,instant_,format_,range_,minImageEdge_,megapixels_,sort_,
         findChild<QPushButton*>("toggleOutput"),videoMode_,videoCodec_,videoContainer_,videoTransfer_,videoDepth_,videoChroma_,videoEncoder_,
         videoAudio_,videoAudioBitrate_,videoMaxEdge_,videoExposure_,videoGpuToneMapping_,animationFormat_,animationTransfer_,animationMilliseconds_,animationSlowMotion_,animationAlignment_,animationEdge_,animationAsVideo_,animationStack_,animationResize_,animationGifIndexedColor_}
         +stillTone_.settings()+videoTone_.settings();
@@ -663,6 +663,13 @@ void MainWindow::restoreSettings() {
     const auto oldTab=std::clamp(settings.value("controls/settingsTabs",0).toInt(),0,2);
     const auto page=settings.value("controls/settingsPage",tabs->widget(oldTab?oldTab+2:0)->objectName()).toString();
     if(auto* widget=tabs->findChild<QWidget*>(page)) {const QSignalBlocker blocker(tabs);tabs->setCurrentWidget(widget);}
+    const auto originalDirectory=settings.value("conversion/output",QDir::homePath()+"/Pictures/Converted").toString();
+    const auto originalJobs=settings.value("controls/parallelJobs",workers_->value());
+    outputProfiles_[0].directory=originalDirectory;
+    outputProfiles_[1].directory=settings.value("video/output",originalDirectory).toString();
+    outputProfiles_[0].parallelJobs=std::clamp(originalJobs.toInt(),workers_->minimum(),workers_->maximum());
+    outputProfiles_[1].parallelJobs=std::clamp(settings.value("video/parallelJobs",originalJobs).toInt(),workers_->minimum(),workers_->maximum());
+    updateOutputQueueProfile();
     aspectIndex_=std::clamp(settings.value("browser/aspectRatio",2).toInt(),0,4);
     sortOrder_=settings.value("browser/descending",false).toBool()?Qt::DescendingOrder:Qt::AscendingOrder;
     findChild<QSlider*>("rawTargetNitsSlider")->setValue(nits_->value());
@@ -680,6 +687,10 @@ void MainWindow::saveSettings() const {
     for(auto* widget:persistentControls())if(widget)settings.setValue("controls/"+widget->objectName(),(widget==stillTone_.mapper||widget==videoTone_.mapper)?static_cast<QComboBox*>(widget)->currentData():widget==sort_?sort_->currentData():widget->property(settingProperty(widget)));
     QStringList saved;for(const auto target:selectedTargets())saved.append(QString::number(int(target)));
     saveVideoEncoderSettings();
+    settings.setValue("conversion/output",outputProfiles_[0].directory);
+    settings.setValue("controls/parallelJobs",outputProfiles_[0].parallelJobs);
+    settings.setValue("video/output",outputProfiles_[1].directory);
+    settings.setValue("video/parallelJobs",outputProfiles_[1].parallelJobs);
     settings.setValue("animation/frameDelayUs",animationDelayUs_);
     settings.setValue("controls/settingsPage",findChild<QTabWidget*>("settingsTabs")->currentWidget()->objectName());
     settings.setValue("jobs/nextNumber",nextJob_);settings.setValue("browser/aspectRatio",aspectIndex_);settings.setValue("search/applied",appliedSearch_);settings.setValue("conversion/targets",saved);settings.setValue("browser/descending",sortOrder_==Qt::DescendingOrder);settings.sync();
@@ -973,7 +984,9 @@ QWidget* MainWindow::buildAnimationControls() {
     summary(videoSettings,animationVideoSummary_,"Pixel processing",{{"Exposure",videoExposure_},{"Maximum edge",videoMaxEdge_}});
     layout->addStretch();
 
-    connect(animationAsVideo_,&QCheckBox::toggled,this,&MainWindow::updateAnimationControls);
+    connect(animationAsVideo_,&QCheckBox::toggled,this,[this]{
+        updateOutputQueueProfile();updateAnimationControls();
+    });
     connect(animationFormat_,&QComboBox::currentIndexChanged,this,&MainWindow::updateAnimationControls);
     connect(animationTransfer_,&QComboBox::currentIndexChanged,this,&MainWindow::updateAnimationSummary);
     connect(animationMilliseconds_,&QCheckBox::toggled,this,&MainWindow::updateAnimationControls);
@@ -1090,7 +1103,8 @@ AnimationOutput MainWindow::animationTarget() const {
 void MainWindow::convertAnimationFiles(QStringList paths,bool reuseJob,bool quick) {
     if(paths.isEmpty()||routingToken_||(!quick&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
     try {
-        const auto directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
+        const auto& queueProfile=outputProfiles_[animationAsVideo_->isChecked()];
+        const auto directory=sourceFolder_->isChecked()?QString{}:queueProfile.directory.trimmed();
         if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         auto target=animationTarget();
         auto options=optionsForTarget(Target::png);
@@ -1106,7 +1120,7 @@ void MainWindow::convertAnimationFiles(QStringList paths,bool reuseJob,bool quic
         const auto batch=reuseJob?viewedJob_:reuseQuick?quickJob_:nextJob_;
         target.inputs=std::move(paths);
         auto job=makeAnimationJob(directory,options,std::move(target),outputLayout(batch,quick));
-        startConversion({std::move(job)},batch,false,quick,reuseJob,reuseQuick,quick,directory);
+        startConversion({std::move(job)},batch,false,quick,reuseJob,reuseQuick,quick,directory,queueProfile.parallelJobs);
     } catch(const std::exception& error) {
         reportError(QString::fromUtf8(error.what()));
     }
@@ -1197,6 +1211,15 @@ void MainWindow::updateVideoControls() {
     videoGpuToneMapping_->setEnabled(!hdr&&videoMode_->currentIndex()==0);
     videoTone_.group->setEnabled(!hdr&&!(videoGpuToneMapping_->isEnabled()&&videoGpuToneMapping_->isChecked()));
     videoExposure_->setEnabled(videoMode_->currentIndex()==1);
+}
+
+void MainWindow::updateOutputQueueProfile() {
+    if(videoConversionActive())videoQueueProfile_=true;
+    else if(animationConversionActive())videoQueueProfile_=animationAsVideo_->isChecked();
+    else if(findChild<QTabWidget*>("settingsTabs")->currentIndex()==0)videoQueueProfile_=false;
+    const auto& profile=outputProfiles_[videoQueueProfile_];
+    output_->setText(profile.directory);
+    workers_->setValue(profile.parallelJobs);
 }
 
 bool MainWindow::videoConversionActive() const {
@@ -1319,6 +1342,7 @@ QWidget* MainWindow::buildControls() {
         if(!path.isEmpty()){output_->setText(path);rememberOutputFolder(path);}
     };
     connect(browse,&QPushButton::clicked,this,chooseOutputFolder);
+    connect(output_,&QLineEdit::textChanged,this,[this](const QString& path){outputProfiles_[videoQueueProfile_].directory=path;});
     connect(output_,&QLineEdit::editingFinished,this,[this]{rememberOutputFolder(output_->text());});
     auto* history=new QMenu(browse);history->setObjectName("outputFolderHistory");
     connect(history,&QMenu::aboutToShow,this,[this,history,chooseOutputFolder] {
@@ -1354,7 +1378,7 @@ QWidget* MainWindow::buildControls() {
     overwrite_=check("Replace existing output files","overwrite");destinationLayout->addWidget(overwrite_);
     connect(sourceFolder_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
     connect(renameConflicts_,&QCheckBox::toggled,this,&MainWindow::updateOutputSettings);
-    const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
+    const int cores=coreCount();workers_=spin(1,cores,recommendedWorkers(cores),"parallelJobs");connect(workers_,&QSpinBox::valueChanged,this,[this](int value){outputProfiles_[videoQueueProfile_].parallelJobs=value;});auto* workerForm=new QFormLayout;workerForm->addRow("Parallel jobs",workers_);destinationLayout->addLayout(workerForm);
     threadBudget_=new QLabel;threadBudget_->setWordWrap(true);auto updateBudget=[this,cores]{threadBudget_->setText(QString("%1 CPU cores · up to %2 codec threads/job. Default jobs: CPU cores / 4 (minimum 1). Reduce jobs for large RAW files.").arg(cores).arg(std::max(1,cores/workers_->value())));};connect(workers_,&QSpinBox::valueChanged,this,updateBudget);updateBudget();destinationLayout->addWidget(threadBudget_);queueLayout->addWidget(destination);
     selected_=new QPushButton("Convert selected");selected_->setObjectName("convertSelected");selected_->setProperty("primary",true);visible_=new QPushButton("Convert all");visible_->setObjectName("convertVisible");cancel_=new QPushButton("Stop queue");cancel_->setObjectName("cancelQueue");cancel_->setToolTip("Stop active video and animation conversions and pending outputs. Active image conversions finish.");
     visible_->setToolTip("Convert all visible files. Fewer than 5 images share this session’s Quick job. Inside Jobs, rerun the current job.");selected_->setToolTip("Selections of 1–4 images share this session’s Quick job. Inside Jobs, rerun the current job.");
@@ -1610,7 +1634,7 @@ void MainWindow::showJob(qint64 number) {
 }
 void MainWindow::clearJobs() {
     if(queue_->busy())return;
-    savedJobs_.clear();temporaryJob_={0,{},{},{},false,{},{}};jobSelections_.clear();viewedJob_=0;nextJob_=1;quickJob_=-1;lastOutputFolder_.clear();
+    savedJobs_.clear();temporaryJob_={0,{},{},{},false,{},{}};jobSelections_.clear();viewedJob_=0;nextJob_=1;quickJob_=-1;for(auto& profile:outputProfiles_)profile.lastFolder.clear();
     jobHistoryLoaded_=true;jobHistoryDirty_=true;jobMenu_->clear();
     if(statusFilter_->checkedId()==2)statusFilter_->button(0)->setChecked(true);
     refreshJobs();saveJobs();updateFilter();
@@ -1646,14 +1670,19 @@ void MainWindow::recordJob(const QVector<Job>& jobs,bool temporary,bool reuse,bo
         saved->outputs.insert(job.output,{job.input,"Queued"});
     }
     if(creating)saved->name=jobParentName(saved->files);
-    if(!jobs.isEmpty())lastOutputFolder_=saved->folder=QFileInfo(jobs.first().output).absolutePath();
+    if(!jobs.isEmpty()) {
+        const auto& first=jobs.first();
+        outputProfiles_[bool(first.video||(first.animation&&first.animation->video))].lastFolder=
+            saved->folder=QFileInfo(first.output).absolutePath();
+    }
     if(jumpToJob_->isChecked())showJob(saved->number);
     else{refreshJobs();saveJobs();updateFilter();}
 }
 void MainWindow::updateJobOutput(qint64 batch,const QString& input,const QString& output,const QString& state) {
     const bool completed=state=="Finished"||state=="Skipped";
-    if(completed)lastOutputFolder_=QFileInfo(output).absolutePath();
-    auto update=[&](SavedJob& job){auto it=job.outputs.find(output);if(it!=job.outputs.end()&&it->input==input&&(it->state=="Queued"||it->state=="Running")){it->state=state;if(completed)job.folder=lastOutputFolder_;}};
+    const auto folder=QFileInfo(output).absolutePath();
+    if(completed)outputProfiles_[supportedVideoFile(output)].lastFolder=folder;
+    auto update=[&](SavedJob& job){auto it=job.outputs.find(output);if(it!=job.outputs.end()&&it->input==input&&(it->state=="Queued"||it->state=="Running")){it->state=state;if(completed)job.folder=folder;}};
     for(auto& job:savedJobs_)if(job.number==batch)update(job);
     // A single-image request may promote an already queued output belonging
     // to a numbered job; the temporary job observes that output's result too.
@@ -1682,17 +1711,17 @@ OutputLayout MainWindow::outputLayout(qint64 batch,bool quick) const {
 void MainWindow::openOutputFolder() {
     QString path;
     if(statusFilter_->checkedId()==2){if(viewedJob_==0)path=temporaryJob_.folder;else for(const auto& job:savedJobs_)if(job.number==viewedJob_)path=job.folder;}
-    else path=lastOutputFolder_;
+    else path=outputProfiles_[videoQueueProfile_].lastFolder;
     if(path.isEmpty()){
         auto paths=selectedPaths();if(paths.isEmpty()&&proxy_->rowCount())paths.append(proxy_->index(0,0).data(Catalog::PathRole).toString());
         if(paths.isEmpty()&&(sourceFolder_->isChecked()||(parentFolders_->isEnabled()&&parentFolders_->isChecked()))){reportError("Cannot open output folder: Select a file to determine its output folder.");return;}
         const auto targets=selectedTargets();
         try {
             const auto layout=outputLayout(viewedJob_);
-            if(videoConversionActive()) {
-                path=outputFolder(paths.value(0),output_->text().trimmed(),videoExtension(videoTarget().container),layout);
-            } else if(animationConversionActive()) {
+            if(animationConversionActive()) {
                 path=outputFolder(paths.value(0),output_->text().trimmed(),animationExtension(animationTarget()),layout);
+            } else if(videoQueueProfile_) {
+                path=outputFolder(paths.value(0),output_->text().trimmed(),videoExtension(videoTarget().container),layout);
             } else path=outputFolder(paths.value(0),output_->text().trimmed(),targets.isEmpty()?Target::avif:targets.first(),layout);
         }
         catch(const std::exception& e){reportError("Cannot open output folder: "+QString::fromUtf8(e.what()),selectedPaths());return;}
@@ -1758,7 +1787,7 @@ void MainWindow::addPaths(const QStringList& paths) {
 
 void MainWindow::importVideoFrame(const QString& source) {
     grabVideoFrame(this,source,[this,source] {
-        const auto output=output_->text().trimmed();
+        const auto output=outputProfiles_[0].directory.trimmed();
         OutputLayout layout;
         layout.source_folder=sourceFolder_->isChecked();
         layout.converted_subfolder=convertedFolder_->isChecked();
@@ -1963,7 +1992,7 @@ void MainWindow::convertFiles(bool selected) {
 void MainWindow::convertVideos(const QStringList& paths,bool reuseJob,bool quick) {
     if(paths.isEmpty()||routingToken_||(!quick&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return;
     try {
-        const QString directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
+        const QString directory=sourceFolder_->isChecked()?QString{}:outputProfiles_[1].directory.trimmed();
         if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         Options options;
         options.mode=Mode::process;
@@ -1974,7 +2003,7 @@ void MainWindow::convertVideos(const QStringList& paths,bool reuseJob,bool quick
         const bool reuseQuick=quick&&quickJob_>=0;
         const auto batch=reuseJob?viewedJob_:reuseQuick?quickJob_:nextJob_;
         auto jobs=makeVideoJobs(paths,directory,options,videoTarget(),outputLayout(batch,quick));
-        startConversion(std::move(jobs),batch,false,quick,reuseJob,reuseQuick,quick,directory);
+        startConversion(std::move(jobs),batch,false,quick,reuseJob,reuseQuick,quick,directory,outputProfiles_[1].parallelJobs);
     } catch(const std::exception& error) {
         reportError(QString::fromUtf8(error.what()));
     }
@@ -1983,7 +2012,8 @@ bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
     if(routingToken_||paths.isEmpty()||(!priority&&!append&&!reuseJob&&queue_->busy())||(updater_&&updater_->installing()))return false;
     try {
         if(targets.isEmpty())throw std::invalid_argument("Select at least one output format");
-        const QString directory=sourceFolder_->isChecked()?QString{}:output_->text().trimmed();
+        const QString directory=sourceFolder_->isChecked()?QString{}:outputProfiles_[0].directory.trimmed();
+        const int parallelJobs=outputProfiles_[0].parallelJobs;
         if(directory.isEmpty()&&!sourceFolder_->isChecked())throw std::invalid_argument("Choose an output folder");
         const bool acceptSdr=acceptSdr_->isChecked();
         const bool full=reconstruction_->currentIndex()==int(GainMapReconstruction::full_image);
@@ -2041,13 +2071,13 @@ bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
             }
             return jobs;
         };
-        if(missing.isEmpty())return startConversion(makeRoutedJobs({}),batch,priority,append,reuseJob,reuseQuick,quick,directory);
+        if(missing.isEmpty())return startConversion(makeRoutedJobs({}),batch,priority,append,reuseJob,reuseQuick,quick,directory,parallelJobs);
 
         const bool skipMode=!layout.rename_conflicts&&!options.cbegin().value().overwrite;
         auto token=std::make_shared<std::atomic_bool>(true);routingToken_=token;
         queueState_->setText(skipMode?"Checking output conflicts…":"Checking source HDR/SDR metadata…");updateCounts();
         routingWorkers_.start([this,paths,targets,exactTargets,priority,append,reuseJob,reuseQuick,quick,
-                               directory,batch,layout,options,skipMode,token,missing,prepared,
+                               directory,batch,parallelJobs,layout,options,skipMode,token,missing,prepared,
                                acceptSdr,full,route,makeRoutedJobs] {
             QVector<Job> jobs;
             QString error;
@@ -2117,12 +2147,12 @@ bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
             }catch(const std::exception& e){error=QString::fromUtf8(e.what());}
             catch(...){error="Unknown conversion preparation failure";}
             QMetaObject::invokeMethod(this,[this,token,error,paths,batch,priority,append,reuseJob,reuseQuick,
-                                            quick,directory,jobs=std::move(jobs)]() mutable {
+                                            quick,directory,parallelJobs,jobs=std::move(jobs)]() mutable {
                 if(routingToken_!=token)return;
                 routingToken_.reset();
                 try {
                     if(!error.isEmpty())throw std::runtime_error(error.toStdString());
-                    startConversion(std::move(jobs),batch,priority,append,reuseJob,reuseQuick,quick,directory);
+                    startConversion(std::move(jobs),batch,priority,append,reuseJob,reuseQuick,quick,directory,parallelJobs);
                 }catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);}
                 updateCounts();
             },Qt::QueuedConnection);
@@ -2131,7 +2161,7 @@ bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
     }catch(const std::exception& e){reportError("Cannot start conversion: "+QString::fromUtf8(e.what()),paths);return false;}
 }
 
-bool MainWindow::startConversion(QVector<Job> jobs,qint64 batch,bool priority,bool append,bool reuseJob,bool reuseQuick,bool quick,const QString& directory) {
+bool MainWindow::startConversion(QVector<Job> jobs,qint64 batch,bool priority,bool append,bool reuseJob,bool reuseQuick,bool quick,const QString& directory,int parallelJobs) {
     if(reuseJob&&batch>0&&std::none_of(savedJobs_.cbegin(),savedJobs_.cend(),[batch](const SavedJob& saved){return saved.number==batch;}))
         throw std::invalid_argument("The selected job no longer exists");
     // Discard stale results for rerun inputs without changing job identity.
@@ -2150,9 +2180,9 @@ bool MainWindow::startConversion(QVector<Job> jobs,qint64 batch,bool priority,bo
     recordJob(jobs,priority,reuseJob||reuseQuick,quick);
     if(!directory.isEmpty())rememberOutputFolder(directory);
     if(quick)quickJob_=batch;
-    if(priority||reuseJob||quick)queue_->enqueueNext(std::move(jobs),workers_->value());
-    else if(append)queue_->enqueue(std::move(jobs),workers_->value());
-    else queue_->start(std::move(jobs),workers_->value());
+    if(priority||reuseJob||quick)queue_->enqueueNext(std::move(jobs),parallelJobs);
+    else if(append)queue_->enqueue(std::move(jobs),parallelJobs);
+    else queue_->start(std::move(jobs),parallelJobs);
     refreshJobs();updateCounts();
     return true;
 }
