@@ -887,10 +887,10 @@ QWidget* MainWindow::buildAnimationControls() {
     animationAsVideo_=check("Output as video","animationAsVideo");
     animationAsVideo_->setToolTip("Use the Video tab’s output settings for a silent video. Each still is encoded as one frame.");
     form->addRow(animationAsVideo_);
-    form->addRow("Format",animationFormat_);
     animationGifIndexedColor_=check("Optimize GIF indexed color","animationGifIndexedColor",AnimationOutput{}.gifIndexedColor);
     animationGifIndexedColor_->setToolTip("Build an optimized color palette for each frame. Off uses a fixed palette for all frames.");
     form->addRow(animationGifIndexedColor_);
+    form->addRow("Format",animationFormat_);
     form->addRow("Dynamic range",animationTransfer_);
     form->addRow("Frame timing",animationRate_);
     form->addRow(animationMilliseconds_);
@@ -1015,7 +1015,7 @@ void MainWindow::updateAnimationControls() {
         animationTransfer_->setCurrentIndex(0);
     const bool asVideo=animationAsVideo_->isChecked();
     animationFormat_->setEnabled(!asVideo);
-    animationGifIndexedColor_->setVisible(!asVideo&&format==AnimationFormat::gif);
+    animationGifIndexedColor_->setEnabled(!asVideo&&format==AnimationFormat::gif);
     animationTransfer_->setEnabled(!asVideo&&!sdrOnly);
 
     const unsigned minimumDelay=!asVideo&&format==AnimationFormat::gif?10000u:1000u;
