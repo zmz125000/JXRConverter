@@ -35,14 +35,21 @@ class Catalog : public QAbstractTableModel {
     Q_OBJECT
 public:
     enum Column { Name, Format, Dimensions, Size, Captured, Camera, Lens, Iso, Aperture, Shutter, Focal, Transfer, Primaries, Bits, Status, Created, Modified, ExifDate, Width, Height, MaxEdge, Megapixels, AspectRatio, Hdr, Gainmap, Raw, Path, Error, MetadataWarning, ColumnCount };
-    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole, DetailsRole, VideoRole };
+    enum Role { PathRole = Qt::UserRole + 1, SummaryRole, RawRole, ThumbnailRole, DetailsRole, VideoRole, EntryRole };
     explicit Catalog(QObject* parent = nullptr, int thumbnailCacheKiB = 128*1024);
     ~Catalog() override;
     int rowCount(const QModelIndex& parent = {}) const override;
     int columnCount(const QModelIndex& parent = {}) const override;
     QVariant data(const QModelIndex& index, int role) const override;
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override;
-    const Record& record(int row) const { return records_.at(row); }
+    const Record& record(int row) const;
+    int fileCount() const { return records_.size(); }
+    bool isDuplicate(int row) const { return row>=fileCount(); }
+    static bool isDuplicateEntry(const QString& key) { return key.startsWith(QChar(u'\0')); }
+    QString entryKey(int row) const;
+    QString addDuplicate(const QString& path);
+    void removeDuplicates(const QSet<QString>& keys);
+    void pruneDuplicates(const QSet<QString>& selectedFiles);
     QStringList paths() const;
     void addPaths(const QStringList& paths, bool recursive = true, bool includeVideos = true);
     void addGeneratedImage(const QString& path);
@@ -67,6 +74,7 @@ signals:
     void folderDiscovered(const QString& path);
 private:
     void insertPaths(const QVector<Record>& paths);
+    void notifyDuplicates(int first,int last,const QList<int>& roles = {});
     void pumpThumbnails();
     void cancelThumbnail(const QString& path);
     void fitThumbnailCache();
@@ -75,6 +83,9 @@ private:
     bool metadataWanted(const QString& path) const;
     int find(const QString& path) const;
     QVector<Record> records_;
+    struct Duplicate {QString path,key;};
+    QVector<Duplicate> duplicates_;
+    quint64 nextDuplicate_ = 0;
     mutable QHash<QString,int> rowsByPath_;
     mutable bool rowIndexValid_ = false;
     int statusUpdateDepth_ = 0, firstStatusRow_ = -1, lastStatusRow_ = -1;
@@ -116,7 +127,7 @@ public:
     explicit CatalogFilter(QObject* parent = nullptr);
     void setFilter(const Filter& filter);
     const Filter& filter() const { return filter_; }
-    QStringList sortedPaths(const QSet<QString>& paths) const;
+    QModelIndexList sortedEntries(const QSet<QString>& paths) const;
     void setManualOrder(const QStringList& paths);
     bool hasManualOrder() const { return !manualPositions_.isEmpty(); }
     int imageCount() const;

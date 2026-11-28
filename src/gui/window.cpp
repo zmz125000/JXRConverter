@@ -385,6 +385,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
     refreshJobs();
     connect(list_,&FileListView::fileReordered,this,&MainWindow::reorderSelected);
     connect(table_,&FileTableView::fileReordered,this,&MainWindow::reorderSelected);
+    connect(list_,&FileListView::duplicateCard,this,&MainWindow::addSelectedEntry);
+    connect(list_,&FileListView::removeCard,this,[this](const QModelIndex& index){
+        if(statusFilter_->checkedId()==1)removeSelectedEntries({index.data(Catalog::EntryRole).toString()});
+    });
     auto* selectAll=new QPushButton("Select all");selectAll->setObjectName("selectAllImages");actionsLayout->addWidget(selectAll);
     connect(selectAll,&QPushButton::clicked,this,&MainWindow::selectVisible);
     auto* deselect=new QPushButton("Deselect");deselect->setObjectName("deselectImages");actionsLayout->addWidget(deselect);connect(deselect,&QPushButton::clicked,this,&MainWindow::clearImageSelection);
@@ -579,13 +583,22 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
         if(paths.size()==visible.size())return;
         // Only visible rows can appear in the proxy's deselection signal.
         paths.clear();
-        for(const auto& index:visible)paths.insert(index.data(Catalog::PathRole).toString());
+        for(const auto& index:visible)paths.insert(index.data(Catalog::EntryRole).toString());
+        if(&paths==&selectedImages_)catalog_->pruneDuplicates(selectedImages_);
         updateCounts();
     };
     for(auto* view:QList<QAbstractItemView*>{list_,table_})connect(view,&QAbstractItemView::clicked,this,[this](const QModelIndex& index){rememberedImages_.insert(index.data(Catalog::PathRole).toString());showMetadata();});
     connect(proxy_,&QAbstractItemModel::rowsInserted,this,[this]{syncSelection();updateCounts();});connect(proxy_,&QAbstractItemModel::rowsRemoved,this,&MainWindow::updateCounts);
     connect(catalog_,&QAbstractItemModel::rowsInserted,this,[this]{updateVideoTab();requestAspectSample(list_->verticalScrollBar()->value()>0);});
-    connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){for(int row=first;row<=last;++row){const auto path=catalog_->record(row).path;selectedImages_.remove(path);selectedTabImages_.remove(path);rememberedImages_.remove(path);for(auto& selected:jobSelections_)selected.remove(path);}});
+    connect(catalog_,&QAbstractItemModel::rowsAboutToBeRemoved,this,[this](const QModelIndex&,int first,int last){
+        for(int row=first;row<=last;++row) {
+            const auto entry=catalog_->entryKey(row);
+            selectedTabImages_.remove(entry);
+            if(catalog_->isDuplicate(row))continue;
+            selectedImages_.remove(entry);rememberedImages_.remove(entry);
+            for(auto& selected:jobSelections_)selected.remove(entry);
+        }
+    });
     connect(catalog_,&QAbstractItemModel::rowsRemoved,this,[this]{if(!catalog_->rowCount())aspectSamplePending_=false;updateVideoTab();updateFilter();});
     connect(catalog_,&QAbstractItemModel::modelReset,this,[this]{aspectSamplePending_=false;loggedWarnings_.clear();selectedImages_.clear();selectedTabImages_.clear();jobSelections_.clear();rememberedImages_.clear();updateVideoTab();updateFilter();showMetadata();});
     connect(catalog_,&QAbstractItemModel::dataChanged,this,[this](const QModelIndex& first,const QModelIndex& last){
@@ -1470,14 +1483,19 @@ void MainWindow::syncSelection() {
     if(selectionModelChanges_||!selection_)return;
     const bool previous=syncingSelection_;syncingSelection_=true;
     QItemSelection visible;
-    if(!imageSelection().isEmpty())for(int row=0;row<proxy_->rowCount();++row){const auto index=proxy_->index(row,0);if(imageSelection().contains(index.data(Catalog::PathRole).toString()))visible.select(index,index.siblingAtColumn(Catalog::ColumnCount-1));}
+    if(!imageSelection().isEmpty())for(int row=0;row<proxy_->rowCount();++row){const auto index=proxy_->index(row,0);if(imageSelection().contains(index.data(Catalog::EntryRole).toString()))visible.select(index,index.siblingAtColumn(Catalog::ColumnCount-1));}
     selection_->select(visible,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
     syncingSelection_=previous;
 }
 void MainWindow::changeSelection(const QItemSelection& selected,const QItemSelection& deselected) {
     if(syncingSelection_||selectionModelChanges_)return;
-    for(const auto& index:deselected.indexes())if(index.column()==0)imageSelection().remove(index.data(Catalog::PathRole).toString());
-    for(const auto& index:selected.indexes())if(index.column()==0){const auto path=index.data(Catalog::PathRole).toString();imageSelection().insert(path);if(!bulkSelecting_)rememberedImages_.insert(path);}
+    auto& entries=imageSelection();
+    for(const auto& index:deselected.indexes())if(index.column()==0)entries.remove(index.data(Catalog::EntryRole).toString());
+    for(const auto& index:selected.indexes())if(index.column()==0){
+        entries.insert(index.data(Catalog::EntryRole).toString());
+        if(!bulkSelecting_)rememberedImages_.insert(index.data(Catalog::PathRole).toString());
+    }
+    if(&entries==&selectedImages_&&!deselected.isEmpty())catalog_->pruneDuplicates(selectedImages_);
     updateCounts();showMetadata();
 }
 void MainWindow::updateReorderMode() {
@@ -1489,28 +1507,79 @@ void MainWindow::updateReorderMode() {
         selectedTab?"Drag to box-select files. Click to switch to reordering.":
         reorderMode_?"Open the selection for reordering.":"Show your selection across all views.");
     list_->setReorderEnabled(reorder);
+    list_->setCardActionsEnabled(selectedTab);
     table_->setReorderEnabled(reorder);
 }
-void MainWindow::reorderSelected(const QSet<QString>& paths,const QString& target,bool after) {
-    if(!reorderMode_||statusFilter_->checkedId()!=1||paths.contains(target)||!selectedImages_.contains(target))return;
-    const auto order=proxy_->sortedPaths(selectedImages_);
+void MainWindow::reorderSelected(const QSet<QString>& entries,const QString& target,bool after) {
+    if(!reorderMode_||statusFilter_->checkedId()!=1||entries.contains(target))return;
+    const auto ordered=proxy_->sortedEntries(selectedImages_);
+    QStringList order;
     QStringList moving, remaining;
-    for(const auto& path:order)(paths.contains(path)?moving:remaining).append(path);
+    for(const auto& index:ordered) {
+        const auto entry=index.data(Catalog::EntryRole).toString();
+        order.append(entry);
+        (entries.contains(entry)?moving:remaining).append(entry);
+    }
     const auto anchor=remaining.indexOf(target);
     if(moving.isEmpty()||anchor<0)return;
     const auto position=anchor+(after?1:0);
     const auto updated=remaining.first(position)+moving+remaining.sliced(position);
     if(updated!=order)proxy_->setManualOrder(updated);
 }
-void MainWindow::selectVisible() {
-    for(int row=0;row<proxy_->rowCount();++row){const auto path=proxy_->index(row,0).data(Catalog::PathRole).toString();imageSelection().insert(path);}
+void MainWindow::addSelectedEntry(const QModelIndex& index) {
+    const auto source=index.data(Catalog::PathRole).toString();
+    if(statusFilter_->checkedId()!=1||!selectedImages_.contains(source))return;
+    QStringList order;
+    for(const auto& entry:proxy_->sortedEntries(selectedImages_))order.append(entry.data(Catalog::EntryRole).toString());
+    const auto position=order.indexOf(index.data(Catalog::EntryRole).toString());
+    if(position<0)return;
+    const auto duplicate=catalog_->addDuplicate(source);
+    if(duplicate.isEmpty())return;
+    order.insert(position+1,duplicate);
+    proxy_->setManualOrder(order);
+    syncSelection();
+}
+void MainWindow::removeSelectedEntries(QSet<QString> entries) {
+    if(entries.isEmpty())return;
+    selectedTabImages_.subtract(entries);
+    if(catalog_->rowCount()==catalog_->fileCount()) {
+        selectedImages_.subtract(entries);
+        updateFilter();showMetadata();
+        return;
+    }
+    // If the original card is removed, let the first surviving copy stand
+    // for the library file at that copy's position.
+    QStringList order;
+    QSet<QString> removed=entries;
+    QSet<QString> promoted;
+    for(const auto& index:proxy_->sortedEntries(selectedImages_)) {
+        const auto entry=index.data(Catalog::EntryRole).toString();
+        if(entries.contains(entry))continue;
+        const auto path=index.data(Catalog::PathRole).toString();
+        if(entries.contains(path)&&!promoted.contains(path)) {
+            promoted.insert(path);
+            removed.insert(entry);
+            if(selectedTabImages_.remove(entry))selectedTabImages_.insert(path);
+            order.append(path);
+        } else order.append(entry);
+    }
+    for(const auto& entry:entries)if(!promoted.contains(entry))selectedImages_.remove(entry);
+    catalog_->removeDuplicates(removed);
+    if(proxy_->hasManualOrder())proxy_->setManualOrder(order);
     updateFilter();showMetadata();
 }
-void MainWindow::clearImageSelection() {imageSelection().clear();updateFilter();showMetadata();}
+void MainWindow::selectVisible() {
+    for(int row=0;row<proxy_->rowCount();++row)imageSelection().insert(proxy_->index(row,0).data(Catalog::EntryRole).toString());
+    updateFilter();showMetadata();
+}
+void MainWindow::clearImageSelection() {
+    auto& entries=imageSelection();entries.clear();
+    if(&entries==&selectedImages_)catalog_->pruneDuplicates(selectedImages_);
+    updateFilter();showMetadata();
+}
 void MainWindow::removeImageSelection() {
     if(statusFilter_->checkedId()==1){
-        for(const auto& path:selectedTabImages_)selectedImages_.remove(path);
-        selectedTabImages_.clear();updateFilter();showMetadata();
+        removeSelectedEntries(selectedTabImages_);
     }else catalog_->removePaths(selectedPaths());
 }
 QString MainWindow::browserScrollKey() const {return QString::number(statusFilter_->checkedId())+":"+(statusFilter_->checkedId()==2?QString::number(viewedJob_):QString{})+":"+QString::number(viewMode_->checkedId());}
@@ -1567,7 +1636,7 @@ void MainWindow::saveBrowserScroll() {
     // geometry while the first tab's deferred restoration is still pending.
     if(scrollView_&&!scrollKey_.isEmpty()&&!restoringBrowserScroll_){
         ViewportState state;state.scroll=QPoint(scrollView_->horizontalScrollBar()->value(),scrollView_->verticalScrollBar()->value());
-        const auto current=selection_->currentIndex();if(current.isValid()){state.currentPath=current.data(Catalog::PathRole).toString();state.currentColumn=current.column();}
+        const auto current=selection_->currentIndex();if(current.isValid()){state.currentEntry=current.data(Catalog::EntryRole).toString();state.currentColumn=current.column();}
         scrollPositions_[scrollKey_]=state;
     }
 }
@@ -1578,8 +1647,8 @@ void MainWindow::restoreBrowserScroll() {
         if(generation!=scrollRestoreGeneration_||key!=scrollKey_||view!=scrollView_)return;
         const bool previous=changingAspect_;changingAspect_=true;view->doItemsLayout();
         QModelIndex current;
-        if(!state.currentPath.isEmpty()){
-            const auto matches=proxy_->match(proxy_->index(0,0),Catalog::PathRole,state.currentPath,1,Qt::MatchExactly);
+        if(!state.currentEntry.isEmpty()){
+            const auto matches=proxy_->match(proxy_->index(0,0),Catalog::EntryRole,state.currentEntry,1,Qt::MatchExactly);
             if(!matches.isEmpty())current=matches.first().siblingAtColumn(state.currentColumn);
         }
         selection_->setCurrentIndex(current,QItemSelectionModel::NoUpdate);
@@ -1711,7 +1780,7 @@ void MainWindow::updateJobOutput(qint64 batch,const QString& input,const QString
 void MainWindow::clearCurrentTab() {
     const int tab=statusFilter_->checkedId();
     if(tab==2)return;
-    if(tab==1){selectedImages_.clear();selectedTabImages_.clear();updateFilter();showMetadata();return;}
+    if(tab==1){selectedImages_.clear();selectedTabImages_.clear();catalog_->pruneDuplicates(selectedImages_);updateFilter();showMetadata();return;}
     if(tab==5){rememberedImages_.clear();updateFilter();return;}
     QStringList paths;for(int row=0;row<proxy_->rowCount();++row)paths.append(proxy_->index(row,0).data(Catalog::PathRole).toString());
     if(tab==0&&catalog_->scanning())catalog_->clear();else catalog_->removePaths(paths);
@@ -1842,7 +1911,8 @@ void MainWindow::updateFilter() {
     switchBrowserState();
     updateReorderMode();
     if(selectedImages_.isEmpty())proxy_->setManualOrder({});
-    selectedTabImages_.intersect(selectedImages_);
+    for(auto it=selectedTabImages_.begin();it!=selectedTabImages_.end();)
+        if(!Catalog::isDuplicateEntry(*it)&&!selectedImages_.contains(*it))it=selectedTabImages_.erase(it);else ++it;
     jobButton_->setText(statusFilter_->checkedId()==2?jobText(viewedJob_):QString("Jobs"));
     const auto key=browserScrollKey();const bool changed=key!=scrollKey_;if(changed)saveBrowserScroll();
     Filter f;const int tab=statusFilter_->checkedId();f.status=(tab==3||tab==4)?tab:0;
@@ -1919,7 +1989,15 @@ void MainWindow::updateAutoThumbnailAspect() {
     }
     aspectSamplePending_=false;if(choice>=0)setThumbnailAspect(choice);
 }
-QStringList MainWindow::selectedPaths() const {QStringList out;for(const auto& path:catalog_->paths())if(imageSelection().contains(path))out.append(path);return out;}
+QStringList MainWindow::selectedPaths() const {
+    QStringList out;
+    const bool selectedTab=statusFilter_->checkedId()==1;
+    const int count=selectedTab?catalog_->rowCount():catalog_->fileCount();
+    for(int row=0;row<count;++row)if(imageSelection().contains(catalog_->entryKey(row)))
+        out.append(catalog_->record(row).path);
+    if(count>catalog_->fileCount())out.removeDuplicates();
+    return out;
+}
 void MainWindow::showLibraryMessage(const QString& message,int timeout) {
     libraryMessage_=message;libraryMessageTimer_->stop();
     if(timeout>0)libraryMessageTimer_->start(timeout);
@@ -1941,7 +2019,7 @@ void MainWindow::updateCounts() {
     progress_->setFormat(progressCounts+(processingNotes.isEmpty()?QString{}:" ("+processingNotes.join(", ")+")"));
     const int selected=imageSelection().size();const bool busy=queue_->busy()||bool(routingToken_)||(updater_&&updater_->installing()),hasTargets=video||animation||!selectedTargets().isEmpty();
     if(auto* button=findChild<QPushButton*>("updateApplication"))button->setEnabled(!busy&&!updater_->busy());
-    counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->rowCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
+    counts_->setText(QString("%1 visible / %2 files\n%3 selected%4").arg(proxy_->rowCount()).arg(catalog_->fileCount()).arg(selected).arg(libraryMessage_.isEmpty()?QString{}:" · "+libraryMessage_));counts_->setToolTip(counts_->text());
     auto stateStyle=[](QPushButton* button,const char* name,bool value){if(button->property(name).isValid()&&button->property(name).toBool()==value)return;button->setProperty(name,value);button->style()->unpolish(button);button->style()->polish(button);button->update();};
     stateStyle(selected_,"noSelection",selected==0);stateStyle(cancel_,"running",queue_->busy()||bool(routingToken_));
     progressStop_->setVisible(queue_->busy()||bool(routingToken_));
@@ -1949,7 +2027,10 @@ void MainWindow::updateCounts() {
     const auto& videos=catalog_->videoPaths();
     const auto& smaller=selection.size()<videos.size()?selection:videos;
     const auto& larger=selection.size()<videos.size()?videos:selection;
-    const int selectedVideos=std::count_if(smaller.cbegin(),smaller.cend(),[&](const QString& path){return larger.contains(path);});
+    int selectedVideos=std::count_if(smaller.cbegin(),smaller.cend(),[&](const QString& path){return larger.contains(path);});
+    if(!videos.isEmpty()&&statusFilter_->checkedId()==1)
+        for(int row=catalog_->fileCount();row<catalog_->rowCount();++row)
+            if(selection.contains(catalog_->entryKey(row))&&catalog_->record(row).video)++selectedVideos;
     const int selectedImages=selected-selectedVideos;
     const bool imageOnlyVideoSelection=video&&selected>0&&selectedVideos==0;
     const int visibleImages=proxy_->imageCount();
@@ -1992,8 +2073,11 @@ void MainWindow::convertFiles(bool selected) {
     if(!video&&!animation&&statusFilter_->checkedId()==VideoTab)return;
     QStringList paths;
     if(!animation&&selected)paths=selectedPaths();
-    else if(animation&&selected&&proxy_->filter().manualOrder&&proxy_->hasManualOrder())
-        paths=proxy_->sortedPaths(imageSelection());
+    else if(animation&&selected&&proxy_->filter().manualOrder) {
+        for(const auto& index:proxy_->sortedEntries(selectedImages_))
+            if(imageSelection().contains(index.data(Catalog::EntryRole).toString()))
+                paths.append(index.data(Catalog::PathRole).toString());
+    }
     else {
         auto hidden=selected?imageSelection():QSet<QString>{};
         for(int row=0;row<proxy_->rowCount();++row) {
@@ -2002,7 +2086,10 @@ void MainWindow::convertFiles(bool selected) {
         }
         if(!hidden.isEmpty())for(const auto& path:catalog_->paths())if(hidden.contains(path))paths<<path;
     }
-    if(!animation)paths.erase(std::remove_if(paths.begin(),paths.end(),[video](const QString& path){return supportedVideoFile(path)!=video;}),paths.end());
+    if(!animation) {
+        if(!selected&&proxy_->filter().manualOrder&&catalog_->rowCount()>catalog_->fileCount())paths.removeDuplicates();
+        paths.erase(std::remove_if(paths.begin(),paths.end(),[video](const QString& path){return supportedVideoFile(path)!=video;}),paths.end());
+    }
     const bool reuse=statusFilter_->checkedId()==2;
     const bool quick=!paths.isEmpty()&&paths.size()<quickJobLimit&&!reuse;
     if(animation)convertAnimationFiles(std::move(paths),reuse,quick);
@@ -2050,7 +2137,7 @@ bool MainWindow::convertPaths(const QStringList& paths,const QVector<Target>& ta
         auto layout=outputLayout(batch,quick);
         auto prepared=std::make_shared<Routing>();
         if(routing)*prepared=*routing;
-        for(int row=0;row<catalog_->rowCount();++row) {
+        for(int row=0;row<catalog_->fileCount();++row) {
             const auto& record=catalog_->record(row);
             if(record.raw)layout.raw_inputs.insert(record.path);
             if(needsHdr&&!routing&&record.inspected&&!record.transfer.isEmpty())

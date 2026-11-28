@@ -1282,6 +1282,65 @@ private slots:
         QCOMPARE(mode->text(),QString("Selected"));
         QCOMPARE(order(),(QStringList{b,a,c}));
     }
+    void selectedGridCanDuplicateAndRemoveCards() {
+        appSettings().clear();MainWindow window;window.show();
+        const auto a=makeImage(root("duplicate-cards"),"a.jpg",32,24,100);
+        const auto b=makeImage(root("duplicate-cards"),"b.jpg",48,32,125);
+        window.addPaths({a,b});
+        auto* model=window.filterModel();
+        QTRY_COMPARE(model->rowCount(),2);
+        window.findChild<QPushButton*>("selectAllImages")->click();
+        auto* selected=window.findChild<QPushButton*>("statusSelected");
+        selected->click();
+        auto* view=window.findChild<FileListView*>();
+        const auto pathAt=[&](int row){return model->index(row,0).data(Catalog::PathRole).toString();};
+        const auto keyAt=[&](int row){return model->index(row,0).data(Catalog::EntryRole).toString();};
+        auto clickCardButton=[&](int row,bool add){
+            const auto rect=view->visualRect(model->index(row,0));
+            QVERIFY(rect.isValid());
+            QTest::mouseClick(view->viewport(),Qt::LeftButton,Qt::NoModifier,
+                QPoint(rect.right()-15,rect.top()+(add?19:45)));
+        };
+        QTRY_VERIFY(view->visualRect(model->index(0,0)).isValid());
+        clickCardButton(0,true);
+        QCOMPARE(model->rowCount(),3);
+        QCOMPARE(pathAt(0),a);QCOMPARE(pathAt(1),a);QCOMPARE(pathAt(2),b);
+        QVERIFY(keyAt(0)!=keyAt(1));
+        const auto duplicate=keyAt(1);
+        QCOMPARE(window.catalog()->paths(),(QStringList{a,b}));
+
+        window.findChild<QTabWidget*>("settingsTabs")->setCurrentIndex(2);
+        QCOMPARE(selected->text(),QString("Reorder"));
+        const auto from=view->visualRect(model->index(1,0)).center();
+        const auto to=view->visualRect(model->index(2,0));
+        const auto after=to.center()+QPoint(to.width()/4,0);
+        QTest::mousePress(view->viewport(),Qt::LeftButton,Qt::NoModifier,from);
+        QTest::mouseMove(view->viewport(),after,30);
+        QTest::mouseRelease(view->viewport(),Qt::LeftButton,Qt::NoModifier,after);
+        QCOMPARE(pathAt(1),b);QCOMPARE(keyAt(2),duplicate);
+        QCOMPARE(view->selectionModel()->selectedRows().size(),1);
+        QCOMPARE(view->selectionModel()->selectedRows().first().data(Catalog::EntryRole).toString(),duplicate);
+
+        window.findChild<QComboBox*>("animationFormat")->setCurrentIndex(int(jxrc::AnimationFormat::png));
+        window.findChild<QLineEdit*>("outputDirectory")->setText(root("duplicate-cards-output"));
+        QSignalSpy written(window.queue(),&ConversionQueue::outputFinished);
+        window.findChild<QPushButton*>("convertVisible")->click();
+        QTRY_COMPARE(written.size(),1);
+        QFile encoded(written.first().at(2).toString());QVERIFY(encoded.open(QIODevice::ReadOnly));
+        QCOMPARE(encoded.readAll().count("fcTL"),3);
+
+        clickCardButton(0,false);
+        QCOMPARE(model->rowCount(),2);QCOMPARE(pathAt(0),b);QCOMPARE(pathAt(1),a);
+        clickCardButton(1,true);
+        QCOMPARE(model->rowCount(),3);
+        clickCardButton(2,false);
+        QCOMPARE(model->rowCount(),2);QCOMPARE(pathAt(0),b);QCOMPARE(pathAt(1),a);
+        clickCardButton(1,false);
+        QCOMPARE(model->rowCount(),1);QCOMPARE(pathAt(0),b);
+        window.findChild<QPushButton*>("statusAll")->click();
+        QCOMPARE(model->rowCount(),2);
+        QVERIFY(QFileInfo::exists(a));QVERIFY(QFileInfo::exists(b));
+    }
     void replacingFilteredSelection() {
         appSettings().clear();MainWindow window;window.show();
         const auto directory=root("replace-filtered-selection");

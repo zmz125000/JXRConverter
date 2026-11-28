@@ -94,7 +94,9 @@ private:
     const QSet<QString>& imageSelection() const;
     void changeSelection(const QItemSelection&, const QItemSelection&);
     void updateReorderMode();
-    void reorderSelected(const QSet<QString>& paths, const QString& target, bool after);
+    void reorderSelected(const QSet<QString>& entries, const QString& target, bool after);
+    void addSelectedEntry(const QModelIndex& index);
+    void removeSelectedEntries(QSet<QString> entries);
     void selectVisible();
     void clearImageSelection();
     void removeImageSelection();
@@ -229,7 +231,7 @@ private:
     };
     struct ViewportState {
         QPoint scroll;
-        QString currentPath;
+        QString currentEntry;
         int currentColumn = 0;
     };
     QHash<QString,BrowserState> browserStates_;

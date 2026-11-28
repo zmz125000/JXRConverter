@@ -11,6 +11,7 @@
 #include <QWheelEvent>
 #include <QScrollBar>
 #include <QScopedValueRollback>
+#include <QStyleOptionButton>
 #include <QPropertyAnimation>
 #include <QAbstractProxyModel>
 #include <QUrl>
@@ -123,12 +124,18 @@ bool scrollWheel(QAbstractItemView* view,QWheelEvent* event,bool smooth,QPropert
     event->accept();return true;
 }
 QStringList paths(const QMimeData* mime) {QStringList out;for(const auto& url:mime->urls())if(url.isLocalFile())out<<url.toLocalFile();return out;}
+constexpr int cardActionSize=22;
+constexpr int cardActionStrip=26;
+QRect cardActionRect(const QRect& item,int action) {
+    return {item.right()-cardActionStrip,item.top()+8+(action-1)*(cardActionSize+4),cardActionSize,cardActionSize};
+}
 }
 class FileReorder : public QObject {
 public:
     using Move = std::function<void(const QSet<QString>&,const QString&,bool)>;
-    FileReorder(QAbstractItemView* view, Move move)
-        : QObject(view), view_(view), indicator_(new QWidget(view->viewport())), move_(std::move(move)) {
+    using CardEvent = std::function<bool(QEvent*)>;
+    FileReorder(QAbstractItemView* view, Move move, CardEvent cardEvent = {})
+        : QObject(view), view_(view), indicator_(new QWidget(view->viewport())), move_(std::move(move)), cardEvent_(std::move(cardEvent)) {
         indicator_->setAttribute(Qt::WA_TransparentForMouseEvents);
         indicator_->setStyleSheet("background: palette(highlight);");
         indicator_->hide();
@@ -148,6 +155,7 @@ public:
     }
 protected:
     bool eventFilter(QObject*, QEvent* event) override {
+        if(cardEvent_&&cardEvent_(event))return true;
         if(!enabled_)return false;
         switch(event->type()) {
         case QEvent::MouseButtonPress: {
@@ -155,7 +163,7 @@ protected:
             if(mouse->button()==Qt::LeftButton) {
                 reset();
                 start_=mouse->position().toPoint();
-                source_=view_->indexAt(start_).data(Catalog::PathRole).toString();
+                source_=view_->indexAt(start_).data(Catalog::EntryRole).toString();
             }
             return false;
         }
@@ -166,8 +174,8 @@ protected:
             position_=mouse->position().toPoint();
             if(!dragging_&&(position_-start_).manhattanLength()>=QApplication::startDragDistance()) {
                 for(const auto& index:view_->selectionModel()->selectedRows(0))
-                    draggedPaths_.insert(index.data(Catalog::PathRole).toString());
-                if(!draggedPaths_.contains(source_))draggedPaths_={source_};
+                    draggedEntries_.insert(index.data(Catalog::EntryRole).toString());
+                if(!draggedEntries_.contains(source_))draggedEntries_={source_};
                 dragging_=true;
                 scroll_.start();
             }
@@ -182,11 +190,11 @@ protected:
             if(dragged&&view_->viewport()->rect().contains(pos)) {
                 position_=pos;
                 updateTarget();
-                const auto paths=std::move(draggedPaths_);
+                const auto entries=std::move(draggedEntries_);
                 const auto target=target_;
                 const bool after=after_;
                 reset();
-                if(!target.isEmpty())move_(paths,target,after);
+                if(!target.isEmpty())move_(entries,target,after);
             } else reset();
             return dragged;
         }
@@ -196,7 +204,7 @@ protected:
     }
 private:
     void reset() {
-        source_.clear();target_.clear();draggedPaths_.clear();dragging_=false;
+        source_.clear();target_.clear();draggedEntries_.clear();dragging_=false;
         indicator_->hide();scroll_.stop();
     }
     void updateTarget() {
@@ -219,8 +227,8 @@ private:
         }
         if(!index.isValid()){target_.clear();indicator_->hide();return;}
         const auto rect=view_->visualRect(index);
-        target_=index.data(Catalog::PathRole).toString();
-        if(draggedPaths_.contains(target_)){target_.clear();indicator_->hide();return;}
+        target_=index.data(Catalog::EntryRole).toString();
+        if(draggedEntries_.contains(target_)){target_.clear();indicator_->hide();return;}
         after_=grid&&point.y()<=rect.bottom()?point.x()>=rect.center().x():point.y()>=rect.center().y();
         const QRect mark=grid?QRect(after_?rect.right()-2:rect.left(),rect.top(),3,rect.height()):
             QRect(0,after_?rect.bottom()-2:rect.top(),bounds.width(),3);
@@ -230,15 +238,16 @@ private:
     QAbstractItemView* view_;
     QWidget* indicator_;
     Move move_;
+    CardEvent cardEvent_;
     QTimer scroll_;
     QPoint start_,position_;
     QString source_,target_;
-    QSet<QString> draggedPaths_;
+    QSet<QString> draggedEntries_;
     bool enabled_=false,dragging_=false,after_=false;
 };
-FileListView::FileListView(QWidget* parent):QListView(parent),reorder_(new FileReorder(this,[this](const QSet<QString>& paths,const QString& target,bool after){
-    emit fileReordered(paths,target,after);
-})) {
+FileListView::FileListView(QWidget* parent):QListView(parent),reorder_(new FileReorder(this,[this](const QSet<QString>& entries,const QString& target,bool after){
+    emit fileReordered(entries,target,after);
+},[this](QEvent* event){return handleCardAction(event);})) {
     setObjectName("fileList");setSelectionMode(ExtendedSelection);setSelectionBehavior(SelectRows);setSelectionRectVisible(true);setDragEnabled(false);
     setAcceptDrops(true);setDropIndicatorShown(false);setEditTriggers(NoEditTriggers);setUniformItemSizes(true);
     setVerticalScrollMode(ScrollPerPixel);setHorizontalScrollMode(ScrollPerPixel);
@@ -252,6 +261,45 @@ FileListView::FileListView(QWidget* parent):QListView(parent),reorder_(new FileR
     });
 }
 void FileListView::setReorderEnabled(bool enabled) {reorder_->setEnabled(enabled);setSelectionRectVisible(!enabled);}
+void FileListView::setCardActionsEnabled(bool enabled) {
+    auto* delegate=dynamic_cast<ThumbnailDelegate*>(itemDelegate());
+    if(!delegate||delegate->cardActions==enabled)return;
+    delegate->cardActions=enabled;
+    viewport()->update();
+}
+bool FileListView::handleCardAction(QEvent* event) {
+    if(event->type()==QEvent::Hide||event->type()==QEvent::UngrabMouse) {
+        pressedAction_=0;pressedCard_=QModelIndex{};
+    }
+    if(event->type()==QEvent::MouseMove)return pressedAction_!=0;
+    if(event->type()!=QEvent::MouseButtonPress&&event->type()!=QEvent::MouseButtonRelease&&
+       event->type()!=QEvent::MouseButtonDblClick)return false;
+    const auto* mouse=static_cast<QMouseEvent*>(event);
+    if(mouse->button()!=Qt::LeftButton)return false;
+    const auto* delegate=dynamic_cast<const ThumbnailDelegate*>(itemDelegate());
+    const bool enabled=grid_&&delegate&&delegate->cardActions;
+    if(!enabled&&!pressedAction_)return false;
+    const auto position=mouse->position().toPoint();
+    const auto index=indexAt(position);
+    int action=0;
+    if(enabled&&index.isValid()) {
+        const auto rect=visualRect(index);
+        if(cardActionRect(rect,1).contains(position))action=1;
+        else if(cardActionRect(rect,2).contains(position))action=2;
+    }
+    if(event->type()==QEvent::MouseButtonRelease) {
+        if(!pressedAction_)return false;
+        const bool clicked=action==pressedAction_&&index==pressedCard_;
+        pressedAction_=0;pressedCard_=QModelIndex{};
+        if(clicked) {
+            if(action==1)emit duplicateCard(index);
+            else emit removeCard(index);
+        }
+        return true;
+    }
+    if(action) {pressedAction_=action;pressedCard_=index;return true;}
+    return false;
+}
 void FileListView::paintEvent(QPaintEvent* event) {
     ThumbnailFrame frame(this);
     QListView::paintEvent(event);
@@ -336,8 +384,8 @@ void FileListView::dragEnterEvent(QDragEnterEvent* e){if(e->mimeData()->hasUrls(
 void FileListView::dragMoveEvent(QDragMoveEvent* e){if(e->mimeData()->hasUrls())e->acceptProposedAction();else e->ignore();}
 void FileListView::dropEvent(QDropEvent* e){if(e->mimeData()->hasUrls()){emit pathsDropped(paths(e->mimeData()));e->acceptProposedAction();}}
 FileTableView::FileTableView(QWidget* parent):QTableView(parent),frozen_(new FrozenNameView(this)),
-    reorder_(new FileReorder(this,[this](const QSet<QString>& paths,const QString& target,bool after){
-        emit fileReordered(paths,target,after);
+    reorder_(new FileReorder(this,[this](const QSet<QString>& entries,const QString& target,bool after){
+        emit fileReordered(entries,target,after);
     })) {
     setItemDelegate(new TableThumbnailDelegate(this));
     setObjectName("fileDetails");setSelectionMode(ExtendedSelection);setSelectionBehavior(SelectRows);setDragEnabled(false);setAcceptDrops(true);setDropIndicatorShown(false);
@@ -446,7 +494,8 @@ QSize ThumbnailDelegate::sizeHint(const QStyleOptionViewItem& option,const QMode
 void ThumbnailDelegate::paint(QPainter* painter,const QStyleOptionViewItem& option,const QModelIndex& index) const {
     painter->save();painter->setRenderHint(QPainter::Antialiasing);
     const bool selected=option.state&QStyle::State_Selected;
-    const QRect tile=option.rect.adjusted(grid?5:2,grid?5:2,grid?-5:-2,grid?-5:-2);
+    const bool showActions=grid&&cardActions;
+    const QRect tile=option.rect.adjusted(grid?5:2,grid?5:2,grid?-5-(showActions?cardActionStrip:0):-2,grid?-5:-2);
     painter->setPen(selected?QPen(QColor("#2e8069"),2):QPen(option.palette.mid().color(),1));
     painter->setBrush(selected?option.palette.highlight().color():option.palette.base().color());painter->drawRoundedRect(tile,7,7);
     const int thumbEdge=grid?edge:std::min(std::clamp(edge/2+20,52,156)-16,edge);
@@ -475,5 +524,14 @@ void ThumbnailDelegate::paint(QPainter* painter,const QStyleOptionViewItem& opti
     if(grid||tile.height()>75){if(grid)text.translate(0,19);else text=QRect(text.left(),text.bottom()+3,text.width(),20);const QString state=index.siblingAtColumn(Catalog::Status).data().toString();painter->setPen((state=="Failed"||state.startsWith("Failed · "))?QColor("#ad3434"):state=="Done"?QColor("#26755e"):option.palette.color(QPalette::PlaceholderText));painter->drawText(text,Qt::AlignVCenter,state);}
     if(option.state&QStyle::State_HasFocus){painter->setPen(QPen(QColor("#2e8069"),1,Qt::DotLine));painter->setBrush(Qt::NoBrush);painter->drawRoundedRect(tile.adjusted(4,4,-4,-4),5,5);}
     painter->restore();
+    if(showActions)for(int action:{1,2}) {
+        QStyleOptionButton button;
+        button.rect=cardActionRect(option.rect,action);
+        button.palette=option.palette;
+        button.state=QStyle::State_Enabled|QStyle::State_Raised;
+        button.text=action==1?QString("+"):QString("−");
+        const auto* style=option.widget?option.widget->style():QApplication::style();
+        style->drawControl(QStyle::CE_PushButton,&button,painter,option.widget);
+    }
 }
 }

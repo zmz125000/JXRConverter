@@ -201,7 +201,7 @@ Catalog::~Catalog() {
     scans_.clear();workers_.clear();scans_.waitForDone();workers_.waitForDone();
     delete metadataTask_;qDeleteAll(thumbnailTasks_);
 }
-int Catalog::rowCount(const QModelIndex& parent) const { return parent.isValid()?0:records_.size(); }
+int Catalog::rowCount(const QModelIndex& parent) const { return parent.isValid()?0:records_.size()+duplicates_.size(); }
 int Catalog::columnCount(const QModelIndex& parent) const { return parent.isValid()?0:ColumnCount; }
 QVariant Catalog::headerData(int section, Qt::Orientation orientation, int role) const {
     static const QStringList headers = {"Name","Format","Dimensions","File size","Image date","Camera","Lens","ISO","Aperture","Shutter","Focal length","Transfer","Primaries","Bit depth","Status","Created","Modified","EXIF date","Width","Height","Max edge","Megapixels","Aspect ratio","HDR","Gain map","RAW","Full path","Error","Metadata warning"};
@@ -209,8 +209,9 @@ QVariant Catalog::headerData(int section, Qt::Orientation orientation, int role)
     return {};
 }
 QVariant Catalog::data(const QModelIndex& index, int role) const {
-    if (!index.isValid() || index.row() >= records_.size()) return {};
-    const auto& r = records_[index.row()];
+    if (!index.isValid() || index.row() >= rowCount()) return {};
+    if (role == EntryRole) return entryKey(index.row());
+    const auto& r = record(index.row());
     if (role == PathRole) return r.path;
     if (role == VideoRole) return r.video;
     if (role == RawRole) return r.raw;
@@ -262,6 +263,44 @@ QVariant Catalog::data(const QModelIndex& index, int role) const {
     }
 }
 QStringList Catalog::paths() const { QStringList out; for(const auto& r:records_)out<<r.path; return out; }
+const Record& Catalog::record(int row) const {
+    return records_.at(isDuplicate(row)?find(duplicates_.at(row-fileCount()).path):row);
+}
+QString Catalog::entryKey(int row) const {
+    return isDuplicate(row)?duplicates_.at(row-fileCount()).key:records_.at(row).path;
+}
+QString Catalog::addDuplicate(const QString& path) {
+    if(find(path)<0)return {};
+    const auto entry=QString(QChar(u'\0'))+QString::number(++nextDuplicate_);
+    const int row=rowCount();
+    beginInsertRows({},row,row);
+    duplicates_.append({path,entry});
+    endInsertRows();
+    return entry;
+}
+void Catalog::removeDuplicates(const QSet<QString>& keys) {
+    if(keys.isEmpty())return;
+    for(int i=duplicates_.size()-1;i>=0;--i)if(keys.contains(duplicates_[i].key)) {
+        const int row=fileCount()+i;
+        beginRemoveRows({},row,row);
+        duplicates_.removeAt(i);
+        endRemoveRows();
+    }
+}
+void Catalog::pruneDuplicates(const QSet<QString>& selectedFiles) {
+    QSet<QString> removed;
+    for(const auto& duplicate:duplicates_)if(!selectedFiles.contains(duplicate.path))removed.insert(duplicate.key);
+    removeDuplicates(removed);
+}
+void Catalog::notifyDuplicates(int first,int last,const QList<int>& roles) {
+    for(int i=0;i<duplicates_.size();++i) {
+        const int source=find(duplicates_[i].path);
+        if(source>=first&&source<=last) {
+            const int row=fileCount()+i;
+            emit dataChanged(index(row,0),index(row,ColumnCount-1),roles);
+        }
+    }
+}
 int Catalog::find(const QString& path) const {
     if(!rowIndexValid_) {
         rowsByPath_.clear();rowsByPath_.reserve(records_.size());
@@ -375,7 +414,7 @@ void Catalog::pumpMetadata() {
             const int row=find(path);
             if(epoch->load()&&token->load()&&row>=0) {
                 auto& old=records_[row];keepBasicFileMetadata(result,old);result.status=old.status;result.error=old.error;result.thumbnailPending=old.thumbnailPending;result.thumbnailFailed=old.thumbnailFailed;
-                old=std::move(result);emit dataChanged(index(row,0),index(row,ColumnCount-1));
+                old=std::move(result);emit dataChanged(index(row,0),index(row,ColumnCount-1));notifyDuplicates(row,row);
             }
             pumpMetadata();
         },Qt::QueuedConnection);
@@ -386,7 +425,7 @@ void Catalog::clear() {
     epoch_->store(false);epoch_=std::make_shared<std::atomic_bool>(true);
     scans_.clear();scanning_=0;metadataQueue_.clear();visibleThumbnails_.clear();cancelMetadata();
     for(const auto& path:thumbnailJobs_.keys())cancelThumbnail(path);
-    beginResetModel();records_.clear();rowsByPath_.clear();rowIndexValid_=false;known_.clear();videoPaths_.clear();cache_.clear();endResetModel();
+    beginResetModel();records_.clear();duplicates_.clear();rowsByPath_.clear();rowIndexValid_=false;known_.clear();videoPaths_.clear();cache_.clear();endResetModel();
     emit scanStateChanged(false);
 }
 void Catalog::beginThumbnailFrame(const std::function<bool(const QModelIndex&)>& visible) {
@@ -397,9 +436,12 @@ void Catalog::endThumbnailFrame() {
     // Painting can trigger layout probes too. Check geometry after layout has
     // finished, with collection disabled to avoid recursive decoration probes.
     thumbnailFrame_=false;
+    QSet<QString> visibleDuplicates;
+    for(int i=0;i<duplicates_.size();++i)if(thumbnailVisible_(index(fileCount()+i,Name)))
+        visibleDuplicates.insert(duplicates_[i].path);
     for(int i=visibleThumbnails_.size()-1;i>=0;--i) {
         const auto path=visibleThumbnails_[i];const int row=find(path);
-        if(row<0||!thumbnailVisible_(index(row,Name))) {
+        if(row<0||(!visibleDuplicates.contains(path)&&!thumbnailVisible_(index(row,Name)))) {
             cancelThumbnail(path);
             visibleThumbnails_.removeAt(i);
         }
@@ -478,6 +520,7 @@ void Catalog::pumpThumbnails() {
                         else if(r.metadataWarning.isEmpty())r.metadataWarning="Thumbnail: "+error;
                         if(updated)emit dataChanged(index(row,0),index(row,ColumnCount-1));
                         else emit dataChanged(index(row,0),index(row,0),{Qt::DecorationRole});
+                        notifyDuplicates(row,row,updated?QList<int>{}:QList<int>{Qt::DecorationRole});
                     }
                 }
                 pumpThumbnails();pumpMetadata();
@@ -491,6 +534,9 @@ void Catalog::pumpThumbnails() {
 void Catalog::removePaths(const QStringList& paths) {
     const QSet<QString> removal(paths.begin(),paths.end());
     if(!records_.isEmpty()&&std::all_of(records_.cbegin(),records_.cend(),[&](const Record& r){return removal.contains(r.path);})) {clear();return;}
+    QSet<QString> removedDuplicates;
+    for(const auto& duplicate:duplicates_)if(removal.contains(duplicate.path))removedDuplicates.insert(duplicate.key);
+    removeDuplicates(removedDuplicates);
     if(removal.contains(metadataPath_))cancelMetadata();
     for(int i=records_.size()-1;i>=0;--i)if(removal.contains(records_[i].path)) {
         const auto path=records_[i].path;
@@ -504,13 +550,19 @@ void Catalog::setStatus(const QString& path,const QString& status,const QString&
     if(statusUpdateDepth_) {
         firstStatusRow_=firstStatusRow_<0?row:std::min(firstStatusRow_,row);
         lastStatusRow_=std::max(lastStatusRow_,row);
-    } else emit dataChanged(index(row,Status),index(row,Error),{Qt::DisplayRole});
+    } else {
+        emit dataChanged(index(row,Status),index(row,Error),{Qt::DisplayRole});
+        notifyDuplicates(row,row,{Qt::DisplayRole});
+    }
 }
 void Catalog::beginStatusUpdates() {++statusUpdateDepth_;}
 void Catalog::endStatusUpdates() {
     if(!statusUpdateDepth_||--statusUpdateDepth_)return;
     const int first=firstStatusRow_,last=lastStatusRow_;firstStatusRow_=lastStatusRow_=-1;
-    if(first>=0)emit dataChanged(index(first,Status),index(last,Error),{Qt::DisplayRole});
+    if(first>=0) {
+        emit dataChanged(index(first,Status),index(last,Error),{Qt::DisplayRole});
+        notifyDuplicates(first,last,{Qt::DisplayRole});
+    }
 }
 CatalogFilter::CatalogFilter(QObject* parent):QSortFilterProxyModel(parent) {
     setDynamicSortFilter(true);setSortCaseSensitivity(Qt::CaseInsensitive);
@@ -524,7 +576,7 @@ int CatalogFilter::imageCount() const {
     const auto* catalog=qobject_cast<const Catalog*>(sourceModel());
     if(!catalog||filter_.videosOnly)return 0;
     if(catalog->videoPaths().isEmpty())return rowCount();
-    if(catalog->videoPaths().size()==catalog->rowCount())return 0;
+    if(catalog->videoPaths().size()==catalog->fileCount())return 0;
     if(imageCount_>=0)return imageCount_;
     imageCount_=0;
     for(int row=0;row<rowCount();++row)
@@ -546,7 +598,7 @@ void CatalogFilter::setFilter(const Filter& filter) {
     invalidateFilter();
 #endif
 }
-QStringList CatalogFilter::sortedPaths(const QSet<QString>& paths) const {
+QModelIndexList CatalogFilter::sortedEntries(const QSet<QString>& paths) const {
     const auto* catalog=static_cast<const Catalog*>(sourceModel());
     QList<QModelIndex> indexes;
     indexes.reserve(paths.size());
@@ -555,10 +607,7 @@ QStringList CatalogFilter::sortedPaths(const QSet<QString>& paths) const {
     std::sort(indexes.begin(),indexes.end(),[this](const QModelIndex& lhs,const QModelIndex& rhs){
         return sortOrder()==Qt::AscendingOrder?lessThan(lhs,rhs):lessThan(rhs,lhs);
     });
-    QStringList sorted;
-    sorted.reserve(indexes.size());
-    for(const auto& index:indexes)sorted.append(catalog->record(index.row()).path);
-    return sorted;
+    return indexes;
 }
 void CatalogFilter::setManualOrder(const QStringList& paths) {
     if(manualPositions_.isEmpty()&&paths.isEmpty())return;
@@ -572,7 +621,9 @@ QString catalogFieldKey(int column) {
     return keys.value(column);
 }
 bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
-    const auto& r=static_cast<Catalog*>(sourceModel())->record(row);const auto& f=filter_;
+    const auto* catalog=static_cast<const Catalog*>(sourceModel());const auto& f=filter_;
+    if(!f.manualOrder&&catalog->isDuplicate(row))return false;
+    const auto& r=catalog->record(row);
     if(f.videosOnly&&!r.video)return false;
     if(f.restrictPaths&&!f.paths.contains(r.path))return false;
     if(f.status==3&&!r.status.startsWith("Done")&&r.status!="Skipped")return false;
@@ -626,10 +677,11 @@ bool CatalogFilter::filterAcceptsRow(int row,const QModelIndex&) const {
 bool CatalogFilter::lessThan(const QModelIndex& left,const QModelIndex& right) const {
     const auto* model=static_cast<Catalog*>(sourceModel());const auto& a=model->record(left.row());const auto& b=model->record(right.row());
     if(filter_.manualOrder&&hasManualOrder()) {
-        const int first=manualPositions_.value(a.path,manualPositions_.size());
-        const int second=manualPositions_.value(b.path,manualPositions_.size());
+        const int first=manualPositions_.value(model->entryKey(left.row()),manualPositions_.size());
+        const int second=manualPositions_.value(model->entryKey(right.row()),manualPositions_.size());
         if(first!=second)return sortOrder()==Qt::AscendingOrder?first<second:first>second;
     }
+    if(a.path==b.path)return sortOrder()==Qt::AscendingOrder?left.row()<right.row():left.row()>right.row();
     auto numeric=[&](double x,double y){return x==y?a.path<b.path:x<y;};
     switch(left.column()) {
     case Catalog::Width:return numeric(a.width,b.width);case Catalog::Height:return numeric(a.height,b.height);

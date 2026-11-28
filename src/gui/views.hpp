@@ -15,11 +15,14 @@ public:
     void setPresentation(bool grid, int size, double aspect = 1.0);
     void setSmoothScrolling(bool enabled);
     void setReorderEnabled(bool enabled);
+    void setCardActionsEnabled(bool enabled);
     void selectAll() override;
     QModelIndexList firstVisibleRow(int count = 2) const;
 signals:
     void pathsDropped(const QStringList& paths);
-    void fileReordered(const QSet<QString>& paths, const QString& target, bool after);
+    void fileReordered(const QSet<QString>& entries, const QString& target, bool after);
+    void duplicateCard(const QModelIndex& index);
+    void removeCard(const QModelIndex& index);
     void bulkSelectionChanged(bool selecting);
     void viewportChanged();
 protected:
@@ -32,6 +35,7 @@ protected:
     void dragMoveEvent(QDragMoveEvent*) override;
     void dropEvent(QDropEvent*) override;
 private:
+    bool handleCardAction(QEvent* event);
     void updateCellSize();
     FileReorder* reorder_;
     bool grid_ = true;
@@ -43,6 +47,8 @@ private:
     QPersistentModelIndex resizeAnchor_;
     int resizeAnchorTop_ = 0;
     bool inBaseResize_ = false;
+    QPersistentModelIndex pressedCard_;
+    int pressedAction_ = 0;
 };
 class FileTableView : public QTableView {
     Q_OBJECT
@@ -59,7 +65,7 @@ public:
     void scrollTo(const QModelIndex&, ScrollHint hint = EnsureVisible) override;
 signals:
     void pathsDropped(const QStringList& paths);
-    void fileReordered(const QSet<QString>& paths, const QString& target, bool after);
+    void fileReordered(const QSet<QString>& entries, const QString& target, bool after);
     void bulkSelectionChanged(bool selecting);
 protected:
     void resizeEvent(QResizeEvent*) override;
@@ -85,6 +91,7 @@ public:
     int edge = 200;
     double aspect = 1.0;
     bool fill = false;
+    bool cardActions = false;
     int thumbnailHeight() const { return qRound(edge/aspect); }
     void paint(QPainter*, const QStyleOptionViewItem&, const QModelIndex&) const override;
     QSize sizeHint(const QStyleOptionViewItem&, const QModelIndex&) const override;
