@@ -25,9 +25,11 @@
     <img src="https://img.shields.io/github/downloads/zmz125000/JXRConverter/total?label=Total%20Downloads&labelColor=27303D&color=0D1117&logo=github&logoColor=FFFFFF&style=flat" alt="LICENSE">
   </a>
 </p>
-A C++17 image conversion library and CLI extracted from LocalViewer.  
-
+<p>
+A C++17 image conversion library and CLI extracted from LocalViewer.<br>
+It handles HDR images conversion (static, gif, video) with custom built tone mapper and color management.  <br>
 https://github.com/zmz125000/LocalViewer  
+</p>
 
 JXRConverter is a HDR image converter that  
 renders accurate SDR base images from HDR sources,    
@@ -40,11 +42,18 @@ special thanks to  [MPCVR](https://github.com/Aleksoid1978/VideoRenderer/) and [
 
 #### The app uses piecewise tone mapping (customized skiv) for HDR to SDR conversion, the results are much better than tools like Xbox Game Bar built-in PNG.  
 
-FYI JXR is an editable 16-bit linear format and can be compressed to 2MB scRGB JXL while keeping most of the data (Gamma encoded formats like JPG and HDR10/PQ is not very editable).
-
 <img width="800" alt="download" src="https://github.com/user-attachments/assets/f8fcd4e1-6401-4010-afe7-5232cf5da598" />
 
-## Features:  
+### Usage
+1. JXR is an editable 16-bit linear format (gamma encoded formats like JPG and HDR10/PQ is not very editable), it can be compressed to 2MB scRGB JXL while keeping most of the data.  
+2. Gain Map is an ISO HDR format that combines SDR base images with gain map layers, it works on all devices but is resource heavy for HDR display pipeline and use more disk space and RAM with less color precision (8/10-bit+ 8/10-bit).  
+3. Linear and scRGB (linear srgb) is used by image editors and preserve full dynamic range.  
+4. PQ and HLG is standard HDR formats for viewing, the whole image is encoded to HDR so very friendly for rendering and future-prove compared to gain map.  
+5. Google Chrome handles Wide color gamut, PQ, HLG and Gain Map well.
+6. Android and iPhone camera app use gain map.
+7. Many websites only accept sRGB SDR images, use sRGB clamp for exporting.
+
+### Features:  
 1. Convert OpenEXR, Radiance HDR/RGBE/XYZE, PFM, floating-point/LogLuv TIFF, JXR, JXL, RAW to JPG/AVIF gain map (Ultra HDR/ISO 21496-1) and AVIF/JXL scRGB, HLG and PQ HDR.
 2. Creates accurate SDR JPGs from HDR sources by preserving the "untouched" SDR range (0-203 nits) from HDR sources to sRGB SDR.
 3. Convert/Compress JPEG/HEIF/AVIF HDR photos to JPEG/AVIF gain map.
