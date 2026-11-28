@@ -45,12 +45,12 @@ special thanks to  [MPCVR](https://github.com/Aleksoid1978/VideoRenderer/) and [
 <img width="800" alt="download" src="https://github.com/user-attachments/assets/f8fcd4e1-6401-4010-afe7-5232cf5da598" />
 
 ### Usage
-1. JXR is an editable 16-bit linear format (gamma encoded formats like JPG and HDR10/PQ is not very editable), it can be compressed to 2MB scRGB JXL while keeping most of the data.  
+1. JXR is an editable 16-bit linear format, it can be compressed to 2MB scRGB JXL while keeping the editable data (gamma encoded formats like JPG and HDR10/PQ is not very editable).  
 2. Gain Map is an ISO HDR format that combines SDR base images with gain map layers, it works on all devices but is resource heavy for HDR display pipeline and use more disk space and RAM with less color precision (8/10-bit+ 8/10-bit).  
-3. Linear and scRGB (linear srgb) is used by image editors and preserve full dynamic range.  
-4. PQ and HLG is standard HDR formats for viewing, the whole image is encoded to HDR so very friendly for rendering and future-prove compared to gain map.  
+3. Linear and scRGB (linear srgb) are best for image editors and preserve full dynamic range.  
+4. PQ and HLG are standard HDR formats for viewing, the whole image is encoded to HDR so very friendly for rendering and future-proof compared to gain map.  
 5. Google Chrome handles Wide color gamut, PQ, HLG and Gain Map well.
-6. Android and iPhone camera app use gain map.
+6. Android and iPhone camera apps use gain map.
 7. Many websites only accept sRGB SDR images, use sRGB clamp for exporting.
 
 ### Features:  
