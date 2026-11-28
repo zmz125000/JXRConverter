@@ -140,7 +140,7 @@ void validate(const Options& o) {
     if(o.quality.png_depth!=8&&o.quality.png_depth!=16)throw std::invalid_argument("PNG depth must be 8 or 16");
     range(o.threads,0,65535,"threads");
     range(o.exposure,-3,3,"exposure");range(o.max_edge,0,65535,"max edge");
-    range(static_cast<int>(o.sdr_tone_mapper),0,static_cast<int>(SdrToneMapper::mpcvr),"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,2,"SDR color mapping");
+    range(static_cast<int>(o.sdr_tone_mapper),0,static_cast<int>(SdrToneMapper::mpcvr),"SDR tone mapper");range(static_cast<int>(o.sdr_color_mapping),0,static_cast<int>(SdrColorMapping::ictcp),"SDR color mapping");
     range(o.sdr_shoulder,0,0.99,"SDR shoulder");range(o.sdr_hdr_range_nits,204,10000,"SDR HDR range");
     range(o.sdr_shadows,-1,1,"SDR shadows");range(o.sdr_midtones,-1,1,"SDR midtones");range(o.sdr_highlights,-1,1,"SDR highlights");
     const auto& r=o.raw;range(static_cast<int>(r.hdr_mode),0,2,"RAW HDR mode");range(r.exposure,-3,3,"RAW exposure");range(r.white_balance,0,8,"white balance");range(r.kelvin,2000,12000,"kelvin");

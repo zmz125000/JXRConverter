@@ -1,6 +1,5 @@
 #pragma once
 #include "sdr_tone_map.h"
-#include "skiv_tone_map.h"
 
 inline void map_sdr_pixels_inplace(std::vector<float>& linear,int gamut,
                                    float range_nits,const jxrc::Options& options) {
@@ -20,7 +19,7 @@ inline void map_sdr_pixels_inplace(std::vector<float>& linear,int gamut,
     }
     if(!options.sdr_auto_hdr_range&&zones!=std::array<float,3>{})range_nits=cap;
     tone_map_sdr_inplace(linear,options.sdr_shoulder,range_nits,mapper,options.sdr_color_mapping,luma,zones,
-                         options.sdr_auto_hdr_range,options.sdr_auto_tone_curve);
+                         options.sdr_auto_hdr_range,options.sdr_auto_tone_curve,gamut);
 }
 
 inline std::vector<float> map_sdr_pixels(const std::vector<float>& linear,int gamut,

@@ -128,6 +128,68 @@ inline double inverse_pq(double code) {
     const double frac=pos-double(idx);
     return lut[idx]+(lut[idx+1]-lut[idx])*frac;
 }
+
+class IctcpSdrMapping {
+    // ITU-R BT.2100 PQ ICtCp matrices. Fold working RGB into the LMS
+    // transform so the same mapping works in BT.709, Display P3 and BT.2020.
+    static constexpr Matrix rgb2020_lms={{{1688./4096,2146./4096,262./4096},
+        {683./4096,2951./4096,462./4096},{99./4096,309./4096,3688./4096}}};
+    static constexpr Matrix lms_pq_ictcp={{{.5,.5,0.},
+        {6610./4096,-13613./4096,7003./4096},{17933./4096,-17390./4096,-543./4096}}};
+    static constexpr double sdr_to_scrgb=203./80.;
+    Matrix to_lms_,from_lms_;
+    double shoulder_,shoulder_pq_,white_pq_;
+
+    static bool in_sdr_gamut(const RGB& rgb) {
+        return std::all_of(rgb.begin(),rgb.end(),[](double c){return c>=-1e-9&&c<=1.+1e-9;});
+    }
+public:
+    IctcpSdrMapping(int gamut,double shoulder):
+        to_lms_(gamut==2?rgb2020_lms:multiply(rgb2020_lms,multiply(inverse(rgb2020_xyz),gamut==1?rgbp3_xyz:rgb709_xyz))),
+        from_lms_(inverse(to_lms_)),shoulder_(shoulder),shoulder_pq_(pq(shoulder*sdr_to_scrgb)),white_pq_(pq(sdr_to_scrgb)) {}
+
+    template<class Curve>
+    void map(float* pixel,const Curve& curve) const {
+        const RGB input={std::isfinite(pixel[0])?pixel[0]:0.,std::isfinite(pixel[1])?pixel[1]:0.,
+                         std::isfinite(pixel[2])?pixel[2]:0.};
+        auto lms=transform(to_lms_,input);
+        if(lms[0]<=shoulder_&&lms[1]<=shoulder_&&in_sdr_gamut(input)) {
+            for(unsigned c=0;c<3;++c)pixel[c]=float(std::clamp(input[c],0.,1.));
+            return;
+        }
+        for(auto& value:lms)value=pq(std::clamp(value*sdr_to_scrgb,0.,125.));
+        const auto ictcp=transform(lms_pq_ictcp,lms);
+        const double intensity=ictcp[0];
+        const double mapped=intensity<=shoulder_pq_?intensity:
+            pq(std::clamp(double(curve(inverse_pq(intensity)/sdr_to_scrgb)),0.,1.)*sdr_to_scrgb);
+        if(mapped==intensity&&in_sdr_gamut(input)) {
+            for(unsigned c=0;c<3;++c)pixel[c]=float(std::clamp(input[c],0.,1.));
+            return;
+        }
+        static const Matrix ictcp_lms_pq=inverse(lms_pq_ictcp);
+        const double sdr_intensity=std::min(mapped,white_pq_);
+        const auto decode=[&](double chroma) {
+            auto linear=transform(ictcp_lms_pq,{sdr_intensity,ictcp[1]*chroma,ictcp[2]*chroma});
+            for(auto& value:linear)value=inverse_pq(std::clamp(value,0.,1.))/sdr_to_scrgb;
+            return transform(from_lms_,linear);
+        };
+        const double chroma=intensity>0.?std::min(sdr_intensity/intensity,1.):0.;
+        auto rgb=decode(chroma);
+        if(!in_sdr_gamut(rgb)) {
+            // Reduce both chroma axes together to retain the ICtCp hue angle.
+            rgb=decode(0.);
+            double lo=0.,hi=chroma;
+            for(int step=0;step<8;++step) {
+                const double mid=(lo+hi)*.5;
+                const auto candidate=decode(mid);
+                if(in_sdr_gamut(candidate)){lo=mid;rgb=candidate;}
+                else hi=mid;
+            }
+        }
+        for(unsigned c=0;c<3;++c)pixel[c]=float(std::clamp(rgb[c],0.,1.));
+    }
+};
+
 inline double pow118(double input) {
     if(!(input>0.))return 0.;
     if(input>=1.)return 1.;
@@ -280,8 +342,8 @@ inline std::vector<float> tone_map_skiv_base(const std::vector<float>& hdr,int g
     return output;
 }
 
-// Manual tonal edits remain HDR. Replace SKIV's ICtCp intensity/chroma mapping
-// with the selected working-RGB metric while retaining its intensity curve.
+// Manual tonal edits remain HDR. Apply the selected color mapping with SKIV's
+// intensity curve.
 inline void tone_map_skiv_manual_inplace(std::vector<float>& adjusted,int gamut,
         float shoulder,float cap_nits,jxrc::SdrColorMapping mapping,
         std::array<float,3> luma,std::array<float,3> zones,bool auto_curve=false) {
@@ -296,14 +358,18 @@ inline void tone_map_skiv_manual_inplace(std::vector<float>& adjusted,int gamut,
             if(!std::isfinite(adjusted[i+3])||adjusted[i+3]<=0.f) {
                 adjusted[i]=adjusted[i+1]=adjusted[i+2]=0.f;continue;
             }
-            for(unsigned c=0;c<3;++c)adjusted[i+c]=std::max(std::isfinite(adjusted[i+c])?adjusted[i+c]:0.f,0.f);
+            for(unsigned c=0;c<3;++c) {
+                if(!std::isfinite(adjusted[i+c]))adjusted[i+c]=0.f;
+                if(mapping!=jxrc::SdrColorMapping::ictcp)adjusted[i+c]=std::max(adjusted[i+c],0.f);
+            }
             if(auto_tone.active())apply_auto_sdr_tone(adjusted[i],adjusted[i+1],adjusted[i+2],auto_tone,luma);
             if(has_zones)apply_tonal_zones(adjusted[i],adjusted[i+1],adjusted[i+2],zones[0],zones[1],zones[2],luma);
         }
     });
     const Matrix& space=gamut==2?rgb2020_xyz:gamut==1?rgbp3_xyz:rgb709_xyz;
     const double cap=std::clamp(double(cap_nits),204.,10000.);
-    const double peak=std::min(content_peak(adjusted,space,mapping!=jxrc::SdrColorMapping::luminance),cap/80.);
+    const bool peak_rgb=mapping==jxrc::SdrColorMapping::max_rgb||mapping==jxrc::SdrColorMapping::per_channel;
+    const double peak=std::min(content_peak(adjusted,space,peak_rgb),cap/80.);
     const double white=pq(1.5),output_white=pq(203./80.);
     const double peak_pq=std::max(output_white,pq(peak));
     const double knee=std::clamp(double(shoulder),0.,.99),input_knee=pq(knee*203./80.);
@@ -315,6 +381,13 @@ inline void tone_map_skiv_manual_inplace(std::vector<float>& adjusted,int gamut,
         const double mapped=input_knee+(intensity(input,peak_pq,white)-curve_knee)*curve_scale;
         return std::clamp(inverse_pq(std::clamp(mapped,input_knee,output_white))*(80./203.),0.,1.);
     };
+    if(mapping==jxrc::SdrColorMapping::ictcp) {
+        const IctcpSdrMapping color(gamut,knee);
+        hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned) {
+            for(size_t i=begin*4;i<end*4;i+=4)color.map(&adjusted[i],curve);
+        });
+        return;
+    }
     hdr_parallel_pixels(pixels,hdr_pixel_jobs(pixels),[&](size_t begin,size_t end,unsigned) {
         for(size_t pixel=begin;pixel<end;++pixel) {
             const size_t i=pixel*4;

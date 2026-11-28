@@ -31,7 +31,7 @@ Processing controls (PQ/HLG targets require process mode):
   --sdr-tone-map                Map HDR highlights into SDR outputs and gain-map bases
   --sdr-tone-mapper skiv-custom|skiv-manual|skiv|mpcvr|logarithmic|extended-reinhard|reinhard (default skiv-custom)
                                MPCVR measures the source peak and uses fixed 203-nit SDR white.
-  --sdr-color-mapping max-rgb|luminance|per-channel  Default: luminance
+  --sdr-color-mapping max-rgb|luminance|per-channel|ictcp  Default: luminance
   --sdr-shadows -1..1 --sdr-midtones -1..1 --sdr-highlights -1..1  Default: 0
   --sdr-shoulder 0..0.95        Fraction of 203 nits left unchanged (default 0.50)
   --sdr-hdr-range 204..10000    HDR peak ceiling in nits (default 2000)
@@ -101,7 +101,7 @@ int run(const std::vector<std::string>& argv) {
         else if(arg=="--srgb-clamp")o.srgb_clamp=true;
         else if(arg=="--sdr-tone-map")o.sdr_tone_map=true;
         else if(arg=="--sdr-tone-mapper")o.sdr_tone_mapper=choice<jxrc::SdrToneMapper>(value(),{{"skiv-manual",jxrc::SdrToneMapper::skiv_manual},{"skiv",jxrc::SdrToneMapper::skiv},{"skiv-custom",jxrc::SdrToneMapper::skiv_custom},{"mpcvr",jxrc::SdrToneMapper::mpcvr},{"logarithmic",jxrc::SdrToneMapper::logarithmic},{"reinhard",jxrc::SdrToneMapper::reinhard},{"extended-reinhard",jxrc::SdrToneMapper::extended_reinhard}});
-        else if(arg=="--sdr-color-mapping")o.sdr_color_mapping=choice<jxrc::SdrColorMapping>(value(),{{"max-rgb",jxrc::SdrColorMapping::max_rgb},{"luminance",jxrc::SdrColorMapping::luminance},{"per-channel",jxrc::SdrColorMapping::per_channel}});
+        else if(arg=="--sdr-color-mapping")o.sdr_color_mapping=choice<jxrc::SdrColorMapping>(value(),{{"max-rgb",jxrc::SdrColorMapping::max_rgb},{"luminance",jxrc::SdrColorMapping::luminance},{"per-channel",jxrc::SdrColorMapping::per_channel},{"ictcp",jxrc::SdrColorMapping::ictcp}});
         else if(arg=="--sdr-shadows")o.sdr_shadows=number(value());
         else if(arg=="--sdr-midtones")o.sdr_midtones=number(value());
         else if(arg=="--sdr-highlights")o.sdr_highlights=number(value());

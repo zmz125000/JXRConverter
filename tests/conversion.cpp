@@ -1778,6 +1778,23 @@ static void sdr_tone_mapping(const fs::path& dir) {
     for(const auto* mapped:{&maxRgb,&lum,&channel})check((*mapped)[3]==color[3],"Color mapping changed alpha");
     const auto wide=tone_map_sdr_base(color,.67f,1000.f,jxrc::SdrToneMapper::logarithmic,jxrc::SdrColorMapping::luminance,{.2627f,.6780f,.0593f});
     check(std::abs(wide[1]-lum[1])>1e-4f,"Luminance ignored working primaries");
+    const auto ictcp=jxrc::SdrColorMapping::ictcp;
+    const auto log=jxrc::SdrToneMapper::logarithmic;
+    const std::vector<float> ictcpInput={.3f,.2f,.1f,.4f,3.f,1.5f,.5f,.6f,peak,peak,peak,.8f,6.f,.2f,-.2f,1.f};
+    const auto ictcp709=tone_map_sdr_base(ictcpInput,.5f,1000.f,log,ictcp);
+    const auto ictcp2020=tone_map_sdr_base(ictcpInput,.5f,1000.f,log,ictcp,{.2627f,.6780f,.0593f},{},false,false,2);
+    const auto ictcpSkiv=tone_map_skiv_manual(ictcpInput,0,.5f,1000.f,ictcp,luma,{});
+    for(const auto* result:{&ictcp709,&ictcp2020,&ictcpSkiv}) {
+        check(std::equal(result->begin(),result->begin()+4,ictcpInput.begin()),"ICtCp altered below-shoulder SDR pixels");
+        for(size_t i=0;i<result->size();i+=4) {
+            for(size_t c=i;c<i+3;++c)check((*result)[c]>=0.f&&(*result)[c]<=1.f,"ICtCp produced out-of-gamut SDR RGB");
+            check((*result)[i+3]==ictcpInput[i+3],"ICtCp changed alpha");
+        }
+        for(size_t c=8;c<11;++c)check(std::abs((*result)[c]-1.f)<1e-5f,"ICtCp neutral HDR endpoint missed white");
+    }
+    check(ictcp709[4]>ictcp709[5]&&ictcp709[5]>ictcp709[6],"ICtCp flattened a colored highlight");
+    check(std::abs(ictcp709[5]-ictcp2020[5])>1e-4f,"ICtCp ignored working primaries");
+    check(std::abs(ictcp709[5]-maxRgb[1])>1e-4f&&std::abs(ictcp709[5]-lum[1])>1e-4f,"ICtCp repeated an RGB mapping");
     for(auto method:{jxrc::SdrToneMapper::reinhard,jxrc::SdrToneMapper::extended_reinhard,jxrc::SdrToneMapper::logarithmic}) {
         float previous=0.f;
         for(unsigned i=0;i<=32;++i) {
@@ -1815,6 +1832,10 @@ static void sdr_tone_mapping(const fs::path& dir) {
     check(std::abs(after[0]-.5f)<.02f&&std::abs(after[0]-before[0])<.02f,"SDR tone mapping changed pixels below shoulder");
     check(after[8*4]<before[8*4]&&after[8*4]>.8f,"SDR tone mapping did not retain highlights");
     check(std::abs(after[12*4]-1.f)<.02f,"SDR tone range endpoint missed white");
+    auto ictcpOptions=o;ictcpOptions.sdr_color_mapping=ictcp;
+    const auto ictcpPath=dir/"tone-ictcp.png";session.convert(ictcpPath,ictcpOptions);
+    const auto ictcpPixels=decode_sdr(ictcpPath);
+    check(std::abs(ictcpPixels[8*4]-after[8*4])<.02f,"Conversion session did not preserve the neutral ICtCp curve");
     for(auto target:{jxrc::Target::jpeg_gainmap,jxrc::Target::avif_gainmap}) {
         o.target=target;const auto gain=dir/(target==jxrc::Target::jpeg_gainmap?"tone-gain.jpg":"tone-gain.avif");
         check(session.convert(gain,o).gainmap,"Tone mapped gain-map export failed");

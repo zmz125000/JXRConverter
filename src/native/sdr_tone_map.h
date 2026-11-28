@@ -1,6 +1,6 @@
 #pragma once
 #include "jxrc/converter.hpp"
-#include "sdr_auto_tone.h"
+#include "skiv_tone_map.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -13,7 +13,8 @@ inline void tone_map_sdr_inplace(std::vector<float>& sdr,
                                  jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
                                  jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
                                  std::array<float,3> luma = {.2126f,.7152f,.0722f},
-                                 std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
+                                 std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false,
+                                 int gamut = 0) {
     const size_t pixels=sdr.size()/4;
     const unsigned jobs=hdr_pixel_jobs(pixels);
     const AutoSdrTone auto_tone=auto_curve?analyze_auto_sdr_tone(sdr,luma):AutoSdrTone{};
@@ -25,7 +26,10 @@ inline void tone_map_sdr_inplace(std::vector<float>& sdr,
             float peak=0.f;
             for(size_t i=begin*4;i<end*4;i+=4) {
                 if(!std::isfinite(sdr[i+3])||sdr[i+3]<=0.f)continue;
-                for(unsigned c=0;c<3;++c)sdr[i+c]=std::max(std::isfinite(sdr[i+c])?sdr[i+c]:0.f,0.f);
+                for(unsigned c=0;c<3;++c) {
+                    if(!std::isfinite(sdr[i+c]))sdr[i+c]=0.f;
+                    if(mapping!=jxrc::SdrColorMapping::ictcp)sdr[i+c]=std::max(sdr[i+c],0.f);
+                }
                 if(auto_tone.active())apply_auto_sdr_tone(sdr[i],sdr[i+1],sdr[i+2],auto_tone,luma);
                 if(has_zones)apply_tonal_zones(sdr[i],sdr[i+1],sdr[i+2],zones[0],zones[1],zones[2],luma);
                 peak=std::max({peak,sdr[i],sdr[i+1],sdr[i+2]});
@@ -75,6 +79,13 @@ inline void tone_map_sdr_inplace(std::vector<float>& sdr,
             return shoulder+reinhard_k*(above/(above+knee));
         }
     };
+    if(mapping==jxrc::SdrColorMapping::ictcp) {
+        const skiv::IctcpSdrMapping color(gamut,shoulder);
+        hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned) {
+            for(size_t i=begin*4;i<end*4;i+=4)color.map(&sdr[i],[&](double intensity){return curve(float(intensity));});
+        });
+        return;
+    }
     hdr_parallel_pixels(pixels,jobs,[&](size_t begin,size_t end,unsigned) {
         for(size_t i=begin*4;i<end*4;i+=4) {
             std::array<float,3> rgb;
@@ -96,8 +107,9 @@ inline std::vector<float> tone_map_sdr_base(const std::vector<float>& hdr,
                                             jxrc::SdrToneMapper mapper = jxrc::SdrToneMapper::logarithmic,
                                             jxrc::SdrColorMapping mapping = jxrc::SdrColorMapping::max_rgb,
                                             std::array<float,3> luma = {.2126f,.7152f,.0722f},
-                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false) {
+                                            std::array<float,3> zones = {}, bool auto_range = false, bool auto_curve = false,
+                                            int gamut = 0) {
     std::vector<float> sdr=hdr;
-    tone_map_sdr_inplace(sdr,shoulder,range_nits,mapper,mapping,luma,zones,auto_range,auto_curve);
+    tone_map_sdr_inplace(sdr,shoulder,range_nits,mapper,mapping,luma,zones,auto_range,auto_curve,gamut);
     return sdr;
 }
