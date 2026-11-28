@@ -2545,6 +2545,12 @@ private slots:
                 if(!menu)return;
                 auto* action=menu->findChild<QAction*>("addToImageList");
                 found=action&&action->isEnabled();
+                if(found){
+                    const auto actions=menu->actions();
+                    const auto reset=actions.indexOf(menu->findChild<QAction*>("resetFilters"));
+                    found=reset>=0&&actions.value(reset+1)==action&&
+                        actions.value(reset+2)==menu->findChild<QAction*>("sendSelectedToJob");
+                }
                 if(found){menu->setActiveAction(action);QTest::keyClick(menu,Qt::Key_Return);}
                 else menu->close();
             });

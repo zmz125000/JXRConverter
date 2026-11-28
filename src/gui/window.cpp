@@ -491,7 +491,7 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
             if(!selection_->isRowSelected(index.row(),{}))selection_->setCurrentIndex(index,QItemSelectionModel::ClearAndSelect|QItemSelectionModel::Rows);
             QMenu menu;QAction* addField=nullptr;
             if(view==table_){addField=menu.addAction("Add this to filters");addField->setObjectName("addFieldToFilters");addField->setEnabled(!fieldValue.isEmpty());addField->setToolTip(catalog_->headerData(fieldColumn,Qt::Horizontal,Qt::DisplayRole).toString()+": "+fieldValue);}
-            auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");menu.addSeparator();
+            auto* reset=menu.addAction("Reset filters");reset->setObjectName("resetFilters");auto* filterSeparator=menu.addSeparator();
             const bool video=index.data(Catalog::VideoRole).toBool();
             auto* open=menu.addAction(video?"Open video":"Open image");
             open->setObjectName("openMediaFile");
@@ -510,6 +510,10 @@ MainWindow::MainWindow(QWidget* parent):QMainWindow(parent),catalog_(new Catalog
                 addToImageList->setEnabled(!queueSelection.isEmpty());
             }
             auto* sendJob=menu.addAction("Send selected to new job");sendJob->setObjectName("sendSelectedToJob");sendJob->setEnabled(!imagePaths(queueSelection).isEmpty()&&!updater_->installing());
+            if(addToImageList) {
+                menu.insertAction(filterSeparator,addToImageList);
+                menu.insertAction(filterSeparator,sendJob);
+            }
             auto* cancelSelected=menu.addAction("Cancel selected");cancelSelected->setObjectName("cancelSelectedQueue");cancelSelected->setToolTip("Cancel pending outputs for selected images; active conversions finish");cancelSelected->setEnabled(queue_->hasPendingFor(queueSelection));
             auto* remove=menu.addAction(statusFilter_->checkedId()==1?"Remove from selection":"Remove selected");remove->setEnabled(statusFilter_->checkedId()==1||!queue_->busy());
             const auto action=menu.exec(view->viewport()->mapToGlobal(point));
